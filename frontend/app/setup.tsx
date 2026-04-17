@@ -61,6 +61,7 @@ export default function SetupScreen() {
   const [showInteractiveMap, setShowInteractiveMap] = useState(false);
   const [coordInput, setCoordInput] = useState('');
   const [mapKey, setMapKey] = useState(0);
+  const [captureCount, setCaptureCount] = useState(0);
   const [huntDate, setHuntDate] = useState(new Date().toISOString().split('T')[0]);
 
   const isPaidTier = user?.tier === 'core' || user?.tier === 'pro';
@@ -125,20 +126,20 @@ export default function SetupScreen() {
     setMapImages(prev => prev.filter((_, i) => i !== index));
   };
 
-  const captureMapView = async () => {
+  const captureMapView = () => {
     if (mapImages.length >= MAX_MAPS) {
       Alert.alert('Limit Reached', `Maximum ${MAX_MAPS} maps per hunt.`);
       return;
     }
-    Alert.alert(
-      'Capture Map',
-      'Take a screenshot of the map area you want to analyze, then upload it.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Upload Screenshot', onPress: pickImage },
-      ]
-    );
+    // Trigger capture via the TacticalMapView component
+    setCaptureCount(prev => prev + 1);
   };
+
+  const handleMapCapture = useCallback((base64: string) => {
+    if (mapImages.length >= MAX_MAPS) return;
+    setMapImages(prev => [...prev, base64]);
+    Alert.alert('Captured!', 'Map view saved. You can capture more or continue.');
+  }, [mapImages.length]);
 
   const goToCoordinates = () => {
     const input = coordInput.trim();
@@ -581,6 +582,8 @@ export default function SetupScreen() {
                       center={locationCoords || { lat: 39.8283, lon: -98.5795 }}
                       zoom={locationCoords ? 14 : 5}
                       height={300}
+                      captureRequested={captureCount}
+                      onCapture={handleMapCapture}
                     />
                   </View>
 
