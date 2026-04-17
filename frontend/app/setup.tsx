@@ -22,6 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, SPECIES, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
+import TacticalMapView from '../src/map/TacticalMapView';
 
 const { width } = Dimensions.get('window');
 const STEPS = ['Species', 'Maps', 'Conditions', 'Review'];
@@ -56,7 +57,11 @@ export default function SetupScreen() {
   // Form state
   const [selectedSpecies, setSelectedSpecies] = useState('');
   const [mapImages, setMapImages] = useState<string[]>([]);
+  const [mapInputMode, setMapInputMode] = useState<'upload' | 'interactive'>('upload');
+  const [showInteractiveMap, setShowInteractiveMap] = useState(false);
   const [huntDate, setHuntDate] = useState(new Date().toISOString().split('T')[0]);
+
+  const isPaidTier = user?.tier === 'core' || user?.tier === 'pro';
   const [timeWindow, setTimeWindow] = useState('morning');
   const [windDirection, setWindDirection] = useState('N');
   const [windSpeed, setWindSpeed] = useState('');
@@ -116,6 +121,24 @@ export default function SetupScreen() {
 
   const removeMap = (index: number) => {
     setMapImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const captureMapView = async () => {
+    if (mapImages.length >= MAX_MAPS) {
+      Alert.alert('Limit Reached', `Maximum ${MAX_MAPS} maps per hunt.`);
+      return;
+    }
+    // For map capture, we use the image picker to let user screenshot
+    // In a production build with native MapLibre, we'd capture the map view directly
+    // For now, prompt the user to screenshot the map and upload
+    Alert.alert(
+      'Capture Map',
+      'Take a screenshot of the map area you want to analyze, then upload it.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Upload Screenshot', onPress: pickImage },
+      ]
+    );
   };
 
   // --- Location ---
@@ -446,36 +469,145 @@ export default function SetupScreen() {
             </View>
           )}
 
-          {/* Step 1: Maps */}
+          {/* Step 1: Maps — Upload or Interactive Map */}
           {step === 1 && (
             <View>
-              <Text style={styles.stepTitle}>UPLOAD MAPS</Text>
-              <Text style={styles.stepDescription}>Upload satellite, aerial, or topo maps ({mapImages.length}/{MAX_MAPS})</Text>
-              {mapImages.length > 0 && (
-                <View style={styles.mapsGrid}>
-                  {mapImages.map((img, idx) => (
-                    <View key={idx} style={styles.mapThumbContainer}>
-                      <Image source={{ uri: img }} style={styles.mapThumb} resizeMode="cover" />
-                      <View style={styles.mapThumbBadge}><Text style={styles.mapThumbBadgeText}>{idx + 1}</Text></View>
-                      <TouchableOpacity testID={`remove-map-${idx}`} style={styles.removeMapButton} onPress={() => removeMap(idx)}>
-                        <Ionicons name="close-circle" size={22} color={COLORS.avoidZones} />
-                      </TouchableOpacity>
-                      {idx === 0 && <View style={styles.primaryMapBadge}><Text style={styles.primaryMapText}>PRIMARY</Text></View>}
-                    </View>
-                  ))}
+              <Text style={styles.stepTitle}>SELECT MAP AREA</Text>
+              <Text style={styles.stepDescription}>
+                {isPaidTier ? 'Upload a map image or use the interactive map' : 'Upload satellite, aerial, or topo maps'} ({mapImages.length}/{MAX_MAPS})
+              </Text>
+
+              {/* Mode Toggle — only for Core/Pro */}
+              {isPaidTier && (
+                <View style={styles.mapModeToggle}>
+                  <TouchableOpacity
+                    testID="map-mode-upload"
+                    style={[styles.mapModeOption, mapInputMode === 'upload' && styles.mapModeOptionActive]}
+                    onPress={() => { setMapInputMode('upload'); setShowInteractiveMap(false); }}
+                  >
+                    <Ionicons name="cloud-upload-outline" size={18} color={mapInputMode === 'upload' ? COLORS.primary : COLORS.fogGray} />
+                    <Text style={[styles.mapModeText, mapInputMode === 'upload' && styles.mapModeTextActive]}>UPLOAD</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    testID="map-mode-interactive"
+                    style={[styles.mapModeOption, mapInputMode === 'interactive' && styles.mapModeOptionActive]}
+                    onPress={() => { setMapInputMode('interactive'); setShowInteractiveMap(true); }}
+                  >
+                    <Ionicons name="globe-outline" size={18} color={mapInputMode === 'interactive' ? COLORS.primary : COLORS.fogGray} />
+                    <Text style={[styles.mapModeText, mapInputMode === 'interactive' && styles.mapModeTextActive]}>MAP</Text>
+                  </TouchableOpacity>
                 </View>
               )}
-              {mapImages.length < MAX_MAPS && (
-                <TouchableOpacity testID="upload-map-button" style={[styles.uploadArea, mapImages.length > 0 && styles.uploadAreaCompact]} onPress={pickImage} activeOpacity={0.7}>
-                  <Ionicons name="cloud-upload" size={mapImages.length > 0 ? 32 : 48} color={COLORS.accent} />
-                  <Text style={styles.uploadTitle}>{mapImages.length === 0 ? 'TAP TO UPLOAD MAP' : 'ADD ANOTHER MAP'}</Text>
-                  {mapImages.length === 0 && <Text style={styles.uploadSubtitle}>Satellite, aerial, or topo map{'\n'}PNG, JPG supported</Text>}
+
+              {/* Upload Mode */}
+              {mapInputMode === 'upload' && (
+                <View>
+                  {mapImages.length > 0 && (
+                    <View style={styles.mapsGrid}>
+                      {mapImages.map((img, idx) => (
+                        <View key={idx} style={styles.mapThumbContainer}>
+                          <Image source={{ uri: img }} style={styles.mapThumb} resizeMode="cover" />
+                          <View style={styles.mapThumbBadge}><Text style={styles.mapThumbBadgeText}>{idx + 1}</Text></View>
+                          <TouchableOpacity testID={`remove-map-${idx}`} style={styles.removeMapButton} onPress={() => removeMap(idx)}>
+                            <Ionicons name="close-circle" size={22} color={COLORS.avoidZones} />
+                          </TouchableOpacity>
+                          {idx === 0 && <View style={styles.primaryMapBadge}><Text style={styles.primaryMapText}>PRIMARY</Text></View>}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  {mapImages.length < MAX_MAPS && (
+                    <TouchableOpacity testID="upload-map-button" style={[styles.uploadArea, mapImages.length > 0 && styles.uploadAreaCompact]} onPress={pickImage} activeOpacity={0.7}>
+                      <Ionicons name="cloud-upload" size={mapImages.length > 0 ? 32 : 48} color={COLORS.accent} />
+                      <Text style={styles.uploadTitle}>{mapImages.length === 0 ? 'TAP TO UPLOAD MAP' : 'ADD ANOTHER MAP'}</Text>
+                      {mapImages.length === 0 && <Text style={styles.uploadSubtitle}>Satellite, aerial, or topo map{'\n'}PNG, JPG supported</Text>}
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
+              {/* Interactive Map Mode — Core/Pro only */}
+              {mapInputMode === 'interactive' && showInteractiveMap && (
+                <View>
+                  <View style={styles.interactiveMapContainer}>
+                    <TacticalMapView
+                      center={locationCoords || { lat: 39.8283, lon: -98.5795 }}
+                      zoom={locationCoords ? 14 : 5}
+                      height={300}
+                    />
+                  </View>
+
+                  <Text style={styles.interactiveMapHint}>
+                    Pan & zoom to your hunting area, then capture
+                  </Text>
+
+                  {/* Capture / Use GPS buttons */}
+                  <View style={styles.interactiveActions}>
+                    {!locationCoords && (
+                      <TouchableOpacity
+                        testID="map-get-location"
+                        style={styles.mapLocationButton}
+                        onPress={getLocation}
+                      >
+                        <Ionicons name="navigate" size={18} color={COLORS.primary} />
+                        <Text style={styles.mapLocationText}>CENTER ON GPS</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      testID="capture-map-button"
+                      style={styles.captureMapButton}
+                      onPress={captureMapView}
+                    >
+                      <Ionicons name="camera" size={20} color={COLORS.primary} />
+                      <Text style={styles.captureMapText}>CAPTURE MAP VIEW</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Show captured maps */}
+                  {mapImages.length > 0 && (
+                    <View style={[styles.mapsGrid, { marginTop: 16 }]}>
+                      {mapImages.map((img, idx) => (
+                        <View key={idx} style={styles.mapThumbContainer}>
+                          <Image source={{ uri: img }} style={styles.mapThumb} resizeMode="cover" />
+                          <View style={styles.mapThumbBadge}><Text style={styles.mapThumbBadgeText}>{idx + 1}</Text></View>
+                          <TouchableOpacity testID={`remove-map-${idx}`} style={styles.removeMapButton} onPress={() => removeMap(idx)}>
+                            <Ionicons name="close-circle" size={22} color={COLORS.avoidZones} />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Tip */}
+              <View style={[styles.tipCard, { marginTop: 16 }]}>
+                <Ionicons name="bulb" size={18} color={COLORS.accent} />
+                <Text style={styles.tipText}>
+                  {mapInputMode === 'interactive'
+                    ? 'Navigate the map to your hunting area, then capture the view. You can also upload additional images.'
+                    : mapImages.length === 0
+                      ? 'Best results with satellite or aerial imagery showing terrain features, tree lines, and water sources.'
+                      : 'Upload multiple maps to compare views. The first map is used for AI analysis.'}
+                </Text>
+              </View>
+
+              {/* Upsell for trial users */}
+              {!isPaidTier && (
+                <TouchableOpacity
+                  testID="map-upsell"
+                  style={styles.mapUpsellCard}
+                  onPress={() => router.push('/subscription')}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="globe" size={20} color={COLORS.accent} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.mapUpsellTitle}>Interactive Map</Text>
+                    <Text style={styles.mapUpsellDesc}>Upgrade to Core or Pro for live map browsing</Text>
+                  </View>
+                  <View style={styles.mapUpsellBadge}><Text style={styles.mapUpsellBadgeText}>PRO</Text></View>
                 </TouchableOpacity>
               )}
-              <View style={styles.tipCard}>
-                <Ionicons name="bulb" size={18} color={COLORS.accent} />
-                <Text style={styles.tipText}>{mapImages.length === 0 ? 'Best results with satellite or aerial imagery showing terrain features, tree lines, and water sources.' : 'Upload multiple maps to compare views. The first map is used for AI analysis.'}</Text>
-              </View>
             </View>
           )}
 
@@ -826,4 +958,35 @@ const styles = StyleSheet.create({
   limitTierLabel: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 12 },
   limitTierRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   limitTierText: { color: COLORS.textSecondary, fontSize: 13 },
+  // Map mode toggle
+  mapModeToggle: { flexDirection: 'row', backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 10, padding: 3, marginBottom: 16 },
+  mapModeOption: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 8 },
+  mapModeOptionActive: { backgroundColor: COLORS.accent },
+  mapModeText: { color: COLORS.fogGray, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  mapModeTextActive: { color: COLORS.primary },
+  // Interactive map
+  interactiveMapContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 12 },
+  interactiveMapHint: { color: COLORS.fogGray, fontSize: 12, textAlign: 'center', marginBottom: 12 },
+  interactiveActions: { flexDirection: 'row', gap: 10, marginBottom: 8 },
+  mapLocationButton: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', borderRadius: 10, paddingVertical: 14, minHeight: 52,
+    borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.3)',
+  },
+  mapLocationText: { color: COLORS.textPrimary, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  captureMapButton: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.accent, borderRadius: 10, paddingVertical: 14, minHeight: 52,
+  },
+  captureMapText: { color: COLORS.primary, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  // Map upsell
+  mapUpsellCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 16,
+    backgroundColor: 'rgba(200, 155, 60, 0.06)', borderRadius: 12, padding: 16,
+    borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.2)',
+  },
+  mapUpsellTitle: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '700' },
+  mapUpsellDesc: { color: COLORS.fogGray, fontSize: 12, marginTop: 2 },
+  mapUpsellBadge: { backgroundColor: 'rgba(200, 155, 60, 0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  mapUpsellBadgeText: { color: COLORS.accent, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
 });
