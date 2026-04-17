@@ -46,3 +46,8 @@ Raven Scout is a mobile hunting planning application that uses GPT-5.2 Vision AI
 - [x] Local device storage for hunt plans
 - [x] Hunt history with delete functionality
 - [x] Asgard Tactical design system implemented
+
+## Phase 2 Features (Implemented)
+- [x] Editable Overlays: drag/reposition markers, add custom markers (8 types: stand, corridor, access_route, avoid, bedding, food, water, trail), delete overlays, save changes
+- [x] Multi-Map Uploads: up to 5 maps per hunt, swipeable viewer with map tabs, overlays shown on all maps
+- [x] Offline Scouting Mode: network detection (expo-network), offline banners, disabled analyze when offline, SAVED badge on history cards, all data viewable offline via AsyncStorage
