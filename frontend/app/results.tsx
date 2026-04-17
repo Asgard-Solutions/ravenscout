@@ -733,6 +733,8 @@ function DraggableMarker({
     overlay.width_percent && overlay.height_percent;
 
   if (isZone) {
+    const zoneWidth = (overlay.width_percent || 10);
+    const zoneHeight = (overlay.height_percent || 10);
     return (
       <View
         testID={`overlay-zone-${index}`}
@@ -740,10 +742,10 @@ function DraggableMarker({
         style={[
           styles.overlayZone,
           {
-            left: `${Math.max(0, overlay.x_percent - (overlay.width_percent || 0) / 2)}%` as any,
-            top: (overlay.y_percent / 100) * MAP_HEIGHT - ((overlay.height_percent || 0) / 100) * MAP_HEIGHT / 2,
-            width: `${overlay.width_percent}%` as any,
-            height: ((overlay.height_percent || 0) / 100) * MAP_HEIGHT,
+            left: Math.max(0, ((overlay.x_percent - zoneWidth / 2) / 100) * MAP_WIDTH),
+            top: Math.max(0, ((overlay.y_percent - zoneHeight / 2) / 100) * MAP_HEIGHT),
+            width: (zoneWidth / 100) * MAP_WIDTH,
+            height: (zoneHeight / 100) * MAP_HEIGHT,
             backgroundColor: `${color}33`,
             borderColor: isSelected ? COLORS.accent : color,
             borderWidth: isSelected ? 3 : 2,
@@ -764,7 +766,7 @@ function DraggableMarker({
       style={[
         styles.overlayMarker,
         {
-          left: `${overlay.x_percent - 3}%` as any,
+          left: (overlay.x_percent / 100) * MAP_WIDTH - 16,
           top: (overlay.y_percent / 100) * MAP_HEIGHT - 16,
           backgroundColor: color,
           borderColor: isSelected ? COLORS.accent : '#FFFFFF',
@@ -878,7 +880,7 @@ const styles = StyleSheet.create({
   mapTabText: { color: COLORS.fogGray, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
   mapTabTextActive: { color: COLORS.primary },
   mapContainer: {
-    position: 'relative', height: MAP_HEIGHT, borderRadius: 16,
+    position: 'relative', width: MAP_WIDTH, height: MAP_HEIGHT, borderRadius: 16,
     overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.3)',
   },
   mapImage: { width: MAP_WIDTH, height: MAP_HEIGHT },
@@ -888,11 +890,13 @@ const styles = StyleSheet.create({
   overlayMarker: {
     position: 'absolute', width: 32, height: 32, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center', elevation: 5,
+    zIndex: 10,
     boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.3)',
   },
   overlayZone: {
     position: 'absolute', borderRadius: 8,
     alignItems: 'center', justifyContent: 'center', borderStyle: 'dashed',
+    zIndex: 5,
   },
   zoneLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   legendOverlay: {
