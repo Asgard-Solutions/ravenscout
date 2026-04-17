@@ -7,10 +7,11 @@ import json
 import base64
 import tempfile
 import uuid
+import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -262,6 +263,143 @@ async def analyze_hunt(request: AnalyzeRequest):
     except Exception as e:
         logger.error(f"Analysis error: {e}")
         return AnalyzeResponse(success=False, error=str(e))
+
+
+# --- Weather API ---
+
+WEATHER_TIME_RANGES = {
+    "morning": (5, 12),
+    "evening": (12, 20),
+    "all-day": (5, 20),
+}
+
+class WeatherRequest(BaseModel):
+    lat: float
+    lon: float
+    date: str  # YYYY-MM-DD
+    time_window: str = "morning"
+
+class WeatherData(BaseModel):
+    wind_direction: str
+    wind_speed_mph: float
+    temperature_f: float
+    precipitation_chance: int
+    cloud_cover: int
+    condition: str
+    humidity: int
+    pressure_mb: float
+    sunrise: Optional[str] = None
+    sunset: Optional[str] = None
+    location_name: Optional[str] = None
+    fetched_at: str
+    is_forecast: bool = True
+
+class WeatherResponse(BaseModel):
+    success: bool
+    data: Optional[WeatherData] = None
+    error: Optional[str] = None
+
+@api_router.post("/weather", response_model=WeatherResponse)
+async def get_weather(request: WeatherRequest):
+    api_key = os.environ.get("WEATHER_API_KEY")
+    if not api_key:
+        return WeatherResponse(success=False, error="Weather API not configured")
+
+    try:
+        query = f"{request.lat},{request.lon}"
+        target_date = datetime.strptime(request.date, "%Y-%m-%d").date()
+        today = datetime.now().date()
+        days_diff = (target_date - today).days
+
+        # Choose API: forecast (0-14 days) or future (14-300 days)
+        if days_diff < 0:
+            # Past date: use current weather as fallback
+            url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={query}&days=1"
+        elif days_diff <= 14:
+            url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={query}&days={min(days_diff + 1, 14)}&dt={request.date}"
+        else:
+            url = f"http://api.weatherapi.com/v1/future.json?key={api_key}&q={query}&dt={request.date}"
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+
+        # Extract hourly data for the time window
+        start_hour, end_hour = WEATHER_TIME_RANGES.get(request.time_window, (5, 20))
+        forecast_day = None
+
+        if "forecast" in data and data["forecast"]["forecastday"]:
+            for fd in data["forecast"]["forecastday"]:
+                if fd["date"] == request.date:
+                    forecast_day = fd
+                    break
+            if not forecast_day:
+                forecast_day = data["forecast"]["forecastday"][0]
+
+        if not forecast_day:
+            return WeatherResponse(success=False, error="No forecast data available for this date")
+
+        # Filter hours in the time window and compute averages
+        hours = forecast_day.get("hour", [])
+        relevant_hours = []
+        for h in hours:
+            hour_num = int(h["time"].split(" ")[1].split(":")[0])
+            if start_hour <= hour_num < end_hour:
+                relevant_hours.append(h)
+
+        if not relevant_hours:
+            relevant_hours = hours[:6] if hours else []
+
+        if relevant_hours:
+            avg_temp = sum(h["temp_f"] for h in relevant_hours) / len(relevant_hours)
+            avg_wind = sum(h["wind_mph"] for h in relevant_hours) / len(relevant_hours)
+            avg_precip = sum(h["chance_of_rain"] for h in relevant_hours) / len(relevant_hours)
+            avg_cloud = sum(h["cloud"] for h in relevant_hours) / len(relevant_hours)
+            avg_humidity = sum(h["humidity"] for h in relevant_hours) / len(relevant_hours)
+            avg_pressure = sum(h["pressure_mb"] for h in relevant_hours) / len(relevant_hours)
+            # Use the middle hour for wind direction and condition
+            mid = relevant_hours[len(relevant_hours) // 2]
+            wind_dir = mid["wind_dir"]
+            condition = mid["condition"]["text"]
+        else:
+            day_data = forecast_day.get("day", {})
+            avg_temp = day_data.get("avgtemp_f", 50)
+            avg_wind = day_data.get("maxwind_mph", 5)
+            avg_precip = day_data.get("daily_chance_of_rain", 0)
+            avg_cloud = 50
+            avg_humidity = day_data.get("avghumidity", 50)
+            avg_pressure = 1013
+            wind_dir = "N"
+            condition = day_data.get("condition", {}).get("text", "Unknown")
+
+        astro = forecast_day.get("astro", {})
+        location = data.get("location", {})
+
+        weather = WeatherData(
+            wind_direction=wind_dir,
+            wind_speed_mph=round(avg_wind, 1),
+            temperature_f=round(avg_temp, 1),
+            precipitation_chance=round(avg_precip),
+            cloud_cover=round(avg_cloud),
+            condition=condition,
+            humidity=round(avg_humidity),
+            pressure_mb=round(avg_pressure, 1),
+            sunrise=astro.get("sunrise"),
+            sunset=astro.get("sunset"),
+            location_name=f"{location.get('name', '')}, {location.get('region', '')}",
+            fetched_at=datetime.now(timezone.utc).isoformat(),
+            is_forecast=days_diff >= 0,
+        )
+
+        return WeatherResponse(success=True, data=weather)
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Weather API HTTP error: {e.response.status_code} - {e.response.text}")
+        return WeatherResponse(success=False, error=f"Weather API error: {e.response.status_code}")
+    except Exception as e:
+        logger.error(f"Weather error: {e}")
+        return WeatherResponse(success=False, error=str(e))
 
 
 app.include_router(api_router)

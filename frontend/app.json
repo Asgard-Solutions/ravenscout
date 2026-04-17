@@ -11,7 +11,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Upload map images for hunt analysis"
+        "NSPhotoLibraryUsageDescription": "Upload map images for hunt analysis",
+        "NSLocationWhenInUseUsageDescription": "Get weather data for your hunt location"
       }
     },
     "android": {
@@ -20,7 +21,7 @@
         "backgroundColor": "#0B1F2A"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["READ_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES"]
+      "permissions": ["READ_EXTERNAL_STORAGE", "READ_MEDIA_IMAGES", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
     },
     "web": {
       "bundler": "metro",
