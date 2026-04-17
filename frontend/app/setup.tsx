@@ -151,8 +151,8 @@ export default function SetupScreen() {
       const lon = parseFloat(parts[1]);
       if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
         setLocationCoords({ lat, lon });
-        setMapKey(prev => prev + 1); // Force map re-render with new center
-        setCoordInput('');
+        setCoordInput(`${lat}, ${lon}`);
+        setMapKey(prev => prev + 1);
         return;
       }
     }
@@ -169,6 +169,8 @@ export default function SetupScreen() {
       }
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       setLocationCoords({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+      setCoordInput(`${loc.coords.latitude.toFixed(6)}, ${loc.coords.longitude.toFixed(6)}`);
+      setMapKey(prev => prev + 1);
       // Try to get location name via reverse geocode
       try {
         const geocode = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
