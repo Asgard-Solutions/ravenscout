@@ -59,6 +59,8 @@ export default function SetupScreen() {
   const [mapImages, setMapImages] = useState<string[]>([]);
   const [mapInputMode, setMapInputMode] = useState<'upload' | 'interactive'>('upload');
   const [showInteractiveMap, setShowInteractiveMap] = useState(false);
+  const [coordInput, setCoordInput] = useState('');
+  const [mapKey, setMapKey] = useState(0);
   const [huntDate, setHuntDate] = useState(new Date().toISOString().split('T')[0]);
 
   const isPaidTier = user?.tier === 'core' || user?.tier === 'pro';
@@ -128,9 +130,6 @@ export default function SetupScreen() {
       Alert.alert('Limit Reached', `Maximum ${MAX_MAPS} maps per hunt.`);
       return;
     }
-    // For map capture, we use the image picker to let user screenshot
-    // In a production build with native MapLibre, we'd capture the map view directly
-    // For now, prompt the user to screenshot the map and upload
     Alert.alert(
       'Capture Map',
       'Take a screenshot of the map area you want to analyze, then upload it.',
@@ -139,6 +138,24 @@ export default function SetupScreen() {
         { text: 'Upload Screenshot', onPress: pickImage },
       ]
     );
+  };
+
+  const goToCoordinates = () => {
+    const input = coordInput.trim();
+    if (!input) return;
+    // Parse formats: "38.5, -96.7" or "38.5 -96.7" or "38.5,-96.7"
+    const parts = input.split(/[\s,]+/).filter(Boolean);
+    if (parts.length >= 2) {
+      const lat = parseFloat(parts[0]);
+      const lon = parseFloat(parts[1]);
+      if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+        setLocationCoords({ lat, lon });
+        setMapKey(prev => prev + 1); // Force map re-render with new center
+        setCoordInput('');
+        return;
+      }
+    }
+    Alert.alert('Invalid Coordinates', 'Enter latitude and longitude, e.g., "38.573, -96.726"');
   };
 
   // --- Location ---
@@ -529,8 +546,38 @@ export default function SetupScreen() {
               {/* Interactive Map Mode — Core/Pro only */}
               {mapInputMode === 'interactive' && showInteractiveMap && (
                 <View>
+                  {/* GPS Coordinate Input */}
+                  <View style={styles.coordInputRow}>
+                    <Ionicons name="location" size={18} color={COLORS.accent} />
+                    <TextInput
+                      testID="coord-input"
+                      style={styles.coordInput}
+                      placeholder="Enter GPS: 38.573, -96.726"
+                      placeholderTextColor={COLORS.fogGray}
+                      value={coordInput}
+                      onChangeText={setCoordInput}
+                      keyboardType="numbers-and-punctuation"
+                      returnKeyType="go"
+                      onSubmitEditing={goToCoordinates}
+                    />
+                    <TouchableOpacity
+                      testID="go-to-coords-button"
+                      style={[styles.goButton, !coordInput.trim() && styles.goButtonDisabled]}
+                      onPress={goToCoordinates}
+                      disabled={!coordInput.trim()}
+                    >
+                      <Text style={styles.goButtonText}>GO</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {locationCoords && (
+                    <Text style={styles.currentCoordsText}>
+                      Current: {locationCoords.lat.toFixed(4)}°, {locationCoords.lon.toFixed(4)}°
+                    </Text>
+                  )}
+
                   <View style={styles.interactiveMapContainer}>
                     <TacticalMapView
+                      key={mapKey}
                       center={locationCoords || { lat: 39.8283, lon: -98.5795 }}
                       zoom={locationCoords ? 14 : 5}
                       height={300}
@@ -979,6 +1026,19 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.accent, borderRadius: 10, paddingVertical: 14, minHeight: 52,
   },
   captureMapText: { color: COLORS.primary, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  // Coordinate input
+  coordInputRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', borderRadius: 10, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.3)', marginBottom: 6, minHeight: 52,
+  },
+  coordInput: { flex: 1, color: COLORS.textPrimary, fontSize: 14, paddingVertical: 12 },
+  goButton: {
+    backgroundColor: COLORS.accent, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 10,
+  },
+  goButtonDisabled: { backgroundColor: 'rgba(58, 74, 82, 0.5)' },
+  goButtonText: { color: COLORS.primary, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
+  currentCoordsText: { color: COLORS.fogGray, fontSize: 11, marginBottom: 8, marginLeft: 2 },
   // Map upsell
   mapUpsellCard: {
     flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 16,
