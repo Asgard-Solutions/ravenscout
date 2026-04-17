@@ -71,3 +71,17 @@ Raven Scout is a mobile hunting planning application that uses GPT-5.2 Vision AI
 - [x] No Google Maps, no Mapbox, no routing, no recurring API cost
 - [x] Limitations: WebView rendering (not native), no satellite imagery in MVP, no lat/lon conversion for AI overlays
 - [x] Future Mapbox support: update ACTIVE_PROVIDER in MapProvider.ts, add access token, use Mapbox style URL
+
+## Phase 5: Auth + Subscriptions (Implemented)
+- [x] Emergent-managed Google Auth (OAuth) with session tokens (7-day expiry)
+- [x] User model in MongoDB: user_id, email, tier, analysis_count, billing_cycle_start, rollover
+- [x] 3 subscription tiers: Trial (free, 3 lifetime), Core ($7.99/mo, 10/month), Pro ($14.99/mo, 100/month)
+- [x] Server-side usage enforcement (never trust client)
+- [x] Weather API gated to Core+ tiers (trial users get manual-only)
+- [x] Rollover support (unused analyses carry over 1 month, capped at tier limit)
+- [x] RevenueCat integration ready (preview mode in Expo Go, real purchases in production build)
+- [x] RevenueCat webhook endpoint for server-to-server subscription events
+- [x] Login screen with Google sign-in, auth-gated home screen
+- [x] Usage bar on home screen showing remaining analyses
+- [x] Subscription/paywall screen with tier cards, billing toggle (monthly/annual), savings display
+- [x] Logout, session management, auto-redirect to login when unauthenticated
