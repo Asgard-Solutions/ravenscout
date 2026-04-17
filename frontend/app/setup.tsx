@@ -329,15 +329,17 @@ export default function SetupScreen() {
           createdAt: new Date().toISOString(),
         };
         try {
+          // Limit history to prevent storage overflow
           const existing = await AsyncStorage.getItem('hunt_history');
-          const history = existing ? JSON.parse(existing) : [];
+          let history = existing ? JSON.parse(existing) : [];
+          if (history.length > 3) history = history.slice(0, 3);
           history.unshift(huntRecord);
           await AsyncStorage.setItem('hunt_history', JSON.stringify(history));
         } catch (storageErr) {
-          // If storage fails (e.g., quota), still navigate to results
-          // Store just this hunt temporarily
+          // Storage full — save without map images to fit
           try {
-            await AsyncStorage.setItem('current_hunt', JSON.stringify(huntRecord));
+            const lightRecord = { ...huntRecord, mapImages: [], mapImage: '' };
+            await AsyncStorage.setItem('current_hunt', JSON.stringify(lightRecord));
           } catch {}
         }
         if (refreshUser) refreshUser();

@@ -12,6 +12,7 @@ import {
   Alert,
   Modal,
   FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -124,42 +125,54 @@ export default function ResultsScreen() {
   // Multi-map state
   const [currentMapIndex, setCurrentMapIndex] = useState(0);
   const mapScrollRef = useRef<ScrollView>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     loadHunt();
+    // Timeout: if hunt not loaded in 5 seconds, show error
+    const timeout = setTimeout(() => {
+      setLoadFailed(true);
+    }, 5000);
+    return () => clearTimeout(timeout);
   }, [params.huntId]);
 
   const loadHunt = async () => {
-    // Try hunt_history first
-    const data = await AsyncStorage.getItem('hunt_history');
-    if (data) {
-      const history: HuntRecord[] = JSON.parse(data);
-      const found = history.find(h => h.id === params.huntId);
-      if (found) {
-        setHunt(found);
-        const withIds = (found.result.overlays || []).map((o: any, i: number) => ({
-          ...o,
-          id: o.id || `overlay-${i}-${Date.now()}`,
-        }));
-        setOverlays(withIds);
-        setOriginalOverlays(JSON.parse(JSON.stringify(withIds)));
-        return;
+    try {
+      // Try hunt_history first
+      const data = await AsyncStorage.getItem('hunt_history');
+      if (data) {
+        const history: HuntRecord[] = JSON.parse(data);
+        const found = history.find(h => h.id === params.huntId);
+        if (found) {
+          applyHunt(found);
+          return;
+        }
       }
-    }
-    // Fallback: check current_hunt (used when storage quota exceeded)
-    const current = await AsyncStorage.getItem('current_hunt');
-    if (current) {
-      const hunt: HuntRecord = JSON.parse(current);
-      if (hunt.id === params.huntId) {
-        setHunt(hunt);
-        const withIds = (hunt.result.overlays || []).map((o: any, i: number) => ({
-          ...o,
-          id: o.id || `overlay-${i}-${Date.now()}`,
-        }));
-        setOverlays(withIds);
-        setOriginalOverlays(JSON.parse(JSON.stringify(withIds)));
+    } catch {}
+    try {
+      // Fallback: current_hunt
+      const current = await AsyncStorage.getItem('current_hunt');
+      if (current) {
+        const parsed: HuntRecord = JSON.parse(current);
+        if (parsed.id === params.huntId) {
+          applyHunt(parsed);
+          return;
+        }
       }
-    }
+    } catch {}
+    // If we get here, hunt was not found
+    setLoadFailed(true);
+  };
+
+  const applyHunt = (found: HuntRecord) => {
+    setHunt(found);
+    const withIds = (found.result.overlays || []).map((o: any, i: number) => ({
+      ...o,
+      id: o.id || `overlay-${i}-${Date.now()}`,
+    }));
+    setOverlays(withIds);
+    setOriginalOverlays(JSON.parse(JSON.stringify(withIds)));
+    setLoadFailed(false);
   };
 
   const getMapImages = (): string[] => {
@@ -267,7 +280,37 @@ export default function ResultsScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>Loading results...</Text>
+          {loadFailed ? (
+            <>
+              <Ionicons name="alert-circle-outline" size={48} color={COLORS.accent} />
+              <Text style={[styles.emptyText, { fontSize: 18, fontWeight: '800', marginTop: 16 }]}>
+                RESULTS NOT FOUND
+              </Text>
+              <Text style={[styles.emptyText, { marginTop: 8, textAlign: 'center', lineHeight: 20 }]}>
+                Hunt data could not be loaded.{'\n'}This may happen with large map captures.
+              </Text>
+              <TouchableOpacity
+                testID="retry-load-button"
+                style={{ backgroundColor: COLORS.accent, borderRadius: 10, paddingVertical: 14, paddingHorizontal: 24, marginTop: 24, flexDirection: 'row', gap: 8, alignItems: 'center' }}
+                onPress={() => { setLoadFailed(false); loadHunt(); }}
+              >
+                <Ionicons name="refresh" size={18} color={COLORS.primary} />
+                <Text style={{ color: COLORS.primary, fontWeight: '800', fontSize: 14, letterSpacing: 1 }}>RETRY</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="go-home-button"
+                style={{ paddingVertical: 14, marginTop: 12 }}
+                onPress={() => router.replace('/')}
+              >
+                <Text style={{ color: COLORS.fogGray, fontSize: 14, fontWeight: '600' }}>Back to Home</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <ActivityIndicator size="large" color={COLORS.accent} />
+              <Text style={[styles.emptyText, { marginTop: 12 }]}>Loading results...</Text>
+            </>
+          )}
         </View>
       </SafeAreaView>
     );
