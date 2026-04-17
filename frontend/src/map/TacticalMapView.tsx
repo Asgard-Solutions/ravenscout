@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, StyleSheet, Text } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { View, StyleSheet, Text, Platform } from 'react-native';
 import { COLORS } from '../constants/theme';
 import { getDarkStyleJSON } from '../map/MapProvider';
 
@@ -11,7 +10,7 @@ interface TacticalMapViewProps {
 }
 
 export default function TacticalMapView({
-  center = { lat: 39.8283, lon: -98.5795 }, // Default: center of US
+  center = { lat: 39.8283, lon: -98.5795 },
   zoom = 5,
   height = 350,
 }: TacticalMapViewProps) {
@@ -55,32 +54,31 @@ export default function TacticalMapView({
       maxZoom: 18,
       minZoom: 2,
     });
-
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
-
-    // Listen for messages from React Native
-    window.addEventListener('message', function(event) {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'setCenter') {
-          map.flyTo({ center: [data.lon, data.lat], zoom: data.zoom || 12, duration: 1500 });
-        }
-        if (data.type === 'setZoom') {
-          map.setZoom(data.zoom);
-        }
-      } catch (e) {}
-    });
-
-    // Notify RN that map is ready
-    map.on('load', function() {
-      if (window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapReady' }));
-      }
-    });
   </script>
 </body>
 </html>
   `, [center.lat, center.lon, zoom, styleJSON]);
+
+  // Web: use iframe (WebView not supported on web)
+  if (Platform.OS === 'web') {
+    return (
+      <View style={[styles.container, { height }]}>
+        <iframe
+          data-testid="tactical-map-iframe"
+          srcDoc={htmlContent}
+          style={{ width: '100%', height: '100%', border: 'none', borderRadius: 16 } as any}
+          sandbox="allow-scripts"
+        />
+        <View style={styles.attribution}>
+          <Text style={styles.attributionText}>© OpenStreetMap · CARTO</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Native: use WebView
+  const WebView = require('react-native-webview').WebView;
 
   return (
     <View style={[styles.container, { height }]}>
@@ -96,7 +94,6 @@ export default function TacticalMapView({
         overScrollMode="never"
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
-        allowsInlineMediaPlayback={true}
       />
       <View style={styles.attribution}>
         <Text style={styles.attributionText}>© OpenStreetMap · CARTO</Text>
