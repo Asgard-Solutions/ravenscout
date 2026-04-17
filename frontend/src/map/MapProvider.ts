@@ -1,113 +1,84 @@
 /**
  * MapProvider - Provider-agnostic map configuration
  * 
- * Abstracts the map tile source and style so the base map can be swapped
- * from OSM/CartoDB to Mapbox, MapTiler, or any other provider without
- * touching the map view or overlay components.
+ * Current: MapTiler (satellite, outdoor, streets)
+ * Renderer: MapLibre GL JS
  * 
- * To add Mapbox satellite later:
- * 1. Set provider to 'mapbox'
- * 2. Add MAPBOX_ACCESS_TOKEN
- * 3. Update getStyleUrl() to return Mapbox style URL
+ * To swap to Mapbox later: update ACTIVE_PROVIDER and add Mapbox token
  */
 
-export type MapProviderType = 'osm-dark' | 'osm-bright' | 'mapbox' | 'maptiler';
+export type MapStyle = 'streets' | 'satellite' | 'outdoor';
 
-interface MapProviderConfig {
-  provider: MapProviderType;
+export type MapProviderType = 'maptiler' | 'osm-carto' | 'mapbox';
+
+const MAPTILER_KEY = process.env.EXPO_PUBLIC_MAPTILER_KEY || '';
+
+interface MapStyleConfig {
+  id: MapStyle;
+  label: string;
+  icon: string;
   styleUrl: string;
-  attribution: string;
-  maxZoom: number;
-  requiresApiKey: boolean;
 }
 
-const PROVIDERS: Record<MapProviderType, MapProviderConfig> = {
-  'osm-dark': {
-    provider: 'osm-dark',
-    styleUrl: '', // Uses inline style JSON (CartoDB Dark Matter)
-    attribution: '© OpenStreetMap contributors, © CARTO',
-    maxZoom: 18,
-    requiresApiKey: false,
+// MapTiler vector style URLs (used by MapLibre GL JS)
+const MAPTILER_STYLES: Record<MapStyle, MapStyleConfig> = {
+  streets: {
+    id: 'streets',
+    label: 'STREETS',
+    icon: 'map-outline',
+    styleUrl: `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`,
   },
-  'osm-bright': {
-    provider: 'osm-bright',
-    styleUrl: '', // Uses inline style JSON (OSM Bright)
-    attribution: '© OpenStreetMap contributors',
-    maxZoom: 18,
-    requiresApiKey: false,
+  satellite: {
+    id: 'satellite',
+    label: 'SATELLITE',
+    icon: 'earth',
+    styleUrl: `https://api.maptiler.com/maps/satellite/style.json?key=${MAPTILER_KEY}`,
   },
-  'mapbox': {
-    provider: 'mapbox',
-    styleUrl: 'mapbox://styles/mapbox/satellite-streets-v12',
-    attribution: '© Mapbox, © OpenStreetMap',
-    maxZoom: 22,
-    requiresApiKey: true,
-  },
-  'maptiler': {
-    provider: 'maptiler',
-    styleUrl: '', // Would use MapTiler style URL
-    attribution: '© MapTiler, © OpenStreetMap',
-    maxZoom: 20,
-    requiresApiKey: true,
+  outdoor: {
+    id: 'outdoor',
+    label: 'OUTDOOR',
+    icon: 'trail-sign',
+    styleUrl: `https://api.maptiler.com/maps/outdoor-v2/style.json?key=${MAPTILER_KEY}`,
   },
 };
 
-// Current MVP provider
-const ACTIVE_PROVIDER: MapProviderType = 'osm-dark';
-
-export function getMapConfig(): MapProviderConfig {
-  return PROVIDERS[ACTIVE_PROVIDER];
-}
-
-export function getProvider(): MapProviderType {
-  return ACTIVE_PROVIDER;
-}
-
-// Dark style JSON using CartoDB Voyager tiles — readable terrain with muted tactical look
-export function getDarkStyleJSON(): object {
-  return {
-    version: 8,
-    name: 'Raven Scout Tactical',
-    sources: {
-      'carto-voyager': {
-        type: 'raster',
-        tiles: [
-          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-        ],
-        tileSize: 256,
-        attribution: '© OpenStreetMap contributors, © CARTO',
-        maxzoom: 18,
-      },
+// Fallback: free CartoDB Voyager (no key needed)
+const FALLBACK_STYLE = {
+  version: 8,
+  name: 'Fallback',
+  sources: {
+    'carto-voyager': {
+      type: 'raster',
+      tiles: [
+        'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+        'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+      ],
+      tileSize: 256,
+      maxzoom: 18,
     },
-    layers: [
-      {
-        id: 'carto-voyager-layer',
-        type: 'raster',
-        source: 'carto-voyager',
-        minzoom: 0,
-        maxzoom: 22,
-      },
-    ],
-  };
+  },
+  layers: [{ id: 'carto-layer', type: 'raster', source: 'carto-voyager', minzoom: 0, maxzoom: 22 }],
+};
+
+export function getMapStyles(): MapStyleConfig[] {
+  if (!MAPTILER_KEY) return [];
+  return [MAPTILER_STYLES.outdoor, MAPTILER_STYLES.satellite, MAPTILER_STYLES.streets];
 }
 
-/**
- * Future: To add Mapbox satellite support:
- * 
- * 1. Install @maplibre/maplibre-react-native (requires dev build, not Expo Go)
- *    OR continue using WebView approach with Mapbox GL JS
- * 
- * 2. Update ACTIVE_PROVIDER to 'mapbox'
- * 
- * 3. Add Mapbox access token to .env:
- *    EXPO_PUBLIC_MAPBOX_TOKEN=pk.xxx
- * 
- * 4. Update TacticalMapView to use Mapbox style URL:
- *    style: 'mapbox://styles/mapbox/satellite-streets-v12'
- *    with transformRequest for token auth
- * 
- * 5. For native performance: switch from WebView to @maplibre/maplibre-react-native
- *    with EAS build (not Expo Go compatible)
- */
+export function getStyleUrl(style: MapStyle): string {
+  if (!MAPTILER_KEY) return '';
+  return MAPTILER_STYLES[style].styleUrl;
+}
+
+export function getFallbackStyleJSON(): object {
+  return FALLBACK_STYLE;
+}
+
+export function hasMaptilerKey(): boolean {
+  return !!MAPTILER_KEY;
+}
+
+// Keep for backward compat
+export function getDarkStyleJSON(): object {
+  return FALLBACK_STYLE;
+}
