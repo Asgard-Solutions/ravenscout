@@ -520,20 +520,6 @@ export default function SetupScreen() {
               {/* Upload Mode */}
               {mapInputMode === 'upload' && (
                 <View>
-                  {mapImages.length > 0 && (
-                    <View style={styles.mapsGrid}>
-                      {mapImages.map((img, idx) => (
-                        <View key={idx} style={styles.mapThumbContainer}>
-                          <Image source={{ uri: img }} style={styles.mapThumb} resizeMode="cover" />
-                          <View style={styles.mapThumbBadge}><Text style={styles.mapThumbBadgeText}>{idx + 1}</Text></View>
-                          <TouchableOpacity testID={`remove-map-${idx}`} style={styles.removeMapButton} onPress={() => removeMap(idx)}>
-                            <Ionicons name="close-circle" size={22} color={COLORS.avoidZones} />
-                          </TouchableOpacity>
-                          {idx === 0 && <View style={styles.primaryMapBadge}><Text style={styles.primaryMapText}>PRIMARY</Text></View>}
-                        </View>
-                      ))}
-                    </View>
-                  )}
                   {mapImages.length < MAX_MAPS && (
                     <TouchableOpacity testID="upload-map-button" style={[styles.uploadArea, mapImages.length > 0 && styles.uploadAreaCompact]} onPress={pickImage} activeOpacity={0.7}>
                       <Ionicons name="cloud-upload" size={mapImages.length > 0 ? 32 : 48} color={COLORS.accent} />
@@ -615,19 +601,14 @@ export default function SetupScreen() {
 
                   {/* Show captured maps */}
                   {mapImages.length > 0 && (
-                    <View style={[styles.mapsGrid, { marginTop: 16 }]}>
-                      {mapImages.map((img, idx) => (
-                        <View key={idx} style={styles.mapThumbContainer}>
-                          <Image source={{ uri: img }} style={styles.mapThumb} resizeMode="cover" />
-                          <View style={styles.mapThumbBadge}><Text style={styles.mapThumbBadgeText}>{idx + 1}</Text></View>
-                          <TouchableOpacity testID={`remove-map-${idx}`} style={styles.removeMapButton} onPress={() => removeMap(idx)}>
-                            <Ionicons name="close-circle" size={22} color={COLORS.avoidZones} />
-                          </TouchableOpacity>
-                        </View>
-                      ))}
-                    </View>
+                    <MapImageList images={mapImages} onRemove={removeMap} />
                   )}
                 </View>
+              )}
+
+              {/* Shared: Show all maps with delete — both modes */}
+              {mapInputMode === 'upload' && mapImages.length > 0 && (
+                <MapImageList images={mapImages} onRemove={removeMap} />
               )}
 
               {/* Tip */}
@@ -883,6 +864,31 @@ export default function SetupScreen() {
   );
 }
 
+function MapImageList({ images, onRemove }: { images: string[]; onRemove: (idx: number) => void }) {
+  return (
+    <View style={styles.mapListContainer}>
+      <Text style={styles.mapListTitle}>MAPS READY ({images.length})</Text>
+      {images.map((img, idx) => (
+        <View key={idx} style={styles.mapListItem}>
+          <Image source={{ uri: img }} style={styles.mapListImage} resizeMode="cover" />
+          <View style={styles.mapListInfo}>
+            <Text style={styles.mapListLabel}>Map {idx + 1}</Text>
+            {idx === 0 && <Text style={styles.mapListPrimary}>Used for AI analysis</Text>}
+          </View>
+          <TouchableOpacity
+            testID={`delete-map-${idx}`}
+            style={styles.mapListDelete}
+            onPress={() => onRemove(idx)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="trash-outline" size={20} color={COLORS.avoidZones} />
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function ReviewRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.reviewRow}>
@@ -1098,4 +1104,20 @@ const styles = StyleSheet.create({
   mapUpsellDesc: { color: COLORS.fogGray, fontSize: 12, marginTop: 2 },
   mapUpsellBadge: { backgroundColor: 'rgba(200, 155, 60, 0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   mapUpsellBadgeText: { color: COLORS.accent, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  // Map Image List (delete-friendly)
+  mapListContainer: { marginTop: 16, marginBottom: 8 },
+  mapListTitle: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 10 },
+  mapListItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 12,
+    padding: 10, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.15)',
+  },
+  mapListImage: { width: 64, height: 48, borderRadius: 8, backgroundColor: COLORS.secondary },
+  mapListInfo: { flex: 1 },
+  mapListLabel: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '700' },
+  mapListPrimary: { color: COLORS.accent, fontSize: 11, fontWeight: '600', marginTop: 2 },
+  mapListDelete: {
+    width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(198, 40, 40, 0.12)', borderWidth: 1, borderColor: 'rgba(198, 40, 40, 0.25)',
+  },
 });
