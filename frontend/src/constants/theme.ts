@@ -21,7 +21,23 @@ export const COLORS = {
   success: '#2E7D32',
   cardBg: 'rgba(58, 74, 82, 0.5)',
   cardBorder: 'rgba(154, 164, 169, 0.3)',
+  // Custom markers
+  bedding: '#8D6E63',
+  food: '#66BB6A',
+  water: '#29B6F6',
+  trail: '#FFCA28',
 };
+
+export const CUSTOM_MARKER_TYPES = [
+  { id: 'stand', label: 'Stand / Blind', icon: 'pin', color: '#2E7D32' },
+  { id: 'corridor', label: 'Travel Corridor', icon: 'trail-sign', color: '#F57C00' },
+  { id: 'access_route', label: 'Access Route', icon: 'walk', color: '#42A5F5' },
+  { id: 'avoid', label: 'Avoid Zone', icon: 'warning', color: '#C62828' },
+  { id: 'bedding', label: 'Bedding Area', icon: 'bed', color: '#8D6E63' },
+  { id: 'food', label: 'Food Source', icon: 'nutrition', color: '#66BB6A' },
+  { id: 'water', label: 'Water Source', icon: 'water', color: '#29B6F6' },
+  { id: 'trail', label: 'Trail / Path', icon: 'footsteps', color: '#FFCA28' },
+];
 
 export const SPECIES = [
   {

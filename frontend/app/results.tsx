@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,16 +8,23 @@ import {
   ScrollView,
   Image,
   Dimensions,
+  PanResponder,
+  Alert,
+  Modal,
+  FlatList,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS } from '../src/constants/theme';
+import { COLORS, CUSTOM_MARKER_TYPES } from '../src/constants/theme';
+import { useNetwork } from '../src/hooks/useNetwork';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const MAP_WIDTH = SCREEN_WIDTH - 32;
 const MAP_HEIGHT = 350;
 
 interface OverlayMarker {
+  id: string;
   type: string;
   label: string;
   x_percent: number;
@@ -26,6 +33,7 @@ interface OverlayMarker {
   height_percent?: number;
   reasoning: string;
   confidence: string;
+  isCustom?: boolean;
 }
 
 interface HuntResult {
@@ -46,7 +54,8 @@ interface HuntRecord {
   date: string;
   timeWindow: string;
   windDirection: string;
-  mapImage: string;
+  mapImage?: string;
+  mapImages?: string[];
   result: HuntResult;
   createdAt: string;
 }
@@ -56,6 +65,10 @@ const OVERLAY_COLORS: Record<string, string> = {
   corridor: COLORS.corridors,
   access_route: COLORS.accessRoutes,
   avoid: COLORS.avoidZones,
+  bedding: '#8D6E63',
+  food: '#66BB6A',
+  water: '#29B6F6',
+  trail: '#FFCA28',
 };
 
 const OVERLAY_ICONS: Record<string, string> = {
@@ -63,6 +76,10 @@ const OVERLAY_ICONS: Record<string, string> = {
   corridor: 'trail-sign',
   access_route: 'walk',
   avoid: 'warning',
+  bedding: 'bed',
+  food: 'nutrition',
+  water: 'water',
+  trail: 'footsteps',
 };
 
 const OVERLAY_LABELS: Record<string, string> = {
@@ -70,6 +87,10 @@ const OVERLAY_LABELS: Record<string, string> = {
   corridor: 'Travel Corridor',
   access_route: 'Access Route',
   avoid: 'Avoid Zone',
+  bedding: 'Bedding Area',
+  food: 'Food Source',
+  water: 'Water Source',
+  trail: 'Trail / Path',
 };
 
 const CONFIDENCE_COLORS: Record<string, string> = {
@@ -81,9 +102,23 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 export default function ResultsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ huntId: string }>();
+  const { isConnected } = useNetwork();
   const [hunt, setHunt] = useState<HuntRecord | null>(null);
   const [selectedOverlay, setSelectedOverlay] = useState<OverlayMarker | null>(null);
   const [showLegend, setShowLegend] = useState(false);
+
+  // Edit mode state
+  const [editMode, setEditMode] = useState(false);
+  const [overlays, setOverlays] = useState<OverlayMarker[]>([]);
+  const [originalOverlays, setOriginalOverlays] = useState<OverlayMarker[]>([]);
+  const [addMode, setAddMode] = useState(false);
+  const [addMarkerType, setAddMarkerType] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  // Multi-map state
+  const [currentMapIndex, setCurrentMapIndex] = useState(0);
+  const mapScrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     loadHunt();
@@ -94,8 +129,117 @@ export default function ResultsScreen() {
     if (data) {
       const history: HuntRecord[] = JSON.parse(data);
       const found = history.find(h => h.id === params.huntId);
-      if (found) setHunt(found);
+      if (found) {
+        setHunt(found);
+        const withIds = (found.result.overlays || []).map((o: any, i: number) => ({
+          ...o,
+          id: o.id || `overlay-${i}-${Date.now()}`,
+        }));
+        setOverlays(withIds);
+        setOriginalOverlays(JSON.parse(JSON.stringify(withIds)));
+      }
     }
+  };
+
+  const getMapImages = (): string[] => {
+    if (!hunt) return [];
+    if (hunt.mapImages && hunt.mapImages.length > 0) return hunt.mapImages;
+    if (hunt.mapImage) return [hunt.mapImage];
+    return [];
+  };
+
+  const mapImages = hunt ? getMapImages() : [];
+
+  // --- Edit Mode Functions ---
+  const enterEditMode = () => {
+    setEditMode(true);
+    setOriginalOverlays(JSON.parse(JSON.stringify(overlays)));
+    setSelectedOverlay(null);
+  };
+
+  const cancelEdit = () => {
+    setOverlays(JSON.parse(JSON.stringify(originalOverlays)));
+    setEditMode(false);
+    setAddMode(false);
+    setAddMarkerType(null);
+    setSelectedOverlay(null);
+  };
+
+  const saveEdits = async () => {
+    if (!hunt) return;
+    const updatedHunt = {
+      ...hunt,
+      result: { ...hunt.result, overlays },
+    };
+    const data = await AsyncStorage.getItem('hunt_history');
+    if (data) {
+      const history: HuntRecord[] = JSON.parse(data);
+      const idx = history.findIndex(h => h.id === hunt.id);
+      if (idx >= 0) {
+        history[idx] = updatedHunt;
+        await AsyncStorage.setItem('hunt_history', JSON.stringify(history));
+      }
+    }
+    setHunt(updatedHunt);
+    setOriginalOverlays(JSON.parse(JSON.stringify(overlays)));
+    setEditMode(false);
+    setAddMode(false);
+    setAddMarkerType(null);
+    Alert.alert('Saved', 'Overlay changes saved successfully.');
+  };
+
+  const deleteOverlay = (overlayId: string) => {
+    setOverlays(prev => prev.filter(o => o.id !== overlayId));
+    setSelectedOverlay(null);
+  };
+
+  const handleMapPress = useCallback((evt: any) => {
+    if (!editMode || !addMode || !addMarkerType) return;
+    const { locationX, locationY } = evt.nativeEvent;
+    const xPercent = Math.max(3, Math.min(97, (locationX / MAP_WIDTH) * 100));
+    const yPercent = Math.max(3, Math.min(97, (locationY / MAP_HEIGHT) * 100));
+
+    const markerDef = CUSTOM_MARKER_TYPES.find(m => m.id === addMarkerType);
+    const newOverlay: OverlayMarker = {
+      id: `custom-${Date.now()}`,
+      type: addMarkerType,
+      label: markerDef?.label || 'Custom Marker',
+      x_percent: xPercent,
+      y_percent: yPercent,
+      reasoning: 'User-placed marker',
+      confidence: 'medium',
+      isCustom: true,
+    };
+    setOverlays(prev => [...prev, newOverlay]);
+    setAddMode(false);
+    setAddMarkerType(null);
+  }, [editMode, addMode, addMarkerType]);
+
+  // Drag handling
+  const handleMarkerDragStart = (index: number) => {
+    if (!editMode) return;
+    setDragIndex(index);
+  };
+
+  const handleMarkerDrag = (index: number, dx: number, dy: number) => {
+    if (!editMode || dragIndex !== index) return;
+    setOverlays(prev => {
+      const updated = [...prev];
+      const marker = { ...updated[index] };
+      marker.x_percent = Math.max(3, Math.min(97, marker.x_percent + (dx / MAP_WIDTH) * 100));
+      marker.y_percent = Math.max(3, Math.min(97, marker.y_percent + (dy / MAP_HEIGHT) * 100));
+      updated[index] = marker;
+      return updated;
+    });
+  };
+
+  const handleMarkerDragEnd = () => {
+    setDragIndex(null);
+  };
+
+  const scrollToMap = (index: number) => {
+    setCurrentMapIndex(index);
+    mapScrollRef.current?.scrollTo({ x: index * MAP_WIDTH, animated: true });
   };
 
   if (!hunt) {
@@ -112,6 +256,14 @@ export default function ResultsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      {/* Offline Banner */}
+      {!isConnected && (
+        <View testID="offline-banner" style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline" size={16} color={COLORS.accent} />
+          <Text style={styles.offlineBannerText}>OFFLINE MODE — Viewing saved data</Text>
+        </View>
+      )}
+
       {/* Top Bar */}
       <View style={styles.topBar}>
         <TouchableOpacity
@@ -125,88 +277,160 @@ export default function ResultsScreen() {
           <Text style={styles.topTitle}>{hunt.speciesName.toUpperCase()}</Text>
           <Text style={styles.topSubtitle}>{hunt.date} · Wind {hunt.windDirection}</Text>
         </View>
-        <TouchableOpacity
-          testID="toggle-legend-button"
-          style={styles.legendButton}
-          onPress={() => setShowLegend(!showLegend)}
-        >
-          <Ionicons name="layers" size={22} color={COLORS.accent} />
-        </TouchableOpacity>
+        {!editMode ? (
+          <View style={styles.topActions}>
+            <TouchableOpacity
+              testID="toggle-legend-button"
+              style={styles.iconButton}
+              onPress={() => setShowLegend(!showLegend)}
+            >
+              <Ionicons name="layers" size={20} color={COLORS.accent} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="enter-edit-mode-button"
+              style={styles.editButton}
+              onPress={enterEditMode}
+            >
+              <Ionicons name="create" size={18} color={COLORS.primary} />
+              <Text style={styles.editButtonText}>EDIT</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.topActions}>
+            <TouchableOpacity testID="cancel-edit-button" style={styles.cancelButton} onPress={cancelEdit}>
+              <Text style={styles.cancelButtonText}>CANCEL</Text>
+            </TouchableOpacity>
+            <TouchableOpacity testID="save-edit-button" style={styles.saveButton} onPress={saveEdits}>
+              <Ionicons name="checkmark" size={18} color={COLORS.primary} />
+              <Text style={styles.saveButtonText}>SAVE</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Map with Overlays */}
-        <View style={styles.mapContainer}>
-          <Image
-            source={{ uri: hunt.mapImage }}
-            style={styles.mapImage}
-            resizeMode="cover"
-          />
-          {/* Overlay markers on the map */}
-          {result.overlays.map((overlay, idx) => {
-            const color = OVERLAY_COLORS[overlay.type] || COLORS.accent;
-            const isZone = overlay.type === 'corridor' || overlay.type === 'avoid';
+      {/* Edit Mode Toolbar */}
+      {editMode && (
+        <View testID="edit-toolbar" style={styles.editToolbar}>
+          <TouchableOpacity
+            testID="add-marker-button"
+            style={[styles.toolbarButton, addMode && styles.toolbarButtonActive]}
+            onPress={() => setShowAddModal(true)}
+          >
+            <Ionicons name="add-circle" size={20} color={addMode ? COLORS.primary : COLORS.accent} />
+            <Text style={[styles.toolbarButtonText, addMode && styles.toolbarButtonTextActive]}>ADD</Text>
+          </TouchableOpacity>
+          {selectedOverlay && (
+            <TouchableOpacity
+              testID="delete-overlay-button"
+              style={styles.deleteToolbarButton}
+              onPress={() => {
+                Alert.alert('Delete Marker', `Remove "${selectedOverlay.label}"?`, [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Delete', style: 'destructive', onPress: () => deleteOverlay(selectedOverlay.id) },
+                ]);
+              }}
+            >
+              <Ionicons name="trash" size={18} color={COLORS.avoidZones} />
+              <Text style={styles.deleteToolbarText}>DELETE</Text>
+            </TouchableOpacity>
+          )}
+          {addMode && addMarkerType && (
+            <View style={styles.addModeIndicator}>
+              <Ionicons name="locate" size={16} color={COLORS.accent} />
+              <Text style={styles.addModeText}>Tap map to place</Text>
+            </View>
+          )}
+          <Text style={styles.editHint}>
+            {addMode ? 'Tap on map to place marker' : 'Drag markers to reposition'}
+          </Text>
+        </View>
+      )}
 
-            if (isZone && overlay.width_percent && overlay.height_percent) {
-              return (
+      <ScrollView
+        style={styles.scrollView}
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={dragIndex === null}
+      >
+        {/* Multi-Map Viewer */}
+        <View style={styles.mapSection}>
+          {mapImages.length > 1 && (
+            <View style={styles.mapTabs}>
+              {mapImages.map((_, idx) => (
                 <TouchableOpacity
                   key={idx}
-                  testID={`overlay-zone-${idx}`}
-                  style={[
-                    styles.overlayZone,
-                    {
-                      left: `${overlay.x_percent - overlay.width_percent / 2}%` as any,
-                      top: `${(overlay.y_percent / 100) * MAP_HEIGHT - (overlay.height_percent / 100) * MAP_HEIGHT / 2}`,
-                      width: `${overlay.width_percent}%` as any,
-                      height: (overlay.height_percent / 100) * MAP_HEIGHT,
-                      backgroundColor: `${color}33`,
-                      borderColor: color,
-                    },
-                  ]}
-                  onPress={() => setSelectedOverlay(overlay)}
-                  activeOpacity={0.8}
+                  testID={`map-tab-${idx}`}
+                  style={[styles.mapTab, currentMapIndex === idx && styles.mapTabActive]}
+                  onPress={() => scrollToMap(idx)}
                 >
-                  <Text style={[styles.zoneLabel, { color }]} numberOfLines={1}>
-                    {overlay.label}
+                  <Text style={[styles.mapTabText, currentMapIndex === idx && styles.mapTabTextActive]}>
+                    MAP {idx + 1}
                   </Text>
                 </TouchableOpacity>
-              );
-            }
+              ))}
+            </View>
+          )}
 
-            return (
-              <TouchableOpacity
-                key={idx}
-                testID={`overlay-marker-${idx}`}
-                style={[
-                  styles.overlayMarker,
-                  {
-                    left: `${overlay.x_percent - 3}%` as any,
-                    top: (overlay.y_percent / 100) * MAP_HEIGHT - 16,
-                    backgroundColor: color,
-                    borderColor: '#FFFFFF',
-                  },
-                ]}
-                onPress={() => setSelectedOverlay(overlay)}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name={(OVERLAY_ICONS[overlay.type] || 'location') as any}
-                  size={16}
-                  color="#FFFFFF"
-                />
-              </TouchableOpacity>
-            );
-          })}
-
-          {/* Legend overlay */}
-          {showLegend && (
-            <View style={styles.legendOverlay}>
-              <Text style={styles.legendTitle}>MAP LEGEND</Text>
-              {Object.entries(OVERLAY_LABELS).map(([key, label]) => (
-                <View key={key} style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: OVERLAY_COLORS[key] }]} />
-                  <Text style={styles.legendLabel}>{label}</Text>
+          <View style={styles.mapContainer}>
+            <ScrollView
+              ref={mapScrollRef}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              scrollEnabled={!editMode && mapImages.length > 1}
+              onMomentumScrollEnd={(e) => {
+                const idx = Math.round(e.nativeEvent.contentOffset.x / MAP_WIDTH);
+                setCurrentMapIndex(idx);
+              }}
+              style={{ width: MAP_WIDTH }}
+            >
+              {mapImages.map((img, mapIdx) => (
+                <View
+                  key={mapIdx}
+                  style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
+                  onTouchEnd={editMode && addMode ? handleMapPress : undefined}
+                >
+                  <Image source={{ uri: img }} style={styles.mapImage} resizeMode="cover" />
                 </View>
+              ))}
+            </ScrollView>
+
+            {/* Overlay markers */}
+            {overlays.map((overlay, idx) => (
+              <DraggableMarker
+                key={overlay.id}
+                overlay={overlay}
+                index={idx}
+                editMode={editMode}
+                isSelected={selectedOverlay?.id === overlay.id}
+                onPress={() => setSelectedOverlay(selectedOverlay?.id === overlay.id ? null : overlay)}
+                onDragStart={() => handleMarkerDragStart(idx)}
+                onDrag={(dx, dy) => handleMarkerDrag(idx, dx, dy)}
+                onDragEnd={handleMarkerDragEnd}
+              />
+            ))}
+
+            {/* Legend overlay */}
+            {showLegend && !editMode && (
+              <View style={styles.legendOverlay}>
+                <Text style={styles.legendTitle}>MAP LEGEND</Text>
+                {Object.entries(OVERLAY_LABELS).map(([key, label]) => (
+                  <View key={key} style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: OVERLAY_COLORS[key] }]} />
+                    <Text style={styles.legendLabel}>{label}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Map page dots */}
+          {mapImages.length > 1 && (
+            <View style={styles.pageDots}>
+              {mapImages.map((_, idx) => (
+                <View
+                  key={idx}
+                  style={[styles.pageDot, currentMapIndex === idx && styles.pageDotActive]}
+                />
               ))}
             </View>
           )}
@@ -214,18 +438,23 @@ export default function ResultsScreen() {
 
         {/* Selected Overlay Detail */}
         {selectedOverlay && (
-          <View style={[styles.overlayDetail, { borderLeftColor: OVERLAY_COLORS[selectedOverlay.type] }]}>
+          <View style={[styles.overlayDetail, { borderLeftColor: OVERLAY_COLORS[selectedOverlay.type] || COLORS.accent }]}>
             <View style={styles.overlayDetailHeader}>
               <Ionicons
                 name={(OVERLAY_ICONS[selectedOverlay.type] || 'location') as any}
                 size={20}
-                color={OVERLAY_COLORS[selectedOverlay.type]}
+                color={OVERLAY_COLORS[selectedOverlay.type] || COLORS.accent}
               />
-              <Text style={[styles.overlayDetailTitle, { color: OVERLAY_COLORS[selectedOverlay.type] }]}>
+              <Text style={[styles.overlayDetailTitle, { color: OVERLAY_COLORS[selectedOverlay.type] || COLORS.accent }]}>
                 {selectedOverlay.label}
               </Text>
-              <View style={[styles.confidenceBadge, { backgroundColor: `${CONFIDENCE_COLORS[selectedOverlay.confidence]}22` }]}>
-                <Text style={[styles.confidenceText, { color: CONFIDENCE_COLORS[selectedOverlay.confidence] }]}>
+              {selectedOverlay.isCustom && (
+                <View style={styles.customBadge}>
+                  <Text style={styles.customBadgeText}>CUSTOM</Text>
+                </View>
+              )}
+              <View style={[styles.confidenceBadge, { backgroundColor: `${CONFIDENCE_COLORS[selectedOverlay.confidence] || COLORS.fogGray}22` }]}>
+                <Text style={[styles.confidenceText, { color: CONFIDENCE_COLORS[selectedOverlay.confidence] || COLORS.fogGray }]}>
                   {selectedOverlay.confidence.toUpperCase()}
                 </Text>
               </View>
@@ -234,6 +463,16 @@ export default function ResultsScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.overlayReasoning}>{selectedOverlay.reasoning}</Text>
+            {editMode && (
+              <TouchableOpacity
+                testID="delete-selected-overlay"
+                style={styles.deleteInlineButton}
+                onPress={() => deleteOverlay(selectedOverlay.id)}
+              >
+                <Ionicons name="trash-outline" size={16} color={COLORS.avoidZones} />
+                <Text style={styles.deleteInlineText}>DELETE MARKER</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -287,39 +526,33 @@ export default function ResultsScreen() {
           </View>
         )}
 
-        {/* Key Assumptions */}
-        {result.key_assumptions.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>KEY ASSUMPTIONS</Text>
-            {result.key_assumptions.map((assumption, idx) => (
-              <View key={idx} style={styles.assumptionRow}>
-                <Ionicons name="information-circle" size={14} color={COLORS.fogGray} />
-                <Text style={styles.assumptionText}>{assumption}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
         {/* Overlay List */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>ALL OVERLAYS ({result.overlays.length})</Text>
-          {result.overlays.map((overlay, idx) => (
+          <Text style={styles.sectionTitle}>ALL OVERLAYS ({overlays.length})</Text>
+          {overlays.map((overlay) => (
             <TouchableOpacity
-              key={idx}
-              testID={`overlay-list-item-${idx}`}
-              style={styles.overlayListItem}
-              onPress={() => setSelectedOverlay(overlay)}
+              key={overlay.id}
+              testID={`overlay-list-item-${overlay.id}`}
+              style={[styles.overlayListItem, selectedOverlay?.id === overlay.id && styles.overlayListItemSelected]}
+              onPress={() => setSelectedOverlay(selectedOverlay?.id === overlay.id ? null : overlay)}
             >
-              <View style={[styles.overlayListDot, { backgroundColor: OVERLAY_COLORS[overlay.type] }]} />
+              <View style={[styles.overlayListDot, { backgroundColor: OVERLAY_COLORS[overlay.type] || COLORS.accent }]} />
               <View style={styles.overlayListContent}>
                 <Text style={styles.overlayListLabel}>{overlay.label}</Text>
-                <Text style={styles.overlayListType}>{OVERLAY_LABELS[overlay.type]}</Text>
-              </View>
-              <View style={[styles.confidenceBadgeSmall, { backgroundColor: `${CONFIDENCE_COLORS[overlay.confidence]}22` }]}>
-                <Text style={[styles.confidenceTextSmall, { color: CONFIDENCE_COLORS[overlay.confidence] }]}>
-                  {overlay.confidence}
+                <Text style={styles.overlayListType}>
+                  {OVERLAY_LABELS[overlay.type] || overlay.type}
+                  {overlay.isCustom ? ' · Custom' : ''}
                 </Text>
               </View>
+              {editMode && (
+                <TouchableOpacity
+                  testID={`delete-overlay-${overlay.id}`}
+                  style={styles.overlayDeleteBtn}
+                  onPress={() => deleteOverlay(overlay.id)}
+                >
+                  <Ionicons name="close-circle" size={20} color={COLORS.avoidZones} />
+                </TouchableOpacity>
+              )}
             </TouchableOpacity>
           ))}
         </View>
@@ -328,403 +561,372 @@ export default function ResultsScreen() {
         <View style={styles.disclaimerSection}>
           <Ionicons name="shield-checkmark" size={16} color={COLORS.fogGray} />
           <Text style={styles.disclaimerText}>
-            These recommendations are AI-generated suggestions. Always verify regulations, property boundaries, and safety independently.
+            AI-generated suggestions. Always verify regulations, property boundaries, and safety independently.
           </Text>
         </View>
-
         <View style={{ height: 40 }} />
       </ScrollView>
 
       {/* Bottom Actions */}
-      <View style={styles.bottomBar}>
-        <TouchableOpacity
-          testID="new-hunt-from-results"
-          style={styles.newHuntButton}
-          onPress={() => router.push('/setup')}
-        >
-          <Ionicons name="add" size={20} color={COLORS.primary} />
-          <Text style={styles.newHuntText}>NEW HUNT</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          testID="back-home-button"
-          style={styles.homeButton}
-          onPress={() => router.replace('/')}
-        >
-          <Ionicons name="home" size={20} color={COLORS.textSecondary} />
-        </TouchableOpacity>
-      </View>
+      {!editMode && (
+        <View style={styles.bottomBar}>
+          <TouchableOpacity
+            testID="new-hunt-from-results"
+            style={styles.newHuntButton}
+            onPress={() => router.push('/setup')}
+          >
+            <Ionicons name="add" size={20} color={COLORS.primary} />
+            <Text style={styles.newHuntText}>NEW HUNT</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="back-home-button"
+            style={styles.homeButton}
+            onPress={() => router.replace('/')}
+          >
+            <Ionicons name="home" size={20} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Add Marker Modal */}
+      <Modal visible={showAddModal} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>ADD MARKER</Text>
+              <TouchableOpacity testID="close-add-modal" onPress={() => setShowAddModal(false)}>
+                <Ionicons name="close" size={24} color={COLORS.fogGray} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalSubtitle}>Select marker type, then tap on the map</Text>
+            <ScrollView style={styles.markerTypeList} showsVerticalScrollIndicator={false}>
+              {CUSTOM_MARKER_TYPES.map((mt) => (
+                <TouchableOpacity
+                  key={mt.id}
+                  testID={`add-marker-type-${mt.id}`}
+                  style={styles.markerTypeRow}
+                  onPress={() => {
+                    setAddMarkerType(mt.id);
+                    setAddMode(true);
+                    setShowAddModal(false);
+                  }}
+                >
+                  <View style={[styles.markerTypeIcon, { backgroundColor: mt.color }]}>
+                    <Ionicons name={mt.icon as any} size={18} color="#FFFFFF" />
+                  </View>
+                  <Text style={styles.markerTypeLabel}>{mt.label}</Text>
+                  <Ionicons name="chevron-forward" size={18} color={COLORS.fogGray} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
+// --- Draggable Marker Component ---
+function DraggableMarker({
+  overlay,
+  index,
+  editMode,
+  isSelected,
+  onPress,
+  onDragStart,
+  onDrag,
+  onDragEnd,
+}: {
+  overlay: OverlayMarker;
+  index: number;
+  editMode: boolean;
+  isSelected: boolean;
+  onPress: () => void;
+  onDragStart: () => void;
+  onDrag: (dx: number, dy: number) => void;
+  onDragEnd: () => void;
+}) {
+  const color = OVERLAY_COLORS[overlay.type] || COLORS.accent;
+  const lastPos = useRef({ x: 0, y: 0 });
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => editMode,
+      onMoveShouldSetPanResponder: () => editMode,
+      onPanResponderGrant: () => {
+        lastPos.current = { x: 0, y: 0 };
+        onDragStart();
+      },
+      onPanResponderMove: (_, gesture) => {
+        const dx = gesture.dx - lastPos.current.x;
+        const dy = gesture.dy - lastPos.current.y;
+        lastPos.current = { x: gesture.dx, y: gesture.dy };
+        onDrag(dx, dy);
+      },
+      onPanResponderRelease: () => {
+        onDragEnd();
+      },
+    })
+  ).current;
+
+  const isZone = (overlay.type === 'corridor' || overlay.type === 'avoid') &&
+    overlay.width_percent && overlay.height_percent;
+
+  if (isZone) {
+    return (
+      <View
+        testID={`overlay-zone-${index}`}
+        {...(editMode ? panResponder.panHandlers : {})}
+        style={[
+          styles.overlayZone,
+          {
+            left: `${Math.max(0, overlay.x_percent - (overlay.width_percent || 0) / 2)}%` as any,
+            top: (overlay.y_percent / 100) * MAP_HEIGHT - ((overlay.height_percent || 0) / 100) * MAP_HEIGHT / 2,
+            width: `${overlay.width_percent}%` as any,
+            height: ((overlay.height_percent || 0) / 100) * MAP_HEIGHT,
+            backgroundColor: `${color}33`,
+            borderColor: isSelected ? COLORS.accent : color,
+            borderWidth: isSelected ? 3 : 2,
+          },
+        ]}
+      >
+        <TouchableOpacity onPress={onPress} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={[styles.zoneLabel, { color }]} numberOfLines={1}>{overlay.label}</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View
+      testID={`overlay-marker-${index}`}
+      {...(editMode ? panResponder.panHandlers : {})}
+      style={[
+        styles.overlayMarker,
+        {
+          left: `${overlay.x_percent - 3}%` as any,
+          top: (overlay.y_percent / 100) * MAP_HEIGHT - 16,
+          backgroundColor: color,
+          borderColor: isSelected ? COLORS.accent : '#FFFFFF',
+          borderWidth: isSelected ? 3 : 2,
+        },
+      ]}
+    >
+      <TouchableOpacity onPress={onPress} style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
+        <Ionicons name={(OVERLAY_ICONS[overlay.type] || 'location') as any} size={16} color="#FFFFFF" />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.primary,
+  safeArea: { flex: 1, backgroundColor: COLORS.primary },
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  emptyText: { color: COLORS.fogGray, fontSize: 16 },
+  offlineBanner: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 8,
+    backgroundColor: 'rgba(200, 155, 60, 0.12)', borderBottomWidth: 1,
+    borderBottomColor: 'rgba(200, 155, 60, 0.3)',
   },
-  emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyText: {
-    color: COLORS.fogGray,
-    fontSize: 16,
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 12,
-  },
+  offlineBannerText: { color: COLORS.accent, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, gap: 10 },
   backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(58, 74, 82, 0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', alignItems: 'center', justifyContent: 'center',
   },
-  topCenter: {
-    flex: 1,
+  topCenter: { flex: 1 },
+  topTitle: { color: COLORS.textPrimary, fontSize: 15, fontWeight: '800', letterSpacing: 1.5 },
+  topSubtitle: { color: COLORS.fogGray, fontSize: 11, marginTop: 2 },
+  topActions: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  iconButton: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', alignItems: 'center', justifyContent: 'center',
   },
-  topTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 1.5,
+  editButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: COLORS.accent, borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 8, minHeight: 40,
   },
-  topSubtitle: {
-    color: COLORS.fogGray,
-    fontSize: 12,
-    marginTop: 2,
+  editButtonText: { color: COLORS.primary, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  cancelButton: {
+    backgroundColor: 'rgba(58, 74, 82, 0.6)', borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 8, minHeight: 40, justifyContent: 'center',
   },
-  legendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(58, 74, 82, 0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  cancelButtonText: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  saveButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: COLORS.stands, borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 8, minHeight: 40,
   },
-  scrollView: {
-    flex: 1,
+  saveButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  // Edit toolbar
+  editToolbar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 16, paddingVertical: 8,
+    backgroundColor: 'rgba(58, 74, 82, 0.4)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(154, 164, 169, 0.2)',
   },
-  // Map
+  toolbarButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(58, 74, 82, 0.6)', borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 8, minHeight: 40,
+    borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.3)',
+  },
+  toolbarButtonActive: { backgroundColor: COLORS.accent },
+  toolbarButtonText: { color: COLORS.accent, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  toolbarButtonTextActive: { color: COLORS.primary },
+  deleteToolbarButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(198, 40, 40, 0.15)', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 8, minHeight: 40,
+  },
+  deleteToolbarText: { color: COLORS.avoidZones, fontSize: 12, fontWeight: '700' },
+  addModeIndicator: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(200, 155, 60, 0.15)', borderRadius: 6,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  addModeText: { color: COLORS.accent, fontSize: 11, fontWeight: '600' },
+  editHint: { color: COLORS.fogGray, fontSize: 10, fontWeight: '500', flex: 1, textAlign: 'right' },
+  scrollView: { flex: 1 },
+  // Map section
+  mapSection: { paddingHorizontal: 16, marginTop: 4 },
+  mapTabs: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  mapTab: {
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8,
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', minHeight: 36, justifyContent: 'center',
+  },
+  mapTabActive: { backgroundColor: COLORS.accent },
+  mapTabText: { color: COLORS.fogGray, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  mapTabTextActive: { color: COLORS.primary },
   mapContainer: {
-    position: 'relative',
-    height: MAP_HEIGHT,
-    marginHorizontal: 16,
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.3)',
+    position: 'relative', height: MAP_HEIGHT, borderRadius: 16,
+    overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.3)',
   },
-  mapImage: {
-    width: '100%',
-    height: '100%',
-  },
+  mapImage: { width: MAP_WIDTH, height: MAP_HEIGHT },
+  pageDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 8 },
+  pageDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(58, 74, 82, 0.6)' },
+  pageDotActive: { backgroundColor: COLORS.accent, width: 20 },
   overlayMarker: {
-    position: 'absolute',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 5,
+    position: 'absolute', width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center', elevation: 5,
     boxShadow: '0px 2px 4px rgba(0, 0, 0, 0.3)',
   },
   overlayZone: {
-    position: 'absolute',
-    borderWidth: 2,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderStyle: 'dashed',
+    position: 'absolute', borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center', borderStyle: 'dashed',
   },
-  zoneLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
+  zoneLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   legendOverlay: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    backgroundColor: 'rgba(11, 31, 42, 0.92)',
-    borderRadius: 10,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.3)',
+    position: 'absolute', top: 10, right: 10,
+    backgroundColor: 'rgba(11, 31, 42, 0.92)', borderRadius: 10,
+    padding: 14, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.3)',
   },
-  legendTitle: {
-    color: COLORS.fogGray,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-    marginBottom: 10,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  legendDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
-  },
-  legendLabel: {
-    color: COLORS.textPrimary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  legendTitle: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 10 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  legendDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1, borderColor: '#FFFFFF' },
+  legendLabel: { color: COLORS.textPrimary, fontSize: 12, fontWeight: '600' },
   // Overlay detail
   overlayDetail: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    backgroundColor: 'rgba(58, 74, 82, 0.4)',
-    borderRadius: 12,
-    padding: 16,
-    borderLeftWidth: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.2)',
+    marginHorizontal: 16, marginTop: 12,
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 12,
+    padding: 16, borderLeftWidth: 4, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)',
   },
-  overlayDetailHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
+  overlayDetailHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  overlayDetailTitle: { flex: 1, fontSize: 15, fontWeight: '700' },
+  customBadge: {
+    paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6,
+    backgroundColor: 'rgba(200, 155, 60, 0.15)',
   },
-  overlayDetailTitle: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
+  customBadgeText: { color: COLORS.accent, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  confidenceBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8 },
+  confidenceText: { fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  overlayReasoning: { color: COLORS.textSecondary, fontSize: 13, lineHeight: 20 },
+  deleteInlineButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12,
+    paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8,
+    backgroundColor: 'rgba(198, 40, 40, 0.12)', alignSelf: 'flex-start',
   },
-  confidenceBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  confidenceText: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  overlayReasoning: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    lineHeight: 20,
-  },
+  deleteInlineText: { color: COLORS.avoidZones, fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
   // Sections
-  section: {
-    paddingHorizontal: 16,
-    marginTop: 24,
-  },
-  sectionTitle: {
-    color: COLORS.fogGray,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 2,
-    marginBottom: 12,
-  },
+  section: { paddingHorizontal: 16, marginTop: 24 },
+  sectionTitle: { color: COLORS.fogGray, fontSize: 11, fontWeight: '700', letterSpacing: 2, marginBottom: 12 },
   summaryCard: {
-    backgroundColor: 'rgba(58, 74, 82, 0.4)',
-    borderRadius: 12,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.15)',
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 12,
+    padding: 18, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.15)',
   },
-  summaryText: {
-    color: COLORS.textPrimary,
-    fontSize: 15,
-    lineHeight: 24,
-  },
-  // Setups
+  summaryText: { color: COLORS.textPrimary, fontSize: 15, lineHeight: 24 },
   setupCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 14,
-    backgroundColor: 'rgba(58, 74, 82, 0.3)',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.1)',
+    flexDirection: 'row', alignItems: 'flex-start', gap: 14,
+    backgroundColor: 'rgba(58, 74, 82, 0.3)', borderRadius: 10,
+    padding: 14, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.1)',
   },
   setupNumber: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: COLORS.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 28, height: 28, borderRadius: 14, backgroundColor: COLORS.accent,
+    alignItems: 'center', justifyContent: 'center',
   },
-  setupNumberText: {
-    color: COLORS.primary,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  setupText: {
-    color: COLORS.textPrimary,
-    fontSize: 14,
-    lineHeight: 22,
-    flex: 1,
-  },
-  // Info Grid
-  infoGrid: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 16,
-    marginTop: 24,
-  },
+  setupNumberText: { color: COLORS.primary, fontSize: 14, fontWeight: '800' },
+  setupText: { color: COLORS.textPrimary, fontSize: 14, lineHeight: 22, flex: 1 },
+  infoGrid: { flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginTop: 24 },
   infoCard: {
-    flex: 1,
-    backgroundColor: 'rgba(58, 74, 82, 0.4)',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.15)',
+    flex: 1, backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 12,
+    padding: 16, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.15)',
   },
-  infoLabel: {
-    color: COLORS.fogGray,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-    marginTop: 10,
-    marginBottom: 6,
-  },
-  infoValue: {
-    color: COLORS.textPrimary,
-    fontSize: 13,
-    lineHeight: 20,
-  },
-  // Tips
-  tipRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 10,
-  },
-  tipText: {
-    color: COLORS.textPrimary,
-    fontSize: 14,
-    lineHeight: 20,
-    flex: 1,
-  },
-  // Assumptions
-  assumptionRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 8,
-  },
-  assumptionText: {
-    color: COLORS.fogGray,
-    fontSize: 13,
-    lineHeight: 19,
-    flex: 1,
-  },
-  // Overlay list
+  infoLabel: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginTop: 10, marginBottom: 6 },
+  infoValue: { color: COLORS.textPrimary, fontSize: 13, lineHeight: 20 },
+  tipRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
+  tipText: { color: COLORS.textPrimary, fontSize: 14, lineHeight: 20, flex: 1 },
   overlayListItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: 'rgba(58, 74, 82, 0.3)',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.1)',
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: 'rgba(58, 74, 82, 0.3)', borderRadius: 10,
+    padding: 14, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.1)',
   },
-  overlayListDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
-  },
-  overlayListContent: {
-    flex: 1,
-  },
-  overlayListLabel: {
-    color: COLORS.textPrimary,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  overlayListType: {
-    color: COLORS.fogGray,
-    fontSize: 11,
-    marginTop: 2,
-  },
-  confidenceBadgeSmall: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  confidenceTextSmall: {
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    textTransform: 'capitalize',
-  },
-  // Disclaimer
+  overlayListItemSelected: { borderColor: COLORS.accent, borderWidth: 2 },
+  overlayListDot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1, borderColor: '#FFFFFF' },
+  overlayListContent: { flex: 1 },
+  overlayListLabel: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '600' },
+  overlayListType: { color: COLORS.fogGray, fontSize: 11, marginTop: 2 },
+  overlayDeleteBtn: { padding: 4 },
   disclaimerSection: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginHorizontal: 16,
-    marginTop: 24,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(154, 164, 169, 0.1)',
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginHorizontal: 16,
+    marginTop: 24, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(154, 164, 169, 0.1)',
   },
-  disclaimerText: {
-    color: COLORS.fogGray,
-    fontSize: 11,
-    lineHeight: 17,
-    flex: 1,
-    opacity: 0.7,
-  },
-  // Bottom
+  disclaimerText: { color: COLORS.fogGray, fontSize: 11, lineHeight: 17, flex: 1, opacity: 0.7 },
   bottomBar: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(154, 164, 169, 0.1)',
+    flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12,
+    gap: 12, borderTopWidth: 1, borderTopColor: 'rgba(154, 164, 169, 0.1)',
   },
   newHuntButton: {
-    flex: 1,
-    backgroundColor: COLORS.accent,
-    borderRadius: 10,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    minHeight: 52,
+    flex: 1, backgroundColor: COLORS.accent, borderRadius: 10,
+    paddingVertical: 14, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', gap: 8, minHeight: 52,
   },
-  newHuntText: {
-    color: COLORS.primary,
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
+  newHuntText: { color: COLORS.primary, fontSize: 14, fontWeight: '800', letterSpacing: 1.5 },
   homeButton: {
-    width: 52,
-    height: 52,
-    borderRadius: 10,
-    backgroundColor: 'rgba(58, 74, 82, 0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.2)',
+    width: 52, height: 52, borderRadius: 10,
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', alignItems: 'center',
+    justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)',
   },
+  // Modal
+  modalBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: COLORS.primary, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    padding: 24, maxHeight: '60%', borderTopWidth: 1, borderTopColor: 'rgba(154, 164, 169, 0.3)',
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  modalTitle: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '800', letterSpacing: 1.5 },
+  modalSubtitle: { color: COLORS.fogGray, fontSize: 13, marginBottom: 20 },
+  markerTypeList: { flex: 1 },
+  markerTypeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(154, 164, 169, 0.1)',
+  },
+  markerTypeIcon: {
+    width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
+  },
+  markerTypeLabel: { flex: 1, color: COLORS.textPrimary, fontSize: 15, fontWeight: '600' },
 });
