@@ -48,9 +48,10 @@ type FieldSource = 'auto' | 'manual';
 export default function SetupScreen() {
   const router = useRouter();
   const { isConnected } = useNetwork();
-  const { sessionToken, refreshUser } = useAuth();
+  const { sessionToken, refreshUser, user } = useAuth();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [limitReached, setLimitReached] = useState(false);
 
   // Form state
   const [selectedSpecies, setSelectedSpecies] = useState('');
@@ -302,6 +303,13 @@ export default function SetupScreen() {
         router.push({ pathname: '/results', params: { huntId: huntRecord.id } });
       } else {
         const msg = data.error || data.message || 'Analysis failed. Please try again.';
+        const isLimitError = msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('upgrade');
+        if (isLimitError) {
+          setLoading(false);
+          setLimitReached(true);
+          if (refreshUser) refreshUser();
+          return;
+        }
         Alert.alert('Analysis Failed', msg);
       }
     } catch (err: any) {
@@ -329,6 +337,59 @@ export default function SetupScreen() {
                 <Text style={styles.loadingStepText}>{label}</Text>
               </View>
             ))}
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Limit Reached Screen — shown when user has exhausted their analyses
+  if (limitReached) {
+    const tierName = user?.tier?.toUpperCase() || 'TRIAL';
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.limitContainer}>
+          <View style={styles.limitIconCircle}>
+            <Ionicons name="lock-closed" size={40} color={COLORS.accent} />
+          </View>
+          <Text style={styles.limitTitle}>ANALYSIS LIMIT{'\n'}REACHED</Text>
+          <Text style={styles.limitSubtitle}>
+            You've used all {user?.usage?.limit || 3} analyses on your {tierName} plan.
+            {user?.tier === 'trial'
+              ? '\n\nUpgrade to Core or Pro for monthly analyses with auto-reset.'
+              : '\n\nYour limit resets at the start of your next billing cycle.'}
+          </Text>
+
+          <TouchableOpacity
+            testID="limit-upgrade-button"
+            style={styles.limitUpgradeButton}
+            onPress={() => router.push('/subscription')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="arrow-up-circle" size={22} color={COLORS.primary} />
+            <Text style={styles.limitUpgradeText}>VIEW PLANS & UPGRADE</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            testID="limit-home-button"
+            style={styles.limitHomeButton}
+            onPress={() => router.replace('/')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="home-outline" size={18} color={COLORS.textSecondary} />
+            <Text style={styles.limitHomeText}>BACK TO HOME</Text>
+          </TouchableOpacity>
+
+          <View style={styles.limitTierInfo}>
+            <Text style={styles.limitTierLabel}>AVAILABLE PLANS</Text>
+            <View style={styles.limitTierRow}>
+              <Ionicons name="flash" size={14} color={COLORS.accent} />
+              <Text style={styles.limitTierText}>Core: 10 analyses/month — $7.99/mo</Text>
+            </View>
+            <View style={styles.limitTierRow}>
+              <Ionicons name="rocket" size={14} color={COLORS.accent} />
+              <Text style={styles.limitTierText}>Pro: 100 analyses/month — $14.99/mo</Text>
+            </View>
           </View>
         </View>
       </SafeAreaView>
@@ -737,4 +798,32 @@ const styles = StyleSheet.create({
   loadingSteps: { marginTop: 40, gap: 14, alignSelf: 'stretch' },
   loadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   loadingStepText: { color: COLORS.textSecondary, fontSize: 14 },
+  // Limit Reached
+  limitContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+  limitIconCircle: {
+    width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(200, 155, 60, 0.12)',
+    alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'rgba(200, 155, 60, 0.3)',
+    marginBottom: 24,
+  },
+  limitTitle: { color: COLORS.textPrimary, fontSize: 26, fontWeight: '900', textAlign: 'center', letterSpacing: 2, lineHeight: 34 },
+  limitSubtitle: { color: COLORS.fogGray, fontSize: 15, textAlign: 'center', marginTop: 16, lineHeight: 24 },
+  limitUpgradeButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: COLORS.accent, borderRadius: 12, paddingVertical: 18, paddingHorizontal: 32,
+    minHeight: 60, width: '100%', marginTop: 32,
+  },
+  limitUpgradeText: { color: COLORS.primary, fontSize: 16, fontWeight: '800', letterSpacing: 1.5 },
+  limitHomeButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 14, marginTop: 14, width: '100%', borderRadius: 10,
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)',
+  },
+  limitHomeText: { color: COLORS.textSecondary, fontSize: 14, fontWeight: '700', letterSpacing: 1 },
+  limitTierInfo: {
+    marginTop: 32, padding: 16, borderRadius: 12, width: '100%',
+    backgroundColor: 'rgba(58, 74, 82, 0.3)', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.1)',
+  },
+  limitTierLabel: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 12 },
+  limitTierRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  limitTierText: { color: COLORS.textSecondary, fontSize: 13 },
 });
