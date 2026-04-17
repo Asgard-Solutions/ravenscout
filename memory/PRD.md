@@ -51,3 +51,13 @@ Raven Scout is a mobile hunting planning application that uses GPT-5.2 Vision AI
 - [x] Editable Overlays: drag/reposition markers, add custom markers (8 types: stand, corridor, access_route, avoid, bedding, food, water, trail), delete overlays, save changes
 - [x] Multi-Map Uploads: up to 5 maps per hunt, swipeable viewer with map tabs, overlays shown on all maps
 - [x] Offline Scouting Mode: network detection (expo-network), offline banners, disabled analyze when offline, SAVED badge on history cards, all data viewable offline via AsyncStorage
+
+## Phase 3 Features (Implemented)
+- [x] Real-Time Weather Sync: WeatherAPI.com integration via backend POST /api/weather
+  - GPS location detection (expo-location) or manual pin
+  - Time-aware hourly forecast averaging (morning 5-12, evening 12-20, all-day 5-20)
+  - Auto-fill fields with "Auto" labels: wind direction, wind speed, temperature, precipitation, cloud cover
+  - Manual override: editing any field switches to "Manual" label
+  - Refresh Weather button, offline fallback with cached data
+  - Weather card with condition, sunrise/sunset, humidity
+  - Location stored with hunt record
