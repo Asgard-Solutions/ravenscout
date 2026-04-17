@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, CUSTOM_MARKER_TYPES } from '../src/constants/theme';
 import { useNetwork } from '../src/hooks/useNetwork';
+import TacticalMapView from '../src/map/TacticalMapView';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_WIDTH = SCREEN_WIDTH - 32;
@@ -58,6 +59,7 @@ interface HuntRecord {
   mapImages?: string[];
   result: HuntResult;
   createdAt: string;
+  locationCoords?: { lat: number; lon: number };
 }
 
 const OVERLAY_COLORS: Record<string, string> = {
@@ -106,6 +108,9 @@ export default function ResultsScreen() {
   const [hunt, setHunt] = useState<HuntRecord | null>(null);
   const [selectedOverlay, setSelectedOverlay] = useState<OverlayMarker | null>(null);
   const [showLegend, setShowLegend] = useState(false);
+
+  // View mode: 'map' (MapLibre base) or 'analysis' (image + overlays)
+  const [viewMode, setViewMode] = useState<'analysis' | 'map'>('analysis');
 
   // Edit mode state
   const [editMode, setEditMode] = useState(false);
@@ -351,7 +356,45 @@ export default function ResultsScreen() {
         showsVerticalScrollIndicator={false}
         scrollEnabled={dragIndex === null}
       >
-        {/* Multi-Map Viewer */}
+        {/* View Mode Tabs: MAP | ANALYSIS */}
+        <View style={styles.viewModeTabs}>
+          <TouchableOpacity
+            testID="view-mode-map"
+            style={[styles.viewModeTab, viewMode === 'map' && styles.viewModeTabActive]}
+            onPress={() => setViewMode('map')}
+          >
+            <Ionicons name="globe-outline" size={16} color={viewMode === 'map' ? COLORS.primary : COLORS.fogGray} />
+            <Text style={[styles.viewModeTabText, viewMode === 'map' && styles.viewModeTabTextActive]}>MAP</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="view-mode-analysis"
+            style={[styles.viewModeTab, viewMode === 'analysis' && styles.viewModeTabActive]}
+            onPress={() => setViewMode('analysis')}
+          >
+            <Ionicons name="analytics-outline" size={16} color={viewMode === 'analysis' ? COLORS.primary : COLORS.fogGray} />
+            <Text style={[styles.viewModeTabText, viewMode === 'analysis' && styles.viewModeTabTextActive]}>ANALYSIS</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* MAP VIEW - MapLibre Base Map */}
+        {viewMode === 'map' && (
+          <View style={styles.mapSection}>
+            <TacticalMapView
+              center={hunt.locationCoords || { lat: 39.8283, lon: -98.5795 }}
+              zoom={hunt.locationCoords ? 12 : 5}
+              height={MAP_HEIGHT}
+            />
+            {!hunt.locationCoords && (
+              <View style={styles.noLocationHint}>
+                <Ionicons name="location-outline" size={14} color={COLORS.fogGray} />
+                <Text style={styles.noLocationHintText}>No GPS location saved — showing default view</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* ANALYSIS VIEW - Uploaded Image + Overlays */}
+        {viewMode === 'analysis' && (
         <View style={styles.mapSection}>
           {mapImages.length > 1 && (
             <View style={styles.mapTabs}>
@@ -435,6 +478,7 @@ export default function ResultsScreen() {
             </View>
           )}
         </View>
+        )}
 
         {/* Selected Overlay Detail */}
         {selectedOverlay && (
@@ -790,6 +834,23 @@ const styles = StyleSheet.create({
   addModeText: { color: COLORS.accent, fontSize: 11, fontWeight: '600' },
   editHint: { color: COLORS.fogGray, fontSize: 10, fontWeight: '500', flex: 1, textAlign: 'right' },
   scrollView: { flex: 1 },
+  // View Mode Tabs
+  viewModeTabs: {
+    flexDirection: 'row', marginHorizontal: 16, marginTop: 4, marginBottom: 8,
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 10, padding: 3,
+  },
+  viewModeTab: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 10, borderRadius: 8,
+  },
+  viewModeTabActive: { backgroundColor: COLORS.accent },
+  viewModeTabText: { color: COLORS.fogGray, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  viewModeTabTextActive: { color: COLORS.primary },
+  noLocationHint: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, marginTop: 8, paddingVertical: 6,
+  },
+  noLocationHintText: { color: COLORS.fogGray, fontSize: 11 },
   // Map section
   mapSection: { paddingHorizontal: 16, marginTop: 4 },
   mapTabs: { flexDirection: 'row', gap: 8, marginBottom: 8 },
