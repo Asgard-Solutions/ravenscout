@@ -1,105 +1,128 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-  ScrollView,
-  ImageBackground,
-  Dimensions,
+  View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView,
+  Dimensions, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
+import { useAuth } from '../src/hooks/useAuth';
 
 const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { user, loading, logout, refreshUser } = useAuth();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.replace('/login');
+    }
+  }, [loading, user]);
+
+  useEffect(() => {
+    if (user) refreshUser();
+  }, []);
+
+  if (loading || !user) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.accent} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const usage = user.usage;
+  const tierLabel = user.tier.toUpperCase();
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Header */}
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Header with account */}
         <View style={styles.header}>
           <View style={styles.brandRow}>
             <Ionicons name="navigate" size={28} color={COLORS.accent} />
             <Text style={styles.brandName}>RAVEN SCOUT</Text>
           </View>
-          <Text style={styles.tagline}>A smarter way to plan your hunt.</Text>
-        </View>
-
-        {/* Hero Section */}
-        <View style={styles.heroSection}>
-          <View style={styles.heroOverlay}>
-            <Ionicons name="map" size={64} color={COLORS.accent} style={styles.heroIcon} />
-            <Text style={styles.heroTitle}>TACTICAL{'\n'}HUNT PLANNING</Text>
-            <Text style={styles.heroSubtitle}>
-              Upload your map. Set conditions.{'\n'}Get AI-powered setup recommendations.
-            </Text>
+          <View style={styles.headerRight}>
+            <TouchableOpacity testID="subscription-button" style={styles.tierBadge} onPress={() => router.push('/subscription')}>
+              <Text style={styles.tierBadgeText}>{tierLabel}</Text>
+              <Ionicons name="chevron-forward" size={14} color={COLORS.accent} />
+            </TouchableOpacity>
+            <TouchableOpacity testID="account-button" style={styles.accountButton} onPress={logout}>
+              <Ionicons name="log-out-outline" size={20} color={COLORS.fogGray} />
+            </TouchableOpacity>
           </View>
         </View>
 
-        {/* Start New Hunt Button */}
+        {/* Usage Bar */}
+        <View testID="usage-display" style={styles.usageCard}>
+          <View style={styles.usageHeader}>
+            <Text style={styles.usageTitle}>ANALYSES REMAINING</Text>
+            <TouchableOpacity onPress={() => router.push('/subscription')}>
+              <Text style={styles.upgradeLinkText}>Manage Plan</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.usageBarContainer}>
+            <View style={[styles.usageBar, { width: `${Math.min(100, (usage.remaining / usage.limit) * 100)}%` }]} />
+          </View>
+          <View style={styles.usageNumbers}>
+            <Text style={styles.usageRemaining}>{usage.remaining}</Text>
+            <Text style={styles.usageOf}>of {usage.limit} {user.tier === 'trial' ? 'lifetime' : 'this month'}</Text>
+          </View>
+          {usage.remaining === 0 && (
+            <TouchableOpacity testID="upgrade-cta" style={styles.upgradeCta} onPress={() => router.push('/subscription')}>
+              <Ionicons name="arrow-up-circle" size={18} color={COLORS.primary} />
+              <Text style={styles.upgradeCtaText}>UPGRADE TO CONTINUE</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Welcome */}
+        <Text style={styles.welcomeText}>Welcome, {user.name?.split(' ')[0] || 'Hunter'}</Text>
+
+        {/* Hero */}
+        <View style={styles.heroSection}>
+          <View style={styles.heroOverlay}>
+            <Ionicons name="map" size={56} color={COLORS.accent} style={styles.heroIcon} />
+            <Text style={styles.heroTitle}>TACTICAL{'\n'}HUNT PLANNING</Text>
+            <Text style={styles.heroSubtitle}>Upload your map. Set conditions.{'\n'}Get AI-powered setup recommendations.</Text>
+          </View>
+        </View>
+
+        {/* Actions */}
         <TouchableOpacity
           testID="new-hunt-button"
-          style={styles.primaryButton}
-          onPress={() => router.push('/setup')}
+          style={[styles.primaryButton, usage.remaining === 0 && styles.primaryButtonDisabled]}
+          onPress={() => usage.remaining > 0 ? router.push('/setup') : router.push('/subscription')}
           activeOpacity={0.8}
         >
-          <Ionicons name="add-circle" size={24} color={COLORS.primary} />
-          <Text style={styles.primaryButtonText}>NEW HUNT</Text>
+          <Ionicons name={usage.remaining > 0 ? 'add-circle' : 'lock-closed'} size={24} color={COLORS.primary} />
+          <Text style={styles.primaryButtonText}>{usage.remaining > 0 ? 'NEW HUNT' : 'UPGRADE TO HUNT'}</Text>
         </TouchableOpacity>
 
-        {/* View History */}
-        <TouchableOpacity
-          testID="history-button"
-          style={styles.secondaryButton}
-          onPress={() => router.push('/history')}
-          activeOpacity={0.8}
-        >
+        <TouchableOpacity testID="history-button" style={styles.secondaryButton} onPress={() => router.push('/history')} activeOpacity={0.8}>
           <Ionicons name="time-outline" size={22} color={COLORS.textSecondary} />
           <Text style={styles.secondaryButtonText}>SAVED HUNTS</Text>
         </TouchableOpacity>
 
-        {/* Features Grid */}
+        {/* Features */}
         <View style={styles.featuresSection}>
           <Text style={styles.sectionLabel}>CAPABILITIES</Text>
           <View style={styles.featuresGrid}>
-            <FeatureCard
-              icon="eye"
-              title="Vision AI"
-              subtitle="Map terrain analysis"
-            />
-            <FeatureCard
-              icon="compass"
-              title="Wind Logic"
-              subtitle="Optimal positioning"
-            />
-            <FeatureCard
-              icon="layers"
-              title="Overlays"
-              subtitle="Stand, route, corridor"
-            />
-            <FeatureCard
-              icon="paw"
-              title="3 Species"
-              subtitle="Deer, turkey, hog"
-            />
+            <FeatureCard icon="eye" title="Vision AI" subtitle="Map terrain analysis" />
+            <FeatureCard icon="compass" title="Wind Logic" subtitle="Optimal positioning" />
+            <FeatureCard icon="layers" title="Overlays" subtitle="Stand, route, corridor" />
+            <FeatureCard icon="paw" title="3 Species" subtitle="Deer, turkey, hog" />
           </View>
         </View>
 
         {/* Disclaimer */}
         <View style={styles.disclaimer}>
           <Ionicons name="information-circle-outline" size={16} color={COLORS.fogGray} />
-          <Text style={styles.disclaimerText}>
-            Decision-support tool only. Verify land ownership, regulations, and safety independently.
-          </Text>
+          <Text style={styles.disclaimerText}>Decision-support tool only. Verify land ownership, regulations, and safety independently.</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -117,158 +140,69 @@ function FeatureCard({ icon, title, subtitle }: { icon: string; title: string; s
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.primary,
+  safeArea: { flex: 1, backgroundColor: COLORS.primary },
+  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  container: { flex: 1 },
+  content: { padding: 24, paddingBottom: 48 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 20 },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  brandName: { color: COLORS.textPrimary, fontSize: 20, fontWeight: '900', letterSpacing: 3 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tierBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(200, 155, 60, 0.12)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+    borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.3)',
   },
-  container: {
-    flex: 1,
+  tierBadgeText: { color: COLORS.accent, fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  accountButton: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(58, 74, 82, 0.5)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  content: {
-    padding: 24,
-    paddingBottom: 48,
+  // Usage
+  usageCard: {
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 14, padding: 16,
+    marginBottom: 20, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.15)',
   },
-  header: {
-    marginTop: 16,
-    marginBottom: 32,
+  usageHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  usageTitle: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5 },
+  upgradeLinkText: { color: COLORS.accent, fontSize: 12, fontWeight: '600' },
+  usageBarContainer: { height: 6, backgroundColor: 'rgba(58, 74, 82, 0.6)', borderRadius: 3, overflow: 'hidden' },
+  usageBar: { height: '100%', backgroundColor: COLORS.accent, borderRadius: 3 },
+  usageNumbers: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 8 },
+  usageRemaining: { color: COLORS.accent, fontSize: 28, fontWeight: '900' },
+  usageOf: { color: COLORS.fogGray, fontSize: 13 },
+  upgradeCta: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.accent, borderRadius: 8, paddingVertical: 10, marginTop: 12,
   },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
-  },
-  brandName: {
-    color: COLORS.textPrimary,
-    fontSize: 24,
-    fontWeight: '900',
-    letterSpacing: 3,
-  },
-  tagline: {
-    color: COLORS.fogGray,
-    fontSize: 15,
-    fontWeight: '500',
-    letterSpacing: 0.5,
-    marginLeft: 38,
-  },
-  heroSection: {
-    marginBottom: 32,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: COLORS.secondary,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.2)',
-  },
-  heroOverlay: {
-    padding: 32,
-    alignItems: 'center',
-  },
-  heroIcon: {
-    marginBottom: 16,
-    opacity: 0.9,
-  },
-  heroTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 32,
-    fontWeight: '900',
-    textAlign: 'center',
-    letterSpacing: 2,
-    lineHeight: 40,
-    marginBottom: 12,
-  },
-  heroSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 15,
-    textAlign: 'center',
-    lineHeight: 22,
-    letterSpacing: 0.3,
-  },
+  upgradeCtaText: { color: COLORS.primary, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  welcomeText: { color: COLORS.textSecondary, fontSize: 14, marginBottom: 16 },
+  heroSection: { marginBottom: 24, borderRadius: 16, overflow: 'hidden', backgroundColor: COLORS.secondary, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)' },
+  heroOverlay: { padding: 28, alignItems: 'center' },
+  heroIcon: { marginBottom: 12, opacity: 0.9 },
+  heroTitle: { color: COLORS.textPrimary, fontSize: 28, fontWeight: '900', textAlign: 'center', letterSpacing: 2, lineHeight: 36, marginBottom: 10 },
+  heroSubtitle: { color: COLORS.textSecondary, fontSize: 14, textAlign: 'center', lineHeight: 22 },
   primaryButton: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 10,
-    paddingVertical: 18,
-    paddingHorizontal: 32,
-    minHeight: 60,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    marginBottom: 14,
+    backgroundColor: COLORS.accent, borderRadius: 10, paddingVertical: 18, paddingHorizontal: 32,
+    minHeight: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 14,
   },
-  primaryButtonText: {
-    color: COLORS.primary,
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 2,
-  },
+  primaryButtonDisabled: { backgroundColor: 'rgba(58, 74, 82, 0.5)' },
+  primaryButtonText: { color: COLORS.primary, fontSize: 18, fontWeight: '800', letterSpacing: 2 },
   secondaryButton: {
-    backgroundColor: 'rgba(58, 74, 82, 0.5)',
-    borderRadius: 10,
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    minHeight: 56,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.25)',
-    marginBottom: 40,
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', borderRadius: 10, paddingVertical: 16, paddingHorizontal: 32,
+    minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.25)', marginBottom: 32,
   },
-  secondaryButtonText: {
-    color: COLORS.textSecondary,
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-  },
-  featuresSection: {
-    marginBottom: 32,
-  },
-  sectionLabel: {
-    color: COLORS.fogGray,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 2,
-    marginBottom: 16,
-  },
-  featuresGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
+  secondaryButtonText: { color: COLORS.textSecondary, fontSize: 15, fontWeight: '700', letterSpacing: 1.5 },
+  featuresSection: { marginBottom: 24 },
+  sectionLabel: { color: COLORS.fogGray, fontSize: 12, fontWeight: '700', letterSpacing: 2, marginBottom: 16 },
+  featuresGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   featureCard: {
-    backgroundColor: 'rgba(58, 74, 82, 0.4)',
-    borderRadius: 12,
-    padding: 16,
-    width: (width - 60) / 2,
-    borderWidth: 1,
-    borderColor: 'rgba(154, 164, 169, 0.15)',
+    backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 12, padding: 16, width: (width - 60) / 2,
+    borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.15)',
   },
-  featureTitle: {
-    color: COLORS.textPrimary,
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 10,
-  },
-  featureSubtitle: {
-    color: COLORS.fogGray,
-    fontSize: 12,
-    fontWeight: '500',
-    marginTop: 4,
-  },
-  disclaimer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(154, 164, 169, 0.1)',
-  },
-  disclaimerText: {
-    color: COLORS.fogGray,
-    fontSize: 11,
-    lineHeight: 16,
-    flex: 1,
-    opacity: 0.7,
-  },
+  featureTitle: { color: COLORS.textPrimary, fontSize: 15, fontWeight: '700', marginTop: 10 },
+  featureSubtitle: { color: COLORS.fogGray, fontSize: 12, fontWeight: '500', marginTop: 4 },
+  disclaimer: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: 'rgba(154, 164, 169, 0.1)' },
+  disclaimerText: { color: COLORS.fogGray, fontSize: 11, lineHeight: 16, flex: 1, opacity: 0.7 },
 });

@@ -1,11 +1,11 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, Request, HTTPException
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import json
-import base64
-import tempfile
 import uuid
 import httpx
 from pathlib import Path
@@ -16,19 +16,378 @@ from datetime import datetime, timezone, timedelta
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# MongoDB connection
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# ============================================================
+# TIER DEFINITIONS (Single source of truth)
+# ============================================================
+TIERS = {
+    "trial": {
+        "name": "Trial",
+        "analysis_limit": 3,  # Lifetime total
+        "is_lifetime": True,
+        "weather_api": False,
+        "cloud_sync": False,
+        "monthly_price": 0,
+        "annual_price": 0,
+    },
+    "core": {
+        "name": "Core",
+        "analysis_limit": 10,  # Per month
+        "is_lifetime": False,
+        "weather_api": True,
+        "cloud_sync": False,
+        "monthly_price": 7.99,
+        "annual_price": 79.99,
+    },
+    "pro": {
+        "name": "Pro",
+        "analysis_limit": 100,  # Per month
+        "is_lifetime": False,
+        "weather_api": True,
+        "cloud_sync": True,
+        "monthly_price": 14.99,
+        "annual_price": 149.99,
+    },
+}
 
-# --- Models ---
+REVENUECAT_ENTITLEMENT_MAP = {
+    "core_monthly": "core",
+    "core_annual": "core",
+    "pro_monthly": "pro",
+    "pro_annual": "pro",
+}
 
+
+# ============================================================
+# AUTH HELPERS
+# ============================================================
+async def get_current_user(request: Request) -> dict:
+    """Extract and validate user from session token."""
+    token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    if not token:
+        token = request.cookies.get("session_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    expires_at = session["expires_at"]
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Session expired")
+
+    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def get_optional_user(request: Request) -> Optional[dict]:
+    """Try to get user, return None if not authenticated."""
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return None
+
+
+# ============================================================
+# USAGE ENFORCEMENT
+# ============================================================
+async def check_analysis_allowed(user: dict) -> dict:
+    """Check if user can perform an analysis. Returns status dict."""
+    tier_key = user.get("tier", "trial")
+    tier = TIERS.get(tier_key, TIERS["trial"])
+
+    analysis_count = user.get("analysis_count", 0)
+    rollover_count = user.get("rollover_count", 0)
+
+    if tier["is_lifetime"]:
+        # Trial: lifetime limit
+        remaining = max(0, tier["analysis_limit"] - analysis_count)
+        if remaining <= 0:
+            return {"allowed": False, "remaining": 0, "limit": tier["analysis_limit"],
+                    "tier": tier_key, "message": "Trial limit reached. Upgrade to continue."}
+        return {"allowed": True, "remaining": remaining, "limit": tier["analysis_limit"], "tier": tier_key}
+    else:
+        # Paid tiers: monthly limit + rollover
+        cycle_start = user.get("billing_cycle_start")
+        if cycle_start:
+            if isinstance(cycle_start, str):
+                cycle_start = datetime.fromisoformat(cycle_start)
+            if cycle_start.tzinfo is None:
+                cycle_start = cycle_start.replace(tzinfo=timezone.utc)
+
+            # Check if we need to reset the cycle
+            now = datetime.now(timezone.utc)
+            if now >= cycle_start + timedelta(days=30):
+                # Calculate rollover (max 1 month carryover, capped at tier limit)
+                unused = max(0, tier["analysis_limit"] - analysis_count)
+                new_rollover = min(unused, tier["analysis_limit"])
+
+                new_cycle_start = cycle_start + timedelta(days=30)
+                while new_cycle_start + timedelta(days=30) < now:
+                    new_cycle_start += timedelta(days=30)
+
+                await db.users.update_one(
+                    {"user_id": user["user_id"]},
+                    {"$set": {
+                        "analysis_count": 0,
+                        "rollover_count": new_rollover,
+                        "billing_cycle_start": new_cycle_start.isoformat(),
+                    }}
+                )
+                analysis_count = 0
+                rollover_count = new_rollover
+
+        total_available = tier["analysis_limit"] + rollover_count
+        remaining = max(0, total_available - analysis_count)
+        if remaining <= 0:
+            return {"allowed": False, "remaining": 0, "limit": tier["analysis_limit"],
+                    "tier": tier_key, "message": "Monthly limit reached. Upgrade or wait for next cycle."}
+        return {"allowed": True, "remaining": remaining, "limit": tier["analysis_limit"],
+                "rollover": rollover_count, "tier": tier_key}
+
+
+async def increment_usage(user_id: str):
+    """Increment analysis count for user."""
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$inc": {"analysis_count": 1}}
+    )
+
+
+# ============================================================
+# AUTH ROUTES
+# ============================================================
+@api_router.post("/auth/session")
+async def exchange_session(request: Request):
+    """Exchange Emergent Auth session_id for app session."""
+    body = await request.json()
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+
+    # Call Emergent Auth to get user data
+    async with httpx.AsyncClient(timeout=10) as hclient:
+        resp = await hclient.get(
+            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+            headers={"X-Session-ID": session_id}
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail="Invalid session_id")
+        auth_data = resp.json()
+
+    email = auth_data.get("email")
+    name = auth_data.get("name", "")
+    picture = auth_data.get("picture", "")
+
+    # Find or create user
+    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing_user:
+        user_id = existing_user["user_id"]
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"name": name, "picture": picture, "last_login": datetime.now(timezone.utc).isoformat()}}
+        )
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "tier": "trial",
+            "analysis_count": 0,
+            "billing_cycle_start": datetime.now(timezone.utc).isoformat(),
+            "rollover_count": 0,
+            "revenuecat_id": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_login": datetime.now(timezone.utc).isoformat(),
+        })
+
+    # Create session
+    session_token = f"rs_{uuid.uuid4().hex}"
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    response = JSONResponse({
+        "user_id": user_id,
+        "email": email,
+        "name": name,
+        "picture": picture,
+        "session_token": session_token,
+    })
+    response.set_cookie(
+        key="session_token", value=session_token,
+        httponly=True, secure=True, samesite="none",
+        path="/", max_age=7 * 24 * 60 * 60,
+    )
+    return response
+
+
+@api_router.get("/auth/me")
+async def get_me(request: Request):
+    user = await get_current_user(request)
+    usage = await check_analysis_allowed(user)
+    return {
+        "user_id": user["user_id"],
+        "email": user["email"],
+        "name": user["name"],
+        "picture": user.get("picture", ""),
+        "tier": user.get("tier", "trial"),
+        "usage": usage,
+    }
+
+
+@api_router.post("/auth/logout")
+async def logout(request: Request):
+    token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    if not token:
+        token = request.cookies.get("session_token")
+    if token:
+        await db.user_sessions.delete_one({"session_token": token})
+
+    response = JSONResponse({"success": True})
+    response.delete_cookie(key="session_token", path="/")
+    return response
+
+
+# ============================================================
+# SUBSCRIPTION ROUTES
+# ============================================================
+@api_router.get("/subscription/status")
+async def get_subscription_status(request: Request):
+    user = await get_current_user(request)
+    tier_key = user.get("tier", "trial")
+    tier_info = TIERS.get(tier_key, TIERS["trial"])
+    usage = await check_analysis_allowed(user)
+    return {
+        "tier": tier_key,
+        "tier_info": tier_info,
+        "usage": usage,
+        "all_tiers": TIERS,
+    }
+
+
+@api_router.post("/subscription/sync-revenuecat")
+async def sync_revenuecat(request: Request):
+    """Sync subscription status from RevenueCat (called from mobile after purchase)."""
+    user = await get_current_user(request)
+    body = await request.json()
+    rc_user_id = body.get("revenuecat_user_id")
+    entitlements = body.get("entitlements", {})
+
+    # Determine tier from active entitlements
+    new_tier = "trial"
+    for entitlement_id, ent_data in entitlements.items():
+        if ent_data.get("isActive"):
+            product = ent_data.get("productIdentifier", "")
+            for product_prefix, tier in REVENUECAT_ENTITLEMENT_MAP.items():
+                if product_prefix in product:
+                    new_tier = tier
+                    break
+
+    old_tier = user.get("tier", "trial")
+    update_data = {"revenuecat_id": rc_user_id, "tier": new_tier}
+
+    # If upgrading, reset cycle
+    if new_tier != old_tier and new_tier != "trial":
+        update_data["billing_cycle_start"] = datetime.now(timezone.utc).isoformat()
+        if old_tier == "trial":
+            update_data["analysis_count"] = 0
+            update_data["rollover_count"] = 0
+
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": update_data})
+    logger.info(f"User {user['user_id']} tier synced: {old_tier} -> {new_tier}")
+
+    return {"success": True, "tier": new_tier}
+
+
+@api_router.post("/subscription/webhook")
+async def revenuecat_webhook(request: Request):
+    """RevenueCat server-to-server webhook for subscription events."""
+    body = await request.json()
+    event = body.get("event", {})
+    event_type = event.get("type", "")
+    app_user_id = event.get("app_user_id", "")
+
+    logger.info(f"RevenueCat webhook: {event_type} for {app_user_id}")
+
+    if not app_user_id:
+        return {"success": True}
+
+    user = await db.users.find_one({"revenuecat_id": app_user_id}, {"_id": 0})
+    if not user:
+        user = await db.users.find_one({"user_id": app_user_id}, {"_id": 0})
+    if not user:
+        logger.warning(f"Webhook: User not found for {app_user_id}")
+        return {"success": True}
+
+    # Handle subscription events
+    if event_type in ["INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE"]:
+        product_id = event.get("product_id", "")
+        new_tier = "trial"
+        for prefix, tier in REVENUECAT_ENTITLEMENT_MAP.items():
+            if prefix in product_id:
+                new_tier = tier
+                break
+
+        update = {"tier": new_tier}
+        if event_type == "INITIAL_PURCHASE":
+            update["billing_cycle_start"] = datetime.now(timezone.utc).isoformat()
+            update["analysis_count"] = 0
+            update["rollover_count"] = 0
+
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
+
+    elif event_type in ["CANCELLATION", "EXPIRATION"]:
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {"tier": "trial"}}
+        )
+
+    return {"success": True}
+
+
+@api_router.get("/subscription/tiers")
+async def get_tiers():
+    """Public endpoint: return all available tiers."""
+    return {"tiers": TIERS}
+
+
+# ============================================================
+# MODELS (unchanged)
+# ============================================================
 class HuntConditions(BaseModel):
-    animal: str  # deer, turkey, hog
+    animal: str
     hunt_date: str
-    time_window: str  # morning, evening, all-day
+    time_window: str
     wind_direction: str
     temperature: Optional[str] = None
     precipitation: Optional[str] = None
@@ -37,17 +396,17 @@ class HuntConditions(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     conditions: HuntConditions
-    map_image_base64: str  # base64 encoded map image
+    map_image_base64: str
 
 class OverlayMarker(BaseModel):
-    type: str  # stand, corridor, access_route, avoid
+    type: str
     label: str
-    x_percent: float  # 0-100 position on map
+    x_percent: float
     y_percent: float
     width_percent: Optional[float] = None
     height_percent: Optional[float] = None
     reasoning: str
-    confidence: str  # low, medium, high
+    confidence: str
 
 class AnalysisResult(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -63,14 +422,15 @@ class AnalyzeResponse(BaseModel):
     success: bool
     result: Optional[AnalysisResult] = None
     error: Optional[str] = None
+    usage: Optional[dict] = None
 
 
-# --- Species Data ---
-
+# ============================================================
+# SPECIES DATA (unchanged)
+# ============================================================
 SPECIES_DATA = {
     "deer": {
-        "name": "Whitetail Deer",
-        "icon": "deer",
+        "name": "Whitetail Deer", "icon": "deer",
         "description": "Focus on bedding-to-feeding transitions. Prioritize funnels, saddles, and edges. Wind advantage is critical.",
         "behavior_rules": [
             "Deer move from bedding to feeding areas during dawn and dusk transitions",
@@ -82,8 +442,7 @@ SPECIES_DATA = {
         ]
     },
     "turkey": {
-        "name": "Wild Turkey",
-        "icon": "turkey",
+        "name": "Wild Turkey", "icon": "turkey",
         "description": "Focus on roost-to-strut zones. Open areas near cover edges. Morning setup positioning is key.",
         "behavior_rules": [
             "Turkeys roost in tall trees, often near water or ridgelines",
@@ -95,8 +454,7 @@ SPECIES_DATA = {
         ]
     },
     "hog": {
-        "name": "Wild Hog",
-        "icon": "hog",
+        "name": "Wild Hog", "icon": "hog",
         "description": "Focus on water, thick cover, and feeding zones. Night movement tendencies. Ambush near trails and crossings.",
         "behavior_rules": [
             "Hogs are primarily nocturnal, most active at dusk and dawn",
@@ -110,8 +468,9 @@ SPECIES_DATA = {
 }
 
 
-# --- AI Analysis ---
-
+# ============================================================
+# AI ANALYSIS (unchanged)
+# ============================================================
 async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str) -> AnalysisResult:
     from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
@@ -173,20 +532,14 @@ Analyze the map image and respond with this exact JSON structure:
 Provide 3-6 overlay markers covering stands, corridors, access routes, and avoid zones. Place them at realistic positions on the map. Each x_percent and y_percent should be between 5 and 95."""
 
     session_id = str(uuid.uuid4())
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=session_id,
-        system_message=system_prompt
-    )
+    chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_prompt)
     chat.with_model("openai", "gpt-5.2")
 
-    # Clean base64 string
     clean_base64 = map_image_base64
     if "," in clean_base64:
         clean_base64 = clean_base64.split(",", 1)[1]
 
     image_content = ImageContent(image_base64=clean_base64)
-
     user_message = UserMessage(
         text=f"Analyze this map for a {species['name']} hunt. Conditions: {conditions.time_window} hunt, wind from {conditions.wind_direction}. Provide tactical overlay recommendations as JSON.",
         file_contents=[image_content]
@@ -195,9 +548,7 @@ Provide 3-6 overlay markers covering stands, corridors, access routes, and avoid
     response = await chat.send_message(user_message)
     logger.info(f"AI Response received, length: {len(response)}")
 
-    # Parse JSON from response
     response_text = response.strip()
-    # Remove markdown code blocks if present
     if response_text.startswith("```"):
         lines = response_text.split("\n")
         lines = [line for line in lines if not line.startswith("```")]
@@ -208,32 +559,27 @@ Provide 3-6 overlay markers covering stands, corridors, access routes, and avoid
     overlays = []
     for o in parsed.get("overlays", []):
         overlays.append(OverlayMarker(
-            type=o.get("type", "stand"),
-            label=o.get("label", "Marker"),
-            x_percent=float(o.get("x_percent", 50)),
-            y_percent=float(o.get("y_percent", 50)),
+            type=o.get("type", "stand"), label=o.get("label", "Marker"),
+            x_percent=float(o.get("x_percent", 50)), y_percent=float(o.get("y_percent", 50)),
             width_percent=float(o["width_percent"]) if o.get("width_percent") else None,
             height_percent=float(o["height_percent"]) if o.get("height_percent") else None,
-            reasoning=o.get("reasoning", ""),
-            confidence=o.get("confidence", "medium")
+            reasoning=o.get("reasoning", ""), confidence=o.get("confidence", "medium")
         ))
 
     return AnalysisResult(
-        overlays=overlays,
-        summary=parsed.get("summary", "Analysis complete."),
-        top_setups=parsed.get("top_setups", []),
-        wind_notes=parsed.get("wind_notes", ""),
-        best_time=parsed.get("best_time", ""),
-        key_assumptions=parsed.get("key_assumptions", []),
+        overlays=overlays, summary=parsed.get("summary", "Analysis complete."),
+        top_setups=parsed.get("top_setups", []), wind_notes=parsed.get("wind_notes", ""),
+        best_time=parsed.get("best_time", ""), key_assumptions=parsed.get("key_assumptions", []),
         species_tips=parsed.get("species_tips", [])
     )
 
 
-# --- Routes ---
-
+# ============================================================
+# ROUTES
+# ============================================================
 @api_router.get("/")
 async def root():
-    return {"message": "Raven Scout API", "version": "1.0.0"}
+    return {"message": "Raven Scout API", "version": "2.0.0"}
 
 @api_router.get("/health")
 async def health():
@@ -243,30 +589,51 @@ async def health():
 async def get_species():
     species_list = []
     for key, data in SPECIES_DATA.items():
-        species_list.append({
-            "id": key,
-            "name": data["name"],
-            "description": data["description"],
-            "icon": data["icon"]
-        })
+        species_list.append({"id": key, "name": data["name"], "description": data["description"], "icon": data["icon"]})
     return {"species": species_list}
 
+
 @api_router.post("/analyze-hunt", response_model=AnalyzeResponse)
-async def analyze_hunt(request: AnalyzeRequest):
+async def analyze_hunt(request: Request):
+    """AI analysis endpoint - ENFORCES subscription limits."""
+    body = await request.json()
+
     try:
-        logger.info(f"Analyzing hunt for {request.conditions.animal}")
-        result = await analyze_map_with_ai(request.conditions, request.map_image_base64)
-        return AnalyzeResponse(success=True, result=result)
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON parse error: {e}")
+        analyze_req = AnalyzeRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # Auth + usage check
+    user = await get_current_user(request)
+    usage = await check_analysis_allowed(user)
+
+    if not usage["allowed"]:
+        return AnalyzeResponse(success=False, error=usage["message"], usage=usage)
+
+    # Check weather API access for trial users
+    tier_key = user.get("tier", "trial")
+
+    try:
+        logger.info(f"Analyzing hunt for {analyze_req.conditions.animal} (user: {user['user_id']}, tier: {tier_key})")
+        result = await analyze_map_with_ai(analyze_req.conditions, analyze_req.map_image_base64)
+
+        # Increment usage
+        await increment_usage(user["user_id"])
+        updated_usage = await check_analysis_allowed(
+            await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+        )
+
+        return AnalyzeResponse(success=True, result=result, usage=updated_usage)
+    except json.JSONDecodeError:
         return AnalyzeResponse(success=False, error="Failed to parse AI response. Please try again.")
     except Exception as e:
         logger.error(f"Analysis error: {e}")
         return AnalyzeResponse(success=False, error=str(e))
 
 
-# --- Weather API ---
-
+# ============================================================
+# WEATHER API (unchanged, but with tier check)
+# ============================================================
 WEATHER_TIME_RANGES = {
     "morning": (5, 12),
     "evening": (12, 20),
@@ -276,7 +643,7 @@ WEATHER_TIME_RANGES = {
 class WeatherRequest(BaseModel):
     lat: float
     lon: float
-    date: str  # YYYY-MM-DD
+    date: str
     time_window: str = "morning"
 
 class WeatherData(BaseModel):
@@ -300,53 +667,58 @@ class WeatherResponse(BaseModel):
     error: Optional[str] = None
 
 @api_router.post("/weather", response_model=WeatherResponse)
-async def get_weather(request: WeatherRequest):
+async def get_weather(request: Request):
+    body = await request.json()
+    try:
+        weather_req = WeatherRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # Check if user has weather access (trial users get manual only)
+    user = await get_optional_user(request)
+    if user:
+        tier_key = user.get("tier", "trial")
+        if tier_key == "trial":
+            return WeatherResponse(success=False, error="Weather sync requires Core or Pro plan. Upgrade to auto-fill weather data.")
+
     api_key = os.environ.get("WEATHER_API_KEY")
     if not api_key:
         return WeatherResponse(success=False, error="Weather API not configured")
 
     try:
-        query = f"{request.lat},{request.lon}"
-        target_date = datetime.strptime(request.date, "%Y-%m-%d").date()
+        query = f"{weather_req.lat},{weather_req.lon}"
+        target_date = datetime.strptime(weather_req.date, "%Y-%m-%d").date()
         today = datetime.now().date()
         days_diff = (target_date - today).days
 
-        # Choose API: forecast (0-14 days) or future (14-300 days)
         if days_diff < 0:
-            # Past date: use current weather as fallback
             url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={query}&days=1"
         elif days_diff <= 14:
-            url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={query}&days={min(days_diff + 1, 14)}&dt={request.date}"
+            url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={query}&days={min(days_diff + 1, 14)}&dt={weather_req.date}"
         else:
-            url = f"http://api.weatherapi.com/v1/future.json?key={api_key}&q={query}&dt={request.date}"
+            url = f"http://api.weatherapi.com/v1/future.json?key={api_key}&q={query}&dt={weather_req.date}"
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url)
+        async with httpx.AsyncClient(timeout=15) as hclient:
+            resp = await hclient.get(url)
             resp.raise_for_status()
             data = resp.json()
 
-        # Extract hourly data for the time window
-        start_hour, end_hour = WEATHER_TIME_RANGES.get(request.time_window, (5, 20))
+        start_hour, end_hour = WEATHER_TIME_RANGES.get(weather_req.time_window, (5, 20))
         forecast_day = None
 
         if "forecast" in data and data["forecast"]["forecastday"]:
             for fd in data["forecast"]["forecastday"]:
-                if fd["date"] == request.date:
+                if fd["date"] == weather_req.date:
                     forecast_day = fd
                     break
             if not forecast_day:
                 forecast_day = data["forecast"]["forecastday"][0]
 
         if not forecast_day:
-            return WeatherResponse(success=False, error="No forecast data available for this date")
+            return WeatherResponse(success=False, error="No forecast data available")
 
-        # Filter hours in the time window and compute averages
         hours = forecast_day.get("hour", [])
-        relevant_hours = []
-        for h in hours:
-            hour_num = int(h["time"].split(" ")[1].split(":")[0])
-            if start_hour <= hour_num < end_hour:
-                relevant_hours.append(h)
+        relevant_hours = [h for h in hours if start_hour <= int(h["time"].split(" ")[1].split(":")[0]) < end_hour]
 
         if not relevant_hours:
             relevant_hours = hours[:6] if hours else []
@@ -358,7 +730,6 @@ async def get_weather(request: WeatherRequest):
             avg_cloud = sum(h["cloud"] for h in relevant_hours) / len(relevant_hours)
             avg_humidity = sum(h["humidity"] for h in relevant_hours) / len(relevant_hours)
             avg_pressure = sum(h["pressure_mb"] for h in relevant_hours) / len(relevant_hours)
-            # Use the middle hour for wind direction and condition
             mid = relevant_hours[len(relevant_hours) // 2]
             wind_dir = mid["wind_dir"]
             condition = mid["condition"]["text"]
@@ -367,9 +738,7 @@ async def get_weather(request: WeatherRequest):
             avg_temp = day_data.get("avgtemp_f", 50)
             avg_wind = day_data.get("maxwind_mph", 5)
             avg_precip = day_data.get("daily_chance_of_rain", 0)
-            avg_cloud = 50
-            avg_humidity = day_data.get("avghumidity", 50)
-            avg_pressure = 1013
+            avg_cloud, avg_humidity, avg_pressure = 50, 50, 1013
             wind_dir = "N"
             condition = day_data.get("condition", {}).get("text", "Unknown")
 
@@ -377,31 +746,26 @@ async def get_weather(request: WeatherRequest):
         location = data.get("location", {})
 
         weather = WeatherData(
-            wind_direction=wind_dir,
-            wind_speed_mph=round(avg_wind, 1),
-            temperature_f=round(avg_temp, 1),
-            precipitation_chance=round(avg_precip),
-            cloud_cover=round(avg_cloud),
-            condition=condition,
-            humidity=round(avg_humidity),
-            pressure_mb=round(avg_pressure, 1),
-            sunrise=astro.get("sunrise"),
-            sunset=astro.get("sunset"),
+            wind_direction=wind_dir, wind_speed_mph=round(avg_wind, 1),
+            temperature_f=round(avg_temp, 1), precipitation_chance=round(avg_precip),
+            cloud_cover=round(avg_cloud), condition=condition,
+            humidity=round(avg_humidity), pressure_mb=round(avg_pressure, 1),
+            sunrise=astro.get("sunrise"), sunset=astro.get("sunset"),
             location_name=f"{location.get('name', '')}, {location.get('region', '')}",
-            fetched_at=datetime.now(timezone.utc).isoformat(),
-            is_forecast=days_diff >= 0,
+            fetched_at=datetime.now(timezone.utc).isoformat(), is_forecast=days_diff >= 0,
         )
-
         return WeatherResponse(success=True, data=weather)
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"Weather API HTTP error: {e.response.status_code} - {e.response.text}")
         return WeatherResponse(success=False, error=f"Weather API error: {e.response.status_code}")
     except Exception as e:
         logger.error(f"Weather error: {e}")
         return WeatherResponse(success=False, error=str(e))
 
 
+# ============================================================
+# APP SETUP
+# ============================================================
 app.include_router(api_router)
 
 app.add_middleware(
@@ -411,3 +775,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    client.close()

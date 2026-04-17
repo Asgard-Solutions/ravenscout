@@ -21,6 +21,7 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, SPECIES, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
 import { useNetwork } from '../src/hooks/useNetwork';
+import { useAuth } from '../src/hooks/useAuth';
 
 const { width } = Dimensions.get('window');
 const STEPS = ['Species', 'Maps', 'Conditions', 'Review'];
@@ -47,6 +48,7 @@ type FieldSource = 'auto' | 'manual';
 export default function SetupScreen() {
   const router = useRouter();
   const { isConnected } = useNetwork();
+  const { sessionToken, refreshUser } = useAuth();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
 
@@ -146,7 +148,10 @@ export default function SetupScreen() {
     try {
       const resp = await fetch(`${BACKEND_URL}/api/weather`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
         body: JSON.stringify({
           lat: locationCoords.lat,
           lon: locationCoords.lon,
@@ -233,7 +238,10 @@ export default function SetupScreen() {
     try {
       const response = await fetch(`${BACKEND_URL}/api/analyze-hunt`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        },
         body: JSON.stringify({
           conditions: {
             animal: selectedSpecies,

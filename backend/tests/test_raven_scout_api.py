@@ -24,6 +24,12 @@ def api_client():
 
 
 @pytest.fixture
+def auth_headers():
+    """Headers with valid auth token for testing"""
+    return {"Authorization": "Bearer test_session_rs_001"}
+
+
+@pytest.fixture
 def test_map_image_base64():
     """Generate a simple test map image with visual features"""
     # Create a 200x200 image with some visual features (not blank)
@@ -122,8 +128,8 @@ class TestSpeciesEndpoint:
 class TestAnalyzeHuntEndpoint:
     """Hunt analysis endpoint tests"""
     
-    def test_analyze_hunt_with_map_image(self, api_client, test_map_image_base64):
-        """Test POST /api/analyze-hunt with real map image and conditions"""
+    def test_analyze_hunt_with_map_image(self, api_client, auth_headers, test_map_image_base64):
+        """Test POST /api/analyze-hunt with real map image and conditions (requires auth)"""
         payload = {
             "conditions": {
                 "animal": "deer",
@@ -141,6 +147,7 @@ class TestAnalyzeHuntEndpoint:
         print("Sending analyze-hunt request (this may take 10-20 seconds for AI processing)...")
         response = api_client.post(
             f"{BASE_URL}/api/analyze-hunt",
+            headers=auth_headers,
             json=payload,
             timeout=60  # AI processing can take time
         )
@@ -229,8 +236,8 @@ class TestAnalyzeHuntEndpoint:
             f"Expected 422 for missing fields, got {response.status_code}"
         print(f"✓ Missing conditions validation test passed")
     
-    def test_analyze_hunt_invalid_species(self, api_client, test_map_image_base64):
-        """Test POST /api/analyze-hunt with invalid species"""
+    def test_analyze_hunt_invalid_species(self, api_client, auth_headers, test_map_image_base64):
+        """Test POST /api/analyze-hunt with invalid species (requires auth)"""
         payload = {
             "conditions": {
                 "animal": "invalid_species",
@@ -243,6 +250,7 @@ class TestAnalyzeHuntEndpoint:
         
         response = api_client.post(
             f"{BASE_URL}/api/analyze-hunt",
+            headers=auth_headers,
             json=payload,
             timeout=30
         )
