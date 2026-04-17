@@ -61,3 +61,13 @@ Raven Scout is a mobile hunting planning application that uses GPT-5.2 Vision AI
   - Refresh Weather button, offline fallback with cached data
   - Weather card with condition, sunrise/sunset, humidity
   - Location stored with hunt record
+
+## Phase 4: MapLibre + OSM (Implemented)
+- [x] MapLibre GL JS base map via WebView (CartoDB Dark Matter tiles, free, no API key)
+- [x] Provider-agnostic architecture (`src/map/MapProvider.ts`) — swap to Mapbox later
+- [x] 3-layer separation: base map (MapLibre), overlay rendering (React Native), image analysis (percentage-based)
+- [x] Results screen dual-tab: MAP (interactive MapLibre base map) | ANALYSIS (uploaded image + AI overlays)
+- [x] Dark tactical styling, pan/zoom, compass control
+- [x] No Google Maps, no Mapbox, no routing, no recurring API cost
+- [x] Limitations: WebView rendering (not native), no satellite imagery in MVP, no lat/lon conversion for AI overlays
+- [x] Future Mapbox support: update ACTIVE_PROVIDER in MapProvider.ts, add access token, use Mapbox style URL
