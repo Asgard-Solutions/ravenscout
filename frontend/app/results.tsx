@@ -473,6 +473,7 @@ export default function ResultsScreen() {
           )}
 
           <View style={styles.mapContainer}>
+            {mapImages.length > 0 ? (
             <ScrollView
               ref={mapScrollRef}
               horizontal
@@ -495,6 +496,16 @@ export default function ResultsScreen() {
                 </View>
               ))}
             </ScrollView>
+            ) : (
+              <View style={{ width: MAP_WIDTH, height: MAP_HEIGHT }} onTouchEnd={editMode && addMode ? handleMapPress : undefined}>
+                <TacticalMapView
+                  center={hunt.locationCoords || { lat: 39.8283, lon: -98.5795 }}
+                  zoom={hunt.locationCoords ? 14 : 5}
+                  height={MAP_HEIGHT}
+                  showStyleSwitcher={true}
+                />
+              </View>
+            )}
 
             {/* Overlay markers */}
             {overlays.map((overlay, idx) => (

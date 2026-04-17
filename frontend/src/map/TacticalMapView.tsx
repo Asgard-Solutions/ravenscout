@@ -85,7 +85,7 @@ export default function TacticalMapView({
         var data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
         if (data.type === 'capture') {
           var canvas = map.getCanvas();
-          var dataUrl = canvas.toDataURL('image/png');
+          var dataUrl = canvas.toDataURL('image/jpeg', 0.6);
           var msg = JSON.stringify({ type: 'captureResult', data: dataUrl });
           if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(msg);

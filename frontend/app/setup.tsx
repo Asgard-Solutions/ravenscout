@@ -336,10 +336,10 @@ export default function SetupScreen() {
           history.unshift(huntRecord);
           await AsyncStorage.setItem('hunt_history', JSON.stringify(history));
         } catch (storageErr) {
-          // Storage full — save without map images to fit
+          // Storage full — try saving just this one hunt (clear old history first)
           try {
-            const lightRecord = { ...huntRecord, mapImages: [], mapImage: '' };
-            await AsyncStorage.setItem('current_hunt', JSON.stringify(lightRecord));
+            await AsyncStorage.removeItem('hunt_history');
+            await AsyncStorage.setItem('current_hunt', JSON.stringify(huntRecord));
           } catch {}
         }
         if (refreshUser) refreshUser();
