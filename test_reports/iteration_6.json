@@ -1,0 +1,191 @@
+{
+  "summary": "Bug fix verification for 'ANALYZE HUNT button not working' completed. Backend regression tests: 21/21 passed. Frontend: Network check fix verified (navigator.onLine working correctly on web, no false offline detection). Code review confirms all 3 bug fixes implemented correctly: 1) useNetwork.ts uses navigator.onLine on web, 2) setup.tsx submitAnalysis has proper response.ok checks, 401 handling, and AsyncStorage fallback, 3) results.tsx loadHunt checks 'current_hunt' fallback. Setup wizard navigation working. Login screen verified. Full E2E flow testing limited by file upload requirement in browser automation.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [],
+    "testing_limitation": "Full setup wizard flow (steps 3-4: Conditions and Review) cannot be tested via browser automation due to file upload requirement for map images. Manual testing or E2E test with file upload capability recommended for complete verification of ANALYZE HUNT button behavior on review step."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_auth_subscription.py",
+    "/app/backend/tests/test_raven_scout_api.py",
+    "/app/backend/tests/test_weather_api.py",
+    "/app/test_reports/pytest/pytest_results_iteration6.xml"
+  ],
+  "action_items": [
+    "Manual testing recommended: Complete setup wizard flow (upload map → conditions → review → click ANALYZE HUNT button) to verify button is clickable and not disabled",
+    "Verify ANALYZE HUNT button has gold accent color (not grayed out) on review step",
+    "Test AsyncStorage fallback: Verify hunt data is saved to 'current_hunt' key when 'hunt_history' storage fails",
+    "Test 401 handling: Verify user is redirected to /login when session expires during analysis"
+  ],
+  "critical_code_review_comments": [
+    "✅ BUG FIX #1 VERIFIED: useNetwork.ts now uses navigator.onLine on web (lines 13-15)",
+    "✅ Network check working correctly: navigator.onLine returns true, no false offline banner",
+    "✅ BUG FIX #2 IMPLEMENTED: setup.tsx submitAnalysis rewritten with proper error handling (lines 231-312)",
+    "✅ Response.ok check added (line 268): if (!response.ok) handles non-200 responses",
+    "✅ 401 handling added (lines 261-266): redirects to /login with 'Session Expired' alert",
+    "✅ Specific error messages for each failure mode (lines 269-272)",
+    "✅ AsyncStorage save wrapped in try-catch with fallback (lines 289-300)",
+    "✅ Fallback to 'current_hunt' key when 'hunt_history' save fails (line 298)",
+    "✅ BUG FIX #3 IMPLEMENTED: results.tsx loadHunt checks 'current_hunt' fallback (lines 149-162)",
+    "✅ Fallback logic: tries 'hunt_history' first, then 'current_hunt' (lines 132-162)",
+    "✅ Backend /api/analyze-hunt with valid auth returns 200 and usage data",
+    "✅ Backend /api/analyze-hunt without auth returns 401",
+    "✅ Backend /api/auth/me with valid token works correctly",
+    "✅ Setup wizard renders and navigates correctly (steps 1-2 verified)",
+    "✅ Login screen renders with Google Sign In button",
+    "✅ Auth redirect working: unauthenticated users redirected to /login",
+    "✅ All 4 step labels visible: Species, Maps, Conditions, Review",
+    "✅ Step navigation working: back button and continue button functional",
+    "✅ Continue button properly disabled when requirements not met (no species selected)",
+    "✅ No regression: all existing features still working (21/21 backend tests passed)"
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (21/21 tests passed - no regression)",
+    "frontend": "Partial (network check verified, setup wizard navigation verified, login screen verified. Steps 3-4 not testable due to file upload limitation)"
+  },
+  "seed_data_creation": "Using existing test user: test-user-001 with session token test_session_rs_001",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bug fix for 'ANALYZE HUNT button not working' implemented and partially verified. Three root causes fixed: 1) expo-network falsely reporting offline on web → fixed with navigator.onLine, 2) 401 errors silently caught → fixed with proper response.ok checks and 401 redirect, 3) AsyncStorage save failures crashing navigation → fixed with try-catch and 'current_hunt' fallback. Backend fully tested (21/21 passed). Frontend: network check verified, setup wizard navigation verified, but full E2E flow (steps 3-4) not testable via browser automation due to file upload requirement. Manual testing recommended to verify ANALYZE HUNT button is clickable and not disabled on review step.",
+  "bug_fix_verification": {
+    "bug_description": "ANALYZE HUNT button on setup wizard review step (step 4) does not work",
+    "root_causes_identified": [
+      "1. expo-network on web falsely reports offline → disables button",
+      "2. 401 auth errors silently caught as 'Connection Error'",
+      "3. AsyncStorage save failures crash navigation"
+    ],
+    "fixes_applied": [
+      "1. useNetwork.ts: Uses navigator.onLine on web instead of expo-network",
+      "2. setup.tsx submitAnalysis: Proper response.ok checks, specific 401 handling (redirect to login), specific error messages, AsyncStorage save wrapped in try-catch with fallback to 'current_hunt' key",
+      "3. results.tsx loadHunt: Checks 'current_hunt' AsyncStorage key as fallback"
+    ],
+    "verification_status": {
+      "fix_1_network_check": {
+        "status": "VERIFIED",
+        "evidence": "navigator.onLine returns true on web, no false offline banner shown, useNetwork.ts code review confirms Platform.OS === 'web' check uses navigator.onLine (lines 13-15)"
+      },
+      "fix_2_error_handling": {
+        "status": "CODE_REVIEW_VERIFIED",
+        "evidence": "setup.tsx submitAnalysis code review confirms: response.ok check (line 268), 401 handling with redirect (lines 261-266), specific error messages (lines 269-272), AsyncStorage try-catch with fallback (lines 289-300). Backend tests confirm 401 returns correctly."
+      },
+      "fix_3_asyncstorage_fallback": {
+        "status": "CODE_REVIEW_VERIFIED",
+        "evidence": "results.tsx loadHunt code review confirms: tries 'hunt_history' first (lines 133-147), then checks 'current_hunt' fallback (lines 149-162). setup.tsx saves to 'current_hunt' when 'hunt_history' fails (line 298)."
+      }
+    },
+    "testing_limitations": [
+      "Cannot test full setup wizard flow (steps 3-4) via browser automation due to file upload requirement",
+      "Cannot verify ANALYZE HUNT button state on review step without completing map upload",
+      "Cannot test AsyncStorage fallback behavior without triggering storage quota error",
+      "Cannot test 401 redirect during analysis without expiring session mid-flow"
+    ],
+    "manual_testing_recommended": [
+      "Complete setup wizard flow: species → maps (upload image) → conditions → review",
+      "Verify ANALYZE HUNT button on review step is NOT disabled (should have gold accent color)",
+      "Verify button is clickable and triggers analysis",
+      "Test with expired session token to verify 401 redirect to /login",
+      "Test with storage quota exceeded to verify 'current_hunt' fallback works",
+      "Verify results screen loads hunt data from 'current_hunt' when 'hunt_history' is empty"
+    ]
+  },
+  "backend_tests": {
+    "total": 21,
+    "passed": 21,
+    "failed": 0,
+    "test_files": [
+      "test_auth_subscription.py (10 tests)",
+      "test_raven_scout_api.py (6 tests)",
+      "test_weather_api.py (5 tests)"
+    ],
+    "key_tests_passed": [
+      "✓ GET /api/auth/me with valid token returns user data + usage",
+      "✓ GET /api/auth/me without token returns 401",
+      "✓ GET /api/auth/me with invalid token returns 401",
+      "✓ POST /api/analyze-hunt with auth succeeds and returns analysis",
+      "✓ POST /api/analyze-hunt without auth returns 401",
+      "✓ POST /api/analyze-hunt increments usage count",
+      "✓ GET /api/subscription/status with auth returns tier + usage",
+      "✓ POST /api/weather blocks trial users",
+      "✓ POST /api/weather allows Core/Pro users",
+      "✓ All species, health, and weather endpoints working"
+    ]
+  },
+  "frontend_tests": {
+    "network_check": {
+      "status": "VERIFIED",
+      "test": "navigator.onLine check on web",
+      "result": "✅ navigator.onLine returns true, no false offline banner, network check working correctly"
+    },
+    "login_screen": {
+      "status": "VERIFIED",
+      "elements_verified": [
+        "✓ Google Sign In button (testID: google-login-button)",
+        "✓ Brand name 'RAVEN SCOUT'",
+        "✓ Tagline and feature descriptions",
+        "✓ Auth redirect working (unauthenticated users redirected to /login)"
+      ]
+    },
+    "setup_wizard_navigation": {
+      "status": "PARTIALLY_VERIFIED",
+      "elements_verified": [
+        "✓ Setup screen loads correctly",
+        "✓ Step 1 (Species) - species selection working",
+        "✓ Step 2 (Maps) - upload button present",
+        "✓ All 4 step labels visible (Species, Maps, Conditions, Review)",
+        "✓ Back button navigation working",
+        "✓ Continue button state management working"
+      ],
+      "not_tested": [
+        "⚠️  Step 3 (Conditions) - weather fields and GPS button (requires map upload)",
+        "⚠️  Step 4 (Review) - ANALYZE HUNT button state (requires map upload)",
+        "⚠️  ANALYZE HUNT button click behavior (requires map upload)"
+      ]
+    },
+    "home_screen": {
+      "status": "NOT_TESTED",
+      "note": "Requires authentication via AsyncStorage which is not available in browser automation. Code review confirms usage bar, tier badge, and new hunt button are present with correct testIDs."
+    }
+  },
+  "code_review_findings": {
+    "useNetwork_hook": {
+      "file": "/app/frontend/src/hooks/useNetwork.ts",
+      "bug_fix": "Uses navigator.onLine on web instead of expo-network",
+      "implementation": "Lines 13-15: if (Platform.OS === 'web') { setIsConnected(navigator?.onLine ?? true); return; }",
+      "status": "✅ CORRECT"
+    },
+    "setup_submitAnalysis": {
+      "file": "/app/frontend/app/setup.tsx",
+      "bug_fix": "Proper error handling, 401 redirect, AsyncStorage fallback",
+      "implementation": {
+        "response_ok_check": "Line 268: if (!response.ok) handles non-200 responses",
+        "401_handling": "Lines 261-266: if (response.status === 401) redirects to /login with alert",
+        "error_messages": "Lines 269-272: specific error messages for each failure mode",
+        "asyncstorage_fallback": "Lines 289-300: try-catch wraps hunt_history save, fallback to current_hunt on error"
+      },
+      "status": "✅ CORRECT"
+    },
+    "results_loadHunt": {
+      "file": "/app/frontend/app/results.tsx",
+      "bug_fix": "Checks 'current_hunt' fallback when 'hunt_history' is empty",
+      "implementation": "Lines 149-162: checks 'current_hunt' AsyncStorage key after trying 'hunt_history'",
+      "status": "✅ CORRECT"
+    }
+  },
+  "regression_testing": {
+    "status": "PASSED",
+    "note": "All 21 backend tests passed. No breaking changes introduced. All existing features (auth, subscription, weather, species, analyze-hunt) still working correctly."
+  },
+  "mocked_apis": {
+    "revenuecat_purchases": {
+      "status": "MOCKED_IN_PREVIEW",
+      "note": "RevenueCat in-app purchases simulated in Expo Go preview mode"
+    }
+  }
+}

@@ -236,12 +236,13 @@ export default function SetupScreen() {
     }
     setLoading(true);
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionToken) {
+        headers['Authorization'] = `Bearer ${sessionToken}`;
+      }
       const response = await fetch(`${BACKEND_URL}/api/analyze-hunt`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
-        },
+        headers,
         body: JSON.stringify({
           conditions: {
             animal: selectedSpecies,
@@ -256,6 +257,21 @@ export default function SetupScreen() {
           map_image_base64: mapImages[0],
         }),
       });
+
+      if (response.status === 401) {
+        Alert.alert('Session Expired', 'Please sign in again.');
+        setLoading(false);
+        router.replace('/login');
+        return;
+      }
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        Alert.alert('Error', errData.detail || errData.error || `Server error (${response.status})`);
+        setLoading(false);
+        return;
+      }
+
       const data = await response.json();
       if (data.success && data.result) {
         const overlaysWithIds = (data.result.overlays || []).map((o: any, i: number) => ({
@@ -270,16 +286,26 @@ export default function SetupScreen() {
           weatherData, locationCoords,
           createdAt: new Date().toISOString(),
         };
-        const existing = await AsyncStorage.getItem('hunt_history');
-        const history = existing ? JSON.parse(existing) : [];
-        history.unshift(huntRecord);
-        await AsyncStorage.setItem('hunt_history', JSON.stringify(history));
+        try {
+          const existing = await AsyncStorage.getItem('hunt_history');
+          const history = existing ? JSON.parse(existing) : [];
+          history.unshift(huntRecord);
+          await AsyncStorage.setItem('hunt_history', JSON.stringify(history));
+        } catch (storageErr) {
+          // If storage fails (e.g., quota), still navigate to results
+          // Store just this hunt temporarily
+          try {
+            await AsyncStorage.setItem('current_hunt', JSON.stringify(huntRecord));
+          } catch {}
+        }
+        if (refreshUser) refreshUser();
         router.push({ pathname: '/results', params: { huntId: huntRecord.id } });
       } else {
-        Alert.alert('Analysis Failed', data.error || 'Please try again.');
+        const msg = data.error || data.message || 'Analysis failed. Please try again.';
+        Alert.alert('Analysis Failed', msg);
       }
-    } catch {
-      Alert.alert('Connection Error', 'Could not reach the server.');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not connect to the server. Check your connection.');
     } finally {
       setLoading(false);
     }

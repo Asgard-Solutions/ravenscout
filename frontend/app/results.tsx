@@ -130,6 +130,7 @@ export default function ResultsScreen() {
   }, [params.huntId]);
 
   const loadHunt = async () => {
+    // Try hunt_history first
     const data = await AsyncStorage.getItem('hunt_history');
     if (data) {
       const history: HuntRecord[] = JSON.parse(data);
@@ -137,6 +138,21 @@ export default function ResultsScreen() {
       if (found) {
         setHunt(found);
         const withIds = (found.result.overlays || []).map((o: any, i: number) => ({
+          ...o,
+          id: o.id || `overlay-${i}-${Date.now()}`,
+        }));
+        setOverlays(withIds);
+        setOriginalOverlays(JSON.parse(JSON.stringify(withIds)));
+        return;
+      }
+    }
+    // Fallback: check current_hunt (used when storage quota exceeded)
+    const current = await AsyncStorage.getItem('current_hunt');
+    if (current) {
+      const hunt: HuntRecord = JSON.parse(current);
+      if (hunt.id === params.huntId) {
+        setHunt(hunt);
+        const withIds = (hunt.result.overlays || []).map((o: any, i: number) => ({
           ...o,
           id: o.id || `overlay-${i}-${Date.now()}`,
         }));
