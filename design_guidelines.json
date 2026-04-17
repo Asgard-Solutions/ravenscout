@@ -1,0 +1,113 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 2: The Performance Pro (Tactical Minimalism)",
+  "design_philosophy": {
+    "core_principles": [
+      "Map-First UI: The map and overlay must always be the primary focus. Use minimal UI chrome. Let the map breathe.",
+      "Glove-Friendly Interaction: Keep interactions simple, fast, and accessible. Use large touch targets and minimal taps.",
+      "Dark-First Outdoor Optimization: Built exclusively for low-light and outdoor conditions. True dark canvas with tactical overlays.",
+      "High Contrast Overlays: Markers and paths must instantly pop on complex satellite/topo backgrounds.",
+      "Progressive Disclosure: Avoid clutter. Use bottom sheets to reveal advanced options contextually.",
+      "Tactical Aesthetics: Modern, professional, non-game-like. Subtle topographic textures for depth, but mostly clean backgrounds."
+    ]
+  },
+  "colors": {
+    "primary": "#0B1F2A",
+    "secondary": "#3A4A52",
+    "accent": "#C89B3C",
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#9AA4A9",
+      "muted": "#5D4037"
+    },
+    "tactical_overlays": {
+      "stands": "#2E7D32",
+      "corridors": "#F57C00",
+      "access_routes": "#42A5F5",
+      "avoid_zones": "#C62828"
+    },
+    "supporting": {
+      "earth_brown": "#5D4037",
+      "olive_drab": "#556B2F",
+      "fog_gray": "#9AA4A9"
+    }
+  },
+  "typography": {
+    "strategy": "Tactical Minimalism. Heavy-weight athletic/tactical feel for headings, high-legibility geometric sans for body.",
+    "headings": {
+      "family": "Barlow Condensed, Chivo, or similar bold sans",
+      "weight": "font-black",
+      "tracking": "tracking-tight"
+    },
+    "body": {
+      "family": "Inter or DM Sans",
+      "weight": "font-medium",
+      "tracking": "tracking-wide"
+    },
+    "scale": {
+      "h1": "text-4xl sm:text-5xl font-black tracking-tighter uppercase",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-xl font-bold uppercase tracking-wider text-[#9AA4A9]",
+      "body": "text-base text-white/90",
+      "caption": "text-sm text-[#9AA4A9] uppercase tracking-widest"
+    }
+  },
+  "spacing_and_layout": {
+    "touch_targets": "CRITICAL: All buttons and interactive areas MUST be at least 48x48px (min-h-[48px] min-w-[48px]) for glove compatibility.",
+    "grid_system": "Mode B: The 'Control Room' Grid. Dense, strict hierarchy for data correlation. Use tight gaps (gap-4).",
+    "surfaces": "Use bottom-sheet architectures to maintain map visibility. Panels should float with subtle 1px borders, no soft drop-shadows."
+  },
+  "components_strategy": {
+    "buttons": {
+      "primary": "bg-[#C89B3C] text-[#0B1F2A] font-bold rounded-md px-6 py-4 min-h-[56px] uppercase tracking-wider border-none",
+      "secondary": "bg-[#3A4A52] text-white border border-[#9AA4A9]/30 rounded-md px-6 py-4 min-h-[56px] uppercase",
+      "icon_buttons": "bg-[#0B1F2A]/80 backdrop-blur-md border border-[#3A4A52] rounded-full p-3 min-h-[48px] min-w-[48px]"
+    },
+    "panels_and_cards": {
+      "style": "bg-[#0B1F2A]/90 backdrop-blur-xl border-t border-l border-[#3A4A52] rounded-t-2xl shadow-none",
+      "padding": "p-6"
+    },
+    "map_markers": {
+      "style": "High opacity solid fills with crisp white or black 2px borders to guarantee visibility over noisy satellite imagery."
+    },
+    "forms": {
+      "inputs": "bg-[#3A4A52]/50 border border-[#9AA4A9]/40 text-white rounded-md px-4 py-4 min-h-[56px] focus:border-[#C89B3C] focus:ring-1 focus:ring-[#C89B3C]"
+    }
+  },
+  "motion": {
+    "rules": "Utilitarian only. Slide-up bottom sheets, instant opacity toggles for active states. No bouncy or playful animations."
+  },
+  "media_assets": {
+    "backgrounds": [
+      {
+        "url": "https://static.prod-images.emergentagent.com/jobs/efb76f0e-1956-4981-be47-fa03b5f71dec/images/4cbae64339aa3b379c9e94abfb9ca9bb0a927b496285c823aec7228ae85df6cd.png",
+        "category": "topographic_texture",
+        "description": "Subtle topo map lines on midnight blue. Use as an absolute positioned background overlay with opacity-20 on non-map screens or empty states."
+      }
+    ],
+    "placeholders": [
+      {
+        "url": "https://static.prod-images.emergentagent.com/jobs/efb76f0e-1956-4981-be47-fa03b5f71dec/images/c035c6000afb7196aa45b7c59c9d5586cb5609fb20f06611a3e03b52256d2107.png",
+        "category": "satellite_map_base",
+        "description": "Overhead satellite forest view to simulate map upload or background map view."
+      }
+    ],
+    "species": [
+      {
+        "url": "https://images.unsplash.com/photo-1543946207-39bd91e70ca7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwxfHxkZWVyJTIwaW4lMjBmb3Jlc3R8ZW58MHx8fHwxNzc2NDM4Njk4fDA&ixlib=rb-4.1.0&q=85",
+        "category": "species_deer",
+        "description": "Deer in forest image for species selection cards."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "CRITICAL: All interactive and key informational elements MUST include a data-testid attribute to facilitate robust automated testing. Convention: kebab-case, role-based.",
+    "Build a Map-First interface. The root screen should display the map background, and all navigation/wizards should operate via bottom sheets, modals, or floating action bars over the map.",
+    "Apply the Midnight Blue (#0B1F2A) as the root background color, and Steel Gray (#3A4A52) for elevated panels.",
+    "Use Burnt Gold (#C89B3C) ONLY for primary Call-to-Actions and critical highlights.",
+    "For the AI Analysis overlay, use the specified hex codes: #2E7D32 (Stands), #F57C00 (Corridors), #42A5F5 (Routes), #C62828 (Avoid). Ensure these markers use a solid fill with a 2px contrasting border to pop against the map.",
+    "Apply the topo_texture image with an opacity layer on the 'Saved Hunts List' empty state or condition form background.",
+    "Avoid soft drop shadows. Use 1px borders (#3A4A52 or #9AA4A9 at low opacity) to define surfaces on dark mode.",
+    "Respect glove-friendly UI sizing. Inputs and buttons MUST be min-h-[48px]."
+  ]
+}
