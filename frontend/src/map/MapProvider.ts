@@ -63,18 +63,18 @@ export function getProvider(): MapProviderType {
   return ACTIVE_PROVIDER;
 }
 
-// Dark style JSON using CartoDB Dark Matter raster tiles (free, no key)
+// Dark style JSON using CartoDB Voyager tiles — readable terrain with muted tactical look
 export function getDarkStyleJSON(): object {
   return {
     version: 8,
     name: 'Raven Scout Tactical',
     sources: {
-      'carto-dark': {
+      'carto-voyager': {
         type: 'raster',
         tiles: [
-          'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+          'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
+          'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
         ],
         tileSize: 256,
         attribution: '© OpenStreetMap contributors, © CARTO',
@@ -83,9 +83,9 @@ export function getDarkStyleJSON(): object {
     },
     layers: [
       {
-        id: 'carto-dark-layer',
+        id: 'carto-voyager-layer',
         type: 'raster',
-        source: 'carto-dark',
+        source: 'carto-voyager',
         minzoom: 0,
         maxzoom: 22,
       },
