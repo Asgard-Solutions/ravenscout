@@ -667,6 +667,37 @@ export default function SetupScreen() {
               <Text style={styles.stepTitle}>HUNT CONDITIONS</Text>
               <Text style={styles.stepDescription}>Set environmental parameters</Text>
 
+              {/* Hunt Date Picker */}
+              <Text style={styles.fieldLabel}>HUNT DATE</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.datePicker}
+                contentContainerStyle={styles.datePickerContent}
+              >
+                {Array.from({ length: 14 }, (_, i) => {
+                  const d = new Date();
+                  d.setDate(d.getDate() + i);
+                  const dateStr = d.toISOString().split('T')[0];
+                  const dayName = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' });
+                  const dayNum = d.getDate();
+                  const month = d.toLocaleDateString('en-US', { month: 'short' });
+                  const isSelected = huntDate === dateStr;
+                  return (
+                    <TouchableOpacity
+                      key={dateStr}
+                      testID={`date-${dateStr}`}
+                      style={[styles.dateChip, isSelected && styles.dateChipActive]}
+                      onPress={() => setHuntDate(dateStr)}
+                    >
+                      <Text style={[styles.dateDayName, isSelected && styles.dateDayNameActive]}>{dayName}</Text>
+                      <Text style={[styles.dateDayNum, isSelected && styles.dateDayNumActive]}>{dayNum}</Text>
+                      <Text style={[styles.dateMonth, isSelected && styles.dateMonthActive]}>{month}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
               {/* Location Section */}
               <View style={styles.locationSection}>
                 <Text style={styles.fieldLabel}>LOCATION</Text>
@@ -1042,6 +1073,21 @@ const styles = StyleSheet.create({
   goButtonDisabled: { backgroundColor: 'rgba(58, 74, 82, 0.5)' },
   goButtonText: { color: COLORS.primary, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
   currentCoordsText: { color: COLORS.fogGray, fontSize: 11, marginBottom: 8, marginLeft: 2 },
+  // Date Picker
+  datePicker: { marginBottom: 16, marginHorizontal: -20 },
+  datePickerContent: { paddingHorizontal: 20, gap: 8 },
+  dateChip: {
+    alignItems: 'center', justifyContent: 'center', width: 68, paddingVertical: 10,
+    borderRadius: 12, backgroundColor: 'rgba(58, 74, 82, 0.4)',
+    borderWidth: 2, borderColor: 'transparent',
+  },
+  dateChipActive: { borderColor: COLORS.accent, backgroundColor: 'rgba(200, 155, 60, 0.1)' },
+  dateDayName: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  dateDayNameActive: { color: COLORS.accent },
+  dateDayNum: { color: COLORS.textPrimary, fontSize: 20, fontWeight: '900', marginVertical: 2 },
+  dateDayNumActive: { color: COLORS.accent },
+  dateMonth: { color: COLORS.fogGray, fontSize: 10, fontWeight: '600' },
+  dateMonthActive: { color: COLORS.accent },
   // Map upsell
   mapUpsellCard: {
     flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 16,
