@@ -13,6 +13,8 @@ import {
   Modal,
   FlatList,
   ActivityIndicator,
+  Animated,
+  Easing,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +24,7 @@ import { useNetwork } from '../src/hooks/useNetwork';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/analysisAdapter';
 import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
+import { useMapFocus, findClosestLocalOverlay } from '../src/utils/mapFocus';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_WIDTH = SCREEN_WIDTH - 32;
@@ -130,7 +133,53 @@ export default function ResultsScreen() {
   // Multi-map state
   const [currentMapIndex, setCurrentMapIndex] = useState(0);
   const mapScrollRef = useRef<ScrollView>(null);
+  const rootScrollRef = useRef<ScrollView>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+
+  // v2 Overlay-to-Setup linking & focus
+  const { focusState, linkedSetups, linkedObservations, focus, clearFocus } = useMapFocus(
+    analysisVM?.topSetups || [],
+    analysisVM?.mapObservations || [],
+    analysisVM?.overlays || [],
+  );
+
+  // Pulsing ring animation value
+  const focusPulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!focusState.target) {
+      focusPulse.stopAnimation();
+      focusPulse.setValue(0);
+      return;
+    }
+    // Start loop pulse animation
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(focusPulse, { toValue: 1, duration: 900, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(focusPulse, { toValue: 0, duration: 100, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [focusState.tick, focusState.target, focusPulse]);
+
+  // React to a new focus: switch to analysis view, scroll up, highlight nearest local overlay
+  useEffect(() => {
+    if (!focusState.target) return;
+    // Switch to analysis view (overlays only render there)
+    if (viewMode !== 'analysis') setViewMode('analysis');
+    // Scroll root list to show the map at the top
+    setTimeout(() => {
+      rootScrollRef.current?.scrollTo({ y: 0, animated: true });
+    }, 50);
+    // Find nearest local overlay and mark selected to highlight the DraggableMarker
+    const { x_percent, y_percent } = focusState.target;
+    const nearest = findClosestLocalOverlay(x_percent, y_percent, overlays, 18);
+    if (nearest) {
+      setSelectedOverlay(nearest);
+    } else {
+      setSelectedOverlay(null);
+    }
+  }, [focusState.tick]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     loadHunt();
@@ -425,6 +474,7 @@ export default function ResultsScreen() {
       )}
 
       <ScrollView
+        ref={rootScrollRef}
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
         scrollEnabled={dragIndex === null}
@@ -504,6 +554,17 @@ export default function ResultsScreen() {
               />
             ))}
 
+            {/* Focus ring — pulsing indicator when a setup/observation card was tapped */}
+            {focusState.target && (
+              <FocusRing
+                x={focusState.target.x_percent}
+                y={focusState.target.y_percent}
+                pulse={focusPulse}
+                mapWidth={MAP_WIDTH}
+                mapHeight={MAP_HEIGHT}
+              />
+            )}
+
             {/* Legend overlay */}
             {showLegend && !editMode && (
               <View style={styles.legendOverlay}>
@@ -582,10 +643,18 @@ export default function ResultsScreen() {
         {analysisVM ? (
           <View style={styles.section}>
             <AnalysisSummaryCard vm={analysisVM} />
-            <TopSetupsSection setups={analysisVM.topSetups} />
+            <TopSetupsSection
+              setups={linkedSetups}
+              activeId={focusState.sourceId}
+              onFocus={focus}
+            />
             <WindAnalysisCard vm={analysisVM} />
             {analysisVM.hasMapObservations && (
-              <MapObservationsSection observations={analysisVM.mapObservations} />
+              <MapObservationsSection
+                observations={linkedObservations}
+                activeId={focusState.sourceId}
+                onFocus={focus}
+              />
             )}
             <AssumptionsCard
               assumptions={analysisVM.keyAssumptions}
@@ -701,6 +770,39 @@ export default function ResultsScreen() {
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+// --- Focus Ring: pulsing highlight when a v2 card is tapped ---
+function FocusRing({
+  x,
+  y,
+  pulse,
+  mapWidth,
+  mapHeight,
+}: {
+  x: number;
+  y: number;
+  pulse: Animated.Value;
+  mapWidth: number;
+  mapHeight: number;
+}) {
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.9] });
+  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 0] });
+  const left = (x / 100) * mapWidth - 28;
+  const top = (y / 100) * mapHeight - 28;
+  return (
+    <View pointerEvents="none" style={[styles.focusRingRoot, { left, top }]}>
+      {/* Outer pulsing ring */}
+      <Animated.View
+        style={[
+          styles.focusPulseRing,
+          { transform: [{ scale }], opacity },
+        ]}
+      />
+      {/* Inner solid ring */}
+      <View style={styles.focusCoreRing} />
+    </View>
   );
 }
 
@@ -1034,4 +1136,31 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
   },
   markerTypeLabel: { flex: 1, color: COLORS.textPrimary, fontSize: 15, fontWeight: '600' },
+  // Focus Ring
+  focusRingRoot: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 20,
+  },
+  focusPulseRing: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 3,
+    borderColor: COLORS.accent,
+    backgroundColor: 'rgba(200, 155, 60, 0.15)',
+  },
+  focusCoreRing: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: COLORS.accent,
+    backgroundColor: 'rgba(200, 155, 60, 0.25)',
+  },
 });

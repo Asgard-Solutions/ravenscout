@@ -1,12 +1,12 @@
-// Raven Scout — v2 Analysis Section Cards
-// All result section components in one module for maintainability
+// Raven Scout — v2 Analysis Section Cards with Map Focus Linking
 
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { AnalysisViewModel } from '../utils/analysisAdapter';
-import type { TopSetup, MapObservation, KeyAssumption } from '../types/analysis';
-import { getEvidenceColor, getRiskColor } from '../types/analysis';
+import type { KeyAssumption } from '../types/analysis';
+import type { LinkedSetup, LinkedObservation, FocusTarget } from '../utils/mapFocus';
+import { getEvidenceColor } from '../types/analysis';
 import ConfidenceIndicator from './ConfidenceIndicator';
 import RiskBadge from './RiskBadge';
 
@@ -28,7 +28,6 @@ export function AnalysisSummaryCard({ vm }: { vm: AnalysisViewModel }) {
         <Ionicons name="analytics" size={18} color={C.accent} />
         <Text style={s.cardTitle}>ANALYSIS SUMMARY</Text>
       </View>
-      {/* Badges row */}
       <View style={s.badgeRow}>
         <View style={[s.badge, { backgroundColor: `${evColor}18`, borderColor: `${evColor}40` }]}>
           <View style={[s.badgeDot, { backgroundColor: evColor }]} />
@@ -51,10 +50,7 @@ export function AnalysisSummaryCard({ vm }: { vm: AnalysisViewModel }) {
           {vm.confidenceSummary.main_limitations.length > 0 && (
             <View style={s.limitationsList}>
               {vm.confidenceSummary.main_limitations.map((l, i) => (
-                <View key={i} style={s.limitationRow}>
-                  <Ionicons name="alert-circle-outline" size={12} color={C.muted} />
-                  <Text style={s.limitationText}>{l}</Text>
-                </View>
+                <View key={i} style={s.limitRow}><Ionicons name="alert-circle-outline" size={12} color={C.muted} /><Text style={s.limitText}>{l}</Text></View>
               ))}
             </View>
           )}
@@ -65,40 +61,69 @@ export function AnalysisSummaryCard({ vm }: { vm: AnalysisViewModel }) {
 }
 
 // ============================================================
-// TOP SETUPS SECTION
+// TOP SETUPS with focus linking
 // ============================================================
-export function TopSetupsSection({ setups }: { setups: TopSetup[] }) {
+export function TopSetupsSection({ setups, activeId, onFocus }: {
+  setups: LinkedSetup[];
+  activeId: string | null;
+  onFocus: (target: FocusTarget) => void;
+}) {
   if (setups.length === 0) return (
     <View style={s.card}><View style={s.cardHeader}><Ionicons name="flag" size={18} color={C.accent} /><Text style={s.cardTitle}>TOP SETUPS</Text></View><Text style={s.emptyText}>No tactical setups identified</Text></View>
   );
   return (
     <View style={s.sectionGap}>
       <Text style={s.sectionLabel}>TOP SETUPS</Text>
-      {setups.map(setup => <TopSetupCard key={setup.rank} setup={setup} />)}
+      {setups.map(setup => (
+        <TopSetupCard
+          key={setup.rank}
+          setup={setup}
+          isActive={activeId === `setup-${setup.rank}`}
+          onFocus={onFocus}
+        />
+      ))}
     </View>
   );
 }
 
-function TopSetupCard({ setup }: { setup: TopSetup }) {
+function TopSetupCard({ setup, isActive, onFocus }: {
+  setup: LinkedSetup;
+  isActive: boolean;
+  onFocus: (target: FocusTarget) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <TouchableOpacity style={s.setupCard} onPress={() => setExpanded(!expanded)} activeOpacity={0.8} testID={`setup-card-${setup.rank}`}>
-      <View style={s.setupHeader}>
+    <View style={[s.setupCard, isActive && s.setupCardActive]} testID={`setup-card-${setup.rank}`}>
+      <TouchableOpacity style={s.setupHeader} onPress={() => setExpanded(!expanded)} activeOpacity={0.8}>
         <View style={s.rankCircle}><Text style={s.rankText}>{setup.rank}</Text></View>
         <View style={{ flex: 1 }}>
           <Text style={s.setupName}>{setup.setup_name}</Text>
           <Text style={s.setupType}>{setup.setup_type.toUpperCase()}</Text>
         </View>
         <ConfidenceIndicator value={setup.confidence} size="small" showBar={false} />
-      </View>
-      {/* Risk pills */}
+      </TouchableOpacity>
       <View style={s.riskRow}>
         <RiskBadge level={setup.wind_risk} label={`Wind: ${setup.wind_risk}`} />
         <RiskBadge level={setup.thermals_risk} label={`Thermals: ${setup.thermals_risk}`} />
         <RiskBadge level={setup.pressure_risk} label={`Pressure: ${setup.pressure_risk}`} />
       </View>
       {setup.best_window ? <Text style={s.setupMeta}>Best: {setup.best_window}</Text> : null}
-      {/* Expanded details */}
+
+      {/* Focus on Map button */}
+      {setup.canFocusMap && setup.focusTarget && (
+        <TouchableOpacity
+          testID={`focus-setup-${setup.rank}`}
+          style={[s.focusButton, isActive && s.focusButtonActive]}
+          onPress={() => onFocus(setup.focusTarget!)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="locate" size={14} color={isActive ? C.primary : C.accent} />
+          <Text style={[s.focusButtonText, isActive && s.focusButtonTextActive]}>
+            {isActive ? 'FOCUSED' : 'FOCUS ON MAP'}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       {expanded && (
         <View style={s.setupDetails}>
           {setup.target_movement ? <DetailRow icon="paw" label="Movement" value={setup.target_movement} /> : null}
@@ -109,19 +134,16 @@ function TopSetupCard({ setup }: { setup: TopSetup }) {
             <View style={s.whySection}>
               <Text style={s.whyLabel}>WHY THIS WORKS</Text>
               {setup.why_this_works.map((w, i) => (
-                <View key={i} style={s.whyRow}>
-                  <Ionicons name="checkmark-circle" size={14} color={C.stands} />
-                  <Text style={s.whyText}>{w}</Text>
-                </View>
+                <View key={i} style={s.whyRow}><Ionicons name="checkmark-circle" size={14} color={C.stands} /><Text style={s.whyText}>{w}</Text></View>
               ))}
             </View>
           )}
         </View>
       )}
-      <View style={s.expandHint}>
+      <TouchableOpacity onPress={() => setExpanded(!expanded)} style={s.expandHint}>
         <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={C.muted} />
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -136,7 +158,7 @@ function DetailRow({ icon, label, value, accent }: { icon: string; label: string
 }
 
 // ============================================================
-// WIND ANALYSIS CARD
+// WIND ANALYSIS
 // ============================================================
 export function WindAnalysisCard({ vm }: { vm: AnalysisViewModel }) {
   const wn = vm.windNotes;
@@ -144,29 +166,17 @@ export function WindAnalysisCard({ vm }: { vm: AnalysisViewModel }) {
   if (!vm.hasWindNotes && !bt.primary_window) return null;
   return (
     <View style={s.card}>
-      <View style={s.cardHeader}>
-        <Ionicons name="compass" size={18} color={C.routes} />
-        <Text style={s.cardTitle}>WIND & TIMING</Text>
-      </View>
+      <View style={s.cardHeader}><Ionicons name="compass" size={18} color={C.routes} /><Text style={s.cardTitle}>WIND & TIMING</Text></View>
       {wn.prevailing_wind_analysis ? <Text style={s.bodyText}>{wn.prevailing_wind_analysis}</Text> : null}
       {wn.danger_zones.length > 0 && (
-        <View style={s.dangerSection}>
-          {wn.danger_zones.map((dz, i) => (
-            <View key={i} style={s.dangerRow}>
-              <Ionicons name="warning" size={12} color={C.avoid} />
-              <Text style={[s.dangerText]}>{dz}</Text>
-            </View>
-          ))}
-        </View>
+        <View style={s.dangerSection}>{wn.danger_zones.map((dz, i) => (
+          <View key={i} style={s.dangerRow}><Ionicons name="warning" size={12} color={C.avoid} /><Text style={s.dangerText}>{dz}</Text></View>
+        ))}</View>
       )}
       {wn.best_downwind_sides.length > 0 && (
-        <View style={s.downwindRow}>
-          <Ionicons name="checkmark-circle" size={14} color={C.stands} />
-          <Text style={s.downwindText}>Best sides: {wn.best_downwind_sides.join(', ')}</Text>
-        </View>
+        <View style={s.downwindRow}><Ionicons name="checkmark-circle" size={14} color={C.stands} /><Text style={s.downwindText}>Best sides: {wn.best_downwind_sides.join(', ')}</Text></View>
       )}
       <RiskBadge level={wn.wind_shift_risk} label={`Shift risk: ${wn.wind_shift_risk}`} />
-      {/* Best Time */}
       {bt.primary_window ? (
         <View style={s.timeSection}>
           <View style={s.timeRow}><Ionicons name="time" size={14} color={C.accent} /><Text style={s.timeLabel}>Primary:</Text><Text style={s.timeValue}>{bt.primary_window}</Text></View>
@@ -179,55 +189,64 @@ export function WindAnalysisCard({ vm }: { vm: AnalysisViewModel }) {
 }
 
 // ============================================================
-// MAP OBSERVATIONS
+// MAP OBSERVATIONS with focus
 // ============================================================
-export function MapObservationsSection({ observations }: { observations: MapObservation[] }) {
+export function MapObservationsSection({ observations, activeId, onFocus }: {
+  observations: LinkedObservation[];
+  activeId: string | null;
+  onFocus: (target: FocusTarget) => void;
+}) {
   if (observations.length === 0) return null;
   return (
     <View style={s.sectionGap}>
       <Text style={s.sectionLabel}>TERRAIN INTEL ({observations.length})</Text>
-      {observations.map(obs => (
-        <View key={obs.id} style={s.obsCard} testID={`obs-${obs.id}`}>
-          <View style={s.obsHeader}>
-            <View style={s.obsTypeBadge}><Text style={s.obsTypeText}>{obs.feature_type.replace(/_/g, ' ')}</Text></View>
-            <ConfidenceIndicator value={obs.confidence} size="small" showBar={false} />
-          </View>
-          <Text style={s.obsDesc}>{obs.description}</Text>
-          {obs.evidence.length > 0 && (
-            <View style={s.evidenceList}>
-              {obs.evidence.map((e, i) => (
-                <View key={i} style={s.evidenceRow}><Ionicons name="eye" size={10} color={C.muted} /><Text style={s.evidenceText}>{e}</Text></View>
-              ))}
+      {observations.map(obs => {
+        const isActive = activeId === obs.id;
+        return (
+          <View key={obs.id} style={[s.obsCard, isActive && s.obsCardActive]} testID={`obs-${obs.id}`}>
+            <View style={s.obsHeader}>
+              <View style={s.obsTypeBadge}><Text style={s.obsTypeText}>{obs.feature_type.replace(/_/g, ' ')}</Text></View>
+              <ConfidenceIndicator value={obs.confidence} size="small" showBar={false} />
             </View>
-          )}
-        </View>
-      ))}
+            <Text style={s.obsDesc}>{obs.description}</Text>
+            {obs.evidence.length > 0 && (
+              <View style={s.evidenceList}>{obs.evidence.map((e, i) => (
+                <View key={i} style={s.evidenceRow}><Ionicons name="eye" size={10} color={C.muted} /><Text style={s.evidenceText}>{e}</Text></View>
+              ))}</View>
+            )}
+            {obs.canFocusMap && obs.focusTarget && (
+              <TouchableOpacity
+                testID={`focus-obs-${obs.id}`}
+                style={[s.focusButton, s.focusButtonSmall, isActive && s.focusButtonActive]}
+                onPress={() => onFocus(obs.focusTarget!)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="locate" size={12} color={isActive ? C.primary : C.accent} />
+                <Text style={[s.focusButtonText, s.focusButtonTextSmall, isActive && s.focusButtonTextActive]}>
+                  {isActive ? 'FOCUSED' : 'VIEW ON MAP'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        );
+      })}
     </View>
   );
 }
 
 // ============================================================
-// ASSUMPTIONS CARD
+// ASSUMPTIONS
 // ============================================================
 export function AssumptionsCard({ assumptions, limitations }: { assumptions: KeyAssumption[]; limitations: string[] }) {
   if (assumptions.length === 0 && limitations.length === 0) return null;
   return (
     <View style={s.card}>
-      <View style={s.cardHeader}>
-        <Ionicons name="information-circle" size={18} color={C.muted} />
-        <Text style={s.cardTitle}>ASSUMPTIONS & LIMITATIONS</Text>
-      </View>
+      <View style={s.cardHeader}><Ionicons name="information-circle" size={18} color={C.muted} /><Text style={s.cardTitle}>ASSUMPTIONS & LIMITATIONS</Text></View>
       {assumptions.map((a, i) => (
-        <View key={i} style={s.assumptionRow}>
-          <RiskBadge level={a.impact} />
-          <Text style={s.assumptionText}>{a.assumption}</Text>
-        </View>
+        <View key={i} style={s.assumptionRow}><RiskBadge level={a.impact} /><Text style={s.assumptionText}>{a.assumption}</Text></View>
       ))}
-      {limitations.length > 0 && limitations.map((l, i) => (
-        <View key={`l-${i}`} style={s.limitationRow}>
-          <Ionicons name="alert-circle-outline" size={12} color={C.corridors} />
-          <Text style={s.limitationText}>{l}</Text>
-        </View>
+      {limitations.map((l, i) => (
+        <View key={`l-${i}`} style={s.limitRow}><Ionicons name="alert-circle-outline" size={12} color={C.corridors} /><Text style={s.limitText}>{l}</Text></View>
       ))}
     </View>
   );
@@ -264,19 +283,30 @@ const s = StyleSheet.create({
   summaryText: { color: C.text, fontSize: 15, lineHeight: 24 },
   confidenceSection: { marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(154,164,169,0.1)' },
   limitationsList: { marginTop: 8, gap: 4 },
-  limitationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
-  limitationText: { color: C.muted, fontSize: 12, lineHeight: 17, flex: 1 },
+  limitRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 4 },
+  limitText: { color: C.muted, fontSize: 12, lineHeight: 17, flex: 1 },
   emptyText: { color: C.muted, fontSize: 13, fontStyle: 'italic' },
   bodyText: { color: C.text, fontSize: 14, lineHeight: 22, marginBottom: 10 },
   // Setup
   setupCard: { backgroundColor: C.card, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: C.border },
+  setupCardActive: { borderColor: C.accent, borderWidth: 2 },
   setupHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
   rankCircle: { width: 30, height: 30, borderRadius: 15, backgroundColor: C.accent, alignItems: 'center', justifyContent: 'center' },
   rankText: { color: C.primary, fontSize: 15, fontWeight: '900' },
   setupName: { color: C.text, fontSize: 16, fontWeight: '800' },
   setupType: { color: C.muted, fontSize: 10, fontWeight: '700', letterSpacing: 1, marginTop: 2 },
   riskRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
-  setupMeta: { color: C.accent, fontSize: 12, fontWeight: '600' },
+  setupMeta: { color: C.accent, fontSize: 12, fontWeight: '600', marginBottom: 6 },
+  focusButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, alignSelf: 'flex-start',
+    backgroundColor: 'rgba(200,155,60,0.1)', borderWidth: 1, borderColor: 'rgba(200,155,60,0.3)',
+  },
+  focusButtonSmall: { paddingVertical: 6, paddingHorizontal: 10, marginTop: 8 },
+  focusButtonActive: { backgroundColor: C.accent, borderColor: C.accent },
+  focusButtonText: { color: C.accent, fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+  focusButtonTextSmall: { fontSize: 10 },
+  focusButtonTextActive: { color: C.primary },
   setupDetails: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(154,164,169,0.1)', gap: 8 },
   detailRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   detailLabel: { color: C.muted, fontSize: 11, fontWeight: '700', width: 50, letterSpacing: 0.5 },
@@ -299,6 +329,7 @@ const s = StyleSheet.create({
   timeExplanation: { color: C.muted, fontSize: 12, lineHeight: 18, marginTop: 4 },
   // Observations
   obsCard: { backgroundColor: C.card, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border },
+  obsCardActive: { borderColor: C.accent, borderWidth: 2 },
   obsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   obsTypeBadge: { backgroundColor: 'rgba(200,155,60,0.1)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   obsTypeText: { color: C.accent, fontSize: 9, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' },
