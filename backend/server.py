@@ -787,6 +787,36 @@ async def get_weather(request: Request):
 
 
 # ============================================================
+# CLIENT TELEMETRY
+# ============================================================
+class ClientEventBody(BaseModel):
+    event: str
+    data: Optional[dict] = None
+    platform: Optional[str] = None
+    platform_version: Optional[str] = None
+    user_agent: Optional[str] = None
+    ts: Optional[str] = None
+
+
+@api_router.post("/log/client-event")
+async def log_client_event(body: ClientEventBody):
+    """Best-effort client-side diagnostics sink.
+    Fire-and-forget from the app — used for tracking storage failures,
+    fallback usage, etc. Never raises to the client."""
+    try:
+        logger.warning(
+            "[client-event] event=%s platform=%s version=%s data=%s",
+            body.event,
+            body.platform or "?",
+            body.platform_version or "?",
+            json.dumps(body.data or {}, default=str)[:500],
+        )
+    except Exception as e:
+        logger.info(f"client-event log failed: {e}")
+    return {"ok": True}
+
+
+# ============================================================
 # APP SETUP
 # ============================================================
 app.include_router(api_router)

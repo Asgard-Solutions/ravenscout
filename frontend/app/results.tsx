@@ -25,6 +25,8 @@ import TacticalMapView from '../src/map/TacticalMapView';
 import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/analysisAdapter';
 import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
 import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
+import { getCurrentHuntEntry } from '../src/store/currentHuntStore';
+import { logClientEvent } from '../src/utils/clientLog';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_WIDTH = SCREEN_WIDTH - 32;
@@ -135,6 +137,7 @@ export default function ResultsScreen() {
   const mapScrollRef = useRef<ScrollView>(null);
   const rootScrollRef = useRef<ScrollView>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [persistWarning, setPersistWarning] = useState<string | null>(null);
 
   // v2 Overlay-to-Setup linking & focus
   const { focusState, linkedSetups, linkedObservations, focus, clearFocus } = useMapFocus(
@@ -182,40 +185,99 @@ export default function ResultsScreen() {
   }, [focusState.tick]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    loadHunt();
-    // Timeout: if hunt not loaded in 5 seconds, show error
-    const timeout = setTimeout(() => {
-      setLoadFailed(true);
+    let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const run = async () => {
+      const found = await loadHuntAsync();
+      if (cancelled) return;
+      if (found) {
+        applyHunt(found.hunt);
+        if (found.warning) setPersistWarning(found.warning);
+      } else {
+        setLoadFailed(true);
+      }
+    };
+
+    // Start the load
+    run();
+    // Safety timeout — only fires if we never resolved.
+    timeout = setTimeout(() => {
+      if (cancelled) return;
+      setHunt(prev => {
+        if (!prev) {
+          setLoadFailed(true);
+          logClientEvent({
+            event: 'hunt_not_found',
+            data: { hunt_id: params.huntId, reason: 'timeout' },
+          });
+        }
+        return prev;
+      });
     }, 5000);
-    return () => clearTimeout(timeout);
+
+    return () => {
+      cancelled = true;
+      if (timeout) clearTimeout(timeout);
+    };
   }, [params.huntId]);
 
-  const loadHunt = async () => {
+  const loadHuntAsync = async (): Promise<{ hunt: HuntRecord; warning: string | null } | null> => {
+    const huntId = params.huntId as string | undefined;
+    if (!huntId) return null;
+
+    // Priority 1: in-memory store (survives navigation this session even
+    // when AsyncStorage/localStorage writes failed).
+    const memoryEntry = getCurrentHuntEntry(huntId);
+    if (memoryEntry) {
+      const warning = memoryEntry.persistFailed
+        ? 'Session-only: this hunt was not saved (storage full). Take notes before leaving.'
+        : null;
+      if (memoryEntry.persistFailed) {
+        logClientEvent({
+          event: 'hunt_loaded_from_memory_fallback',
+          data: { hunt_id: huntId, persist_error: memoryEntry.persistError },
+        });
+      }
+      return { hunt: memoryEntry.record as HuntRecord, warning };
+    }
+
+    // Priority 2: hunt_history list
     try {
-      // Try hunt_history first
       const data = await AsyncStorage.getItem('hunt_history');
       if (data) {
         const history: HuntRecord[] = JSON.parse(data);
-        const found = history.find(h => h.id === params.huntId);
-        if (found) {
-          applyHunt(found);
-          return;
-        }
+        const found = history.find(h => h.id === huntId);
+        if (found) return { hunt: found, warning: null };
       }
     } catch {}
+
+    // Priority 3: current_hunt fallback slot
     try {
-      // Fallback: current_hunt
       const current = await AsyncStorage.getItem('current_hunt');
       if (current) {
         const parsed: HuntRecord = JSON.parse(current);
-        if (parsed.id === params.huntId) {
-          applyHunt(parsed);
-          return;
-        }
+        if (parsed.id === huntId) return { hunt: parsed, warning: null };
       }
     } catch {}
-    // If we get here, hunt was not found
-    setLoadFailed(true);
+
+    // Not found anywhere — emit telemetry so we can spot regressions.
+    logClientEvent({
+      event: 'hunt_not_found',
+      data: { hunt_id: huntId, reason: 'missing_from_all_sources' },
+    });
+    return null;
+  };
+
+  // Legacy: kept in case retry button needs a plain loader
+  const loadHunt = async () => {
+    const result = await loadHuntAsync();
+    if (result) {
+      applyHunt(result.hunt);
+      if (result.warning) setPersistWarning(result.warning);
+    } else {
+      setLoadFailed(true);
+    }
   };
 
   const applyHunt = (found: HuntRecord) => {
@@ -388,6 +450,23 @@ export default function ResultsScreen() {
         <View testID="offline-banner" style={styles.offlineBanner}>
           <Ionicons name="cloud-offline" size={16} color={COLORS.accent} />
           <Text style={styles.offlineBannerText}>OFFLINE MODE — Viewing saved data</Text>
+        </View>
+      )}
+
+      {/* Persist Warning Banner (storage failure) */}
+      {persistWarning && (
+        <View testID="persist-warning-banner" style={styles.persistBanner}>
+          <Ionicons name="warning-outline" size={16} color={COLORS.accent} />
+          <Text style={styles.persistBannerText} numberOfLines={2}>
+            {persistWarning}
+          </Text>
+          <TouchableOpacity
+            testID="dismiss-persist-warning"
+            onPress={() => setPersistWarning(null)}
+            style={styles.persistBannerClose}
+          >
+            <Ionicons name="close" size={16} color={COLORS.fogGray} />
+          </TouchableOpacity>
         </View>
       )}
 
@@ -912,6 +991,20 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(200, 155, 60, 0.3)',
   },
   offlineBannerText: { color: COLORS.accent, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  persistBanner: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 8, paddingVertical: 8, paddingHorizontal: 12,
+    backgroundColor: 'rgba(200, 155, 60, 0.15)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(200, 155, 60, 0.3)',
+  },
+  persistBannerText: {
+    color: COLORS.textPrimary, fontSize: 12, fontWeight: '600',
+    flex: 1, lineHeight: 16,
+  },
+  persistBannerClose: {
+    width: 28, height: 28, borderRadius: 14, alignItems: 'center',
+    justifyContent: 'center', backgroundColor: 'rgba(11, 31, 42, 0.3)',
+  },
   topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, gap: 10 },
   backButton: {
     width: 44, height: 44, borderRadius: 22,
