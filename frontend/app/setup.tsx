@@ -313,6 +313,9 @@ export default function SetupScreen() {
             region: region || null,
           },
           map_image_base64: mapImages[primaryMapIndex],
+          additional_images: isPaidTier && user?.tier === 'pro'
+            ? mapImages.filter((_, i) => i !== primaryMapIndex)
+            : undefined,
         }),
       });
 

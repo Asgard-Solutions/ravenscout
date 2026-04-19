@@ -397,6 +397,7 @@ class HuntConditions(BaseModel):
 class AnalyzeRequest(BaseModel):
     conditions: HuntConditions
     map_image_base64: str
+    additional_images: Optional[List[str]] = None
 
 class OverlayMarker(BaseModel):
     type: str
@@ -471,7 +472,7 @@ SPECIES_DATA = {
 # ============================================================
 # AI ANALYSIS (unchanged)
 # ============================================================
-async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str) -> AnalysisResult:
+async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial") -> AnalysisResult:
     from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
     api_key = os.environ.get("EMERGENT_LLM_KEY")
@@ -483,6 +484,16 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str)
         raise ValueError(f"Unknown species: {conditions.animal}")
 
     species_rules = "\n".join(f"- {r}" for r in species["behavior_rules"])
+
+    # Pro users with multiple images get enhanced context
+    has_extra_images = tier == "pro" and additional_images and len(additional_images) > 0
+    multi_image_note = ""
+    if has_extra_images:
+        multi_image_note = f"""
+
+MULTI-IMAGE ANALYSIS (Pro):
+You are provided {len(additional_images) + 1} images total. The FIRST image is the PRIMARY map — all overlay coordinates (x_percent, y_percent) MUST be placed relative to this first image only.
+The additional {len(additional_images)} image(s) are reference views of the same area (e.g., satellite, topo, street). Use them to gain additional terrain context (vegetation, elevation, water, roads) but place all overlays on the primary image."""
 
     system_prompt = f"""You are Raven Scout, an expert hunting strategist AI. You analyze map imagery and provide tactical hunting setup recommendations.
 
@@ -506,7 +517,7 @@ OVERLAY COLOR CODING:
 - "corridor" (Amber/Orange) = Likely animal travel corridors
 - "access_route" (Sky Blue) = Suggested access routes for the hunter
 - "avoid" (Deep Red) = Areas to avoid (wind exposure, high visibility, pressure)
-
+{multi_image_note}
 Analyze the map image and respond with this exact JSON structure:
 {{
   "overlays": [
@@ -539,10 +550,23 @@ Provide 3-6 overlay markers covering stands, corridors, access routes, and avoid
     if "," in clean_base64:
         clean_base64 = clean_base64.split(",", 1)[1]
 
-    image_content = ImageContent(image_base64=clean_base64)
+    image_contents = [ImageContent(image_base64=clean_base64)]
+
+    # Pro users: attach additional reference images
+    if has_extra_images:
+        for extra_img in additional_images:
+            extra_clean = extra_img
+            if "," in extra_clean:
+                extra_clean = extra_clean.split(",", 1)[1]
+            image_contents.append(ImageContent(image_base64=extra_clean))
+
+    user_msg_text = f"Analyze this map for a {species['name']} hunt. Conditions: {conditions.time_window} hunt, wind from {conditions.wind_direction}. Provide tactical overlay recommendations as JSON."
+    if has_extra_images:
+        user_msg_text = f"Analyze these {len(image_contents)} map images for a {species['name']} hunt. The FIRST image is the PRIMARY — place all overlay coordinates on it. Additional images are reference views of the same area. Conditions: {conditions.time_window} hunt, wind from {conditions.wind_direction}. Provide tactical overlay recommendations as JSON."
+
     user_message = UserMessage(
-        text=f"Analyze this map for a {species['name']} hunt. Conditions: {conditions.time_window} hunt, wind from {conditions.wind_direction}. Provide tactical overlay recommendations as JSON.",
-        file_contents=[image_content]
+        text=user_msg_text,
+        file_contents=image_contents
     )
 
     response = await chat.send_message(user_message)
@@ -614,8 +638,13 @@ async def analyze_hunt(request: Request):
     tier_key = user.get("tier", "trial")
 
     try:
-        logger.info(f"Analyzing hunt for {analyze_req.conditions.animal} (user: {user['user_id']}, tier: {tier_key})")
-        result = await analyze_map_with_ai(analyze_req.conditions, analyze_req.map_image_base64)
+        logger.info(f"Analyzing hunt for {analyze_req.conditions.animal} (user: {user['user_id']}, tier: {tier_key}, images: 1+{len(analyze_req.additional_images or [])})")
+        result = await analyze_map_with_ai(
+            analyze_req.conditions,
+            analyze_req.map_image_base64,
+            additional_images=analyze_req.additional_images if tier_key == "pro" else None,
+            tier=tier_key,
+        )
 
         # Increment usage
         await increment_usage(user["user_id"])
