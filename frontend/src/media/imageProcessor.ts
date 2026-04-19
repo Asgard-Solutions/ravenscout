@@ -1,15 +1,4 @@
 // Raven Scout — Tier-aware image compression + thumbnail generation.
-//
-// Uses expo-image-manipulator to resize + re-encode JPEGs BEFORE they
-// hit the MediaStore. Keeps device disk usage bounded and cuts the
-// base64 memory footprint during analysis.
-//
-// Profiles:
-//   Pro        → 2048 max dim, JPEG quality 0.85
-//   Core/Trial → 1280 max dim, JPEG quality 0.70
-//
-// Thumbnails: a separate 160×160 JPEG quality 0.50 derived from the
-// primary, intended for history cards.
 
 import * as ImageManipulator from 'expo-image-manipulator';
 import {
@@ -19,6 +8,7 @@ import {
   profileForTier,
   type CompressProfile,
 } from './imageProfiles';
+import { shouldSkipCompression, probeImage } from './imageProbe';
 
 export {
   PROFILE_PRO,
@@ -35,6 +25,13 @@ export interface CompressedImage {
   height: number;
   bytes: number;
   mime: string;
+  /**
+   * True when actual recompression occurred. False when we returned
+   * the input unchanged (already within profile, or compression failed).
+   */
+  compressed: boolean;
+  /** True when compression failed and we kept the original. */
+  failed: boolean;
 }
 
 function approxBase64Bytes(b64: string): number {
@@ -44,19 +41,40 @@ function approxBase64Bytes(b64: string): number {
   return Math.floor((payload.length * 3) / 4) - padding;
 }
 
+function ensureDataUri(b64OrDataUri: string, mime: string): string {
+  return b64OrDataUri.startsWith('data:') ? b64OrDataUri : `data:${mime};base64,${b64OrDataUri}`;
+}
+
 /**
- * Compress a base64/data-URI image using the given profile. Returns a
- * new data URI ready to be stored via MediaStore.
+ * Compress a base64/data-URI image using the given profile.
  *
- * If expo-image-manipulator fails for any reason, returns the input
- * untouched so ingestion still proceeds (we'd rather over-store than
- * fail the hunt).
+ * Skip-recompression guardrail: if the input is already a JPEG within
+ * the profile's max-dim and reasonable byte budget, we return the
+ * input untouched. This avoids double-compression artifacts and saves
+ * processing time.
  */
 export async function compressImage(
   input: string,
   profile: CompressProfile,
 ): Promise<CompressedImage> {
   const mime = 'image/jpeg';
+
+  // 1) Cheap header probe → maybe skip work entirely.
+  const skip = shouldSkipCompression(input, { maxDim: profile.maxDim });
+  if (skip.skip && skip.probe) {
+    const dataUri = ensureDataUri(input, mime);
+    return {
+      dataUri,
+      width: skip.probe.width,
+      height: skip.probe.height,
+      bytes: skip.probe.bytes,
+      mime,
+      compressed: false,
+      failed: false,
+    };
+  }
+
+  // 2) Otherwise: full compression pass.
   try {
     const result = await ImageManipulator.manipulateAsync(
       input,
@@ -68,29 +86,43 @@ export async function compressImage(
       },
     );
     const b64 = result.base64 || '';
-    const dataUri = b64.startsWith('data:') ? b64 : `data:${mime};base64,${b64}`;
+    const dataUri = ensureDataUri(b64, mime);
     return {
       dataUri,
       width: result.width,
       height: result.height,
       bytes: approxBase64Bytes(b64),
       mime,
+      compressed: true,
+      failed: false,
     };
   } catch {
+    // Compression failed → fall back to the original input. Caller can
+    // inspect `failed` to decide whether to skip dependent work
+    // (e.g. thumbnail generation).
+    const probe = probeImage(input);
     return {
-      dataUri: input,
-      width: 0,
-      height: 0,
-      bytes: approxBase64Bytes(input),
+      dataUri: input.startsWith('data:') ? input : ensureDataUri(input, mime),
+      width: probe?.width || 0,
+      height: probe?.height || 0,
+      bytes: probe?.bytes || approxBase64Bytes(input),
       mime,
+      compressed: false,
+      failed: true,
     };
   }
 }
 
 /**
- * Generate a small square-ish thumbnail from an input image. Used by
- * the history screen to avoid loading the full asset.
+ * Generate a small thumbnail. Returns `failed: true` when the input
+ * could not be processed — callers should treat this as "no thumbnail
+ * for this asset" and leave `thumbnailRef` undefined rather than
+ * pointing at a degraded copy.
  */
 export async function buildThumbnail(input: string): Promise<CompressedImage> {
-  return compressImage(input, PROFILE_THUMBNAIL);
+  const result = await compressImage(input, PROFILE_THUMBNAIL);
+  // Even on the "skip" path, a 160px asset wouldn't normally be skipped
+  // (most inputs are larger), so `compressed=false` here strongly
+  // implies a failure.
+  return result;
 }

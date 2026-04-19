@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:unit": "node --test --import tsx src/utils/__tests__/mapFocusMatching.test.ts src/media/__tests__/huntPersistence.test.ts src/media/__tests__/imageProcessor.test.ts"
+    "test:unit": "node --test --import tsx src/utils/__tests__/mapFocusMatching.test.ts src/media/__tests__/huntPersistence.test.ts src/media/__tests__/imageProcessor.test.ts src/media/__tests__/imageProbe.test.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",

@@ -109,13 +109,26 @@ export async function saveMedia(
   return asset;
 }
 
-/** Save a thumbnail for an existing primary asset. Best-effort. */
+/** Save a thumbnail for an existing primary asset. Best-effort.
+ *  Returns null if the thumbnail could not be generated — callers
+ *  leave `thumbnailRef` undefined so the UI falls back to the primary.
+ */
 async function saveThumbnailFor(
   primaryBase64: string,
   ctx: SaveMediaContext,
 ): Promise<MediaAsset | null> {
   try {
     const thumb = await buildThumbnail(primaryBase64);
+    if (thumb.failed) {
+      logClientEvent({
+        event: 'persist_degraded',
+        data: {
+          reason: 'thumbnail_build_failed',
+          hunt_id: ctx.huntId,
+        },
+      });
+      return null;
+    }
     const strategy = resolveStorageStrategy({ tier: ctx.tier ?? null });
     const adapter = adapterForStrategy(strategy);
     const stored = await adapter.save({ base64: thumb.dataUri, mime: thumb.mime });
@@ -130,7 +143,7 @@ async function saveThumbnailFor(
     logClientEvent({
       event: 'persist_degraded',
       data: {
-        reason: 'thumbnail_generation_failed',
+        reason: 'thumbnail_persist_failed',
         hunt_id: ctx.huntId,
         error: (err as any)?.message,
       },

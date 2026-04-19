@@ -65,9 +65,11 @@ production runtime.
 | `src/media/huntHydration.ts` | `hydrateHuntResult`, `saveHunt`, `listHistory`, lazy migration |
 | `src/media/huntSerialization.ts` | Pure: `stripBase64Images`, legacy detection, `buildPersistedAnalysis` |
 | `src/media/huntPersistence.ts` | Compatibility facade |
-| `src/media/imageProfiles.ts` | **NEW** — Pure: `PROFILE_PRO`, `PROFILE_CORE`, `PROFILE_THUMBNAIL`, `profileForTier()` |
-| `src/media/imageProcessor.ts` | **NEW** — Wraps `expo-image-manipulator`. `compressImage(input, profile)`, `buildThumbnail(input)` |
-| `src/media/__tests__/imageProcessor.test.ts` | **NEW** — Pure profile tests (Pro vs Core, defaults, case-insensitive) |
+| `src/media/imageProfiles.ts` | Pure: `PROFILE_PRO`, `PROFILE_CORE`, `PROFILE_THUMBNAIL`, `profileForTier()` |
+| `src/media/imageProcessor.ts` | Wraps `expo-image-manipulator`. `compressImage(input, profile)`, `buildThumbnail(input)`. Uses `imageProbe` to skip recompression when JPEG is already within budget; returns `failed: true` on ImageManipulator errors so callers can avoid persisting degraded thumbnails |
+| `src/media/imageProbe.ts` | Pure: cheap JPEG/PNG header probe (no decoding). `probeImage(input)` + `shouldSkipCompression(input, { maxDim, targetMaxBytes? })` |
+| `src/media/__tests__/imageProcessor.test.ts` | Pure profile tests (Pro vs Core, defaults, case-insensitive) |
+| `src/media/__tests__/imageProbe.test.ts` | Pure probe/guardrail tests: JPEG/PNG dimension parsing, skip-within-budget, oversized-width, not-jpeg, oversized-bytes, custom targetMaxBytes |
 | `src/media/__tests__/huntPersistence.test.ts` | 18 pure tests (+22 matching) — all mobile-oriented |
 
 ## Image processing on ingest
@@ -144,14 +146,24 @@ Lazy, on-access:
 
 ## Known limitations
 
+- **Thumbnails are pre-rendered** at ingest (160 px JPEG via
+  `PROFILE_THUMBNAIL`). If thumbnail generation or persistence fails,
+  `saveThumbnailFor` logs `persist_degraded` and returns `null`; the
+  primary asset's `thumbnailRef` stays undefined and history lists
+  fall back to the primary. No dangling thumbnail refs.
+- **Image compression on ingest is tier-aware** and skipped when the
+  input is already a JPEG within the profile's max-dim + a generous
+  per-megapixel byte budget. Recompression failures fall back to the
+  original input; the caller sees `failed: true` and skips dependent
+  work (e.g. thumbnail generation).
+- **FileSystem deletes are idempotent.** Both `remove(asset)` and
+  `removeAll()` use `FileSystem.deleteAsync(uri, { idempotent: true })`
+  wrapped in try/catch, so missing/partially-deleted files never break
+  the index.
 - **Pro cloud upload is a stub.** `CloudMediaStore` delegates to local
   FileSystem. Swap only `save()`/`resolve()` when the real service is
   provisioned.
-- **Thumbnails are not pre-rendered** (planned). History lists resolve
-  the primary asset on demand.
-- **No image compression on ingest** (planned). Larger images take more
-  device disk than necessary.
-- **Integration adapters are not unit-tested.** Pure logic has 40
+- **Integration adapters are not unit-tested.** Pure logic has 57
   tests; adapter I/O is exercised through the app.
 
 ## Extending
