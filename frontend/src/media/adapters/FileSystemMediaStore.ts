@@ -1,7 +1,9 @@
-// Raven Scout — Expo FileSystem-backed adapter (native).
+// Raven Scout — Expo FileSystem-backed adapter (native mobile).
+//
+// Primary media backend. Reads/writes live files under the app's
+// cache directory. No web guards — the app only runs on iOS/Android.
 
 import * as FileSystem from 'expo-file-system/legacy';
-import { Platform } from 'react-native';
 import type { MediaAsset, MediaInput } from '../types';
 import {
   approxBase64Bytes,
@@ -57,7 +59,6 @@ export class FileSystemMediaStore implements MediaStoreAdapter {
   }
 
   async resolve(asset: MediaAsset): Promise<string | null> {
-    if (Platform.OS === 'web') return null;
     if (!asset.uri) return null;
     try {
       const info = await FileSystem.getInfoAsync(asset.uri);
@@ -66,13 +67,11 @@ export class FileSystemMediaStore implements MediaStoreAdapter {
   }
 
   async remove(asset: MediaAsset): Promise<void> {
-    if (Platform.OS === 'web') return;
     if (!asset.uri) return;
     try { await FileSystem.deleteAsync(asset.uri, { idempotent: true }); } catch {}
   }
 
   async has(asset: MediaAsset): Promise<boolean> {
-    if (Platform.OS === 'web') return false;
     if (!asset.uri) return false;
     try {
       const info = await FileSystem.getInfoAsync(asset.uri);

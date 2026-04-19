@@ -1,17 +1,19 @@
-// Raven Scout — Media Store facade.
+// Raven Scout — Media Store facade (mobile-only).
 //
-// Public API the rest of the app uses. Delegates bytes to a platform
-// adapter selected by the storage strategy resolver, and keeps a
-// lightweight index (mediaIndex) for reverse lookup by imageId and
-// for `listMediaForHunt`.
+// Delegates byte persistence to a platform adapter chosen by the
+// storage strategy resolver:
+//   - Core / Trial → FileSystemMediaStore (Expo FileSystem)
+//   - Pro          → CloudMediaStore (stubbed; TODO(cloud-upload))
+//
+// A lightweight reverse-index (`mediaIndex`) lets callers look up
+// MediaAsset records by imageId and by huntId without scanning adapter
+// backends.
 
-import { Platform } from 'react-native';
 import type { MediaAsset, MediaInput, MediaRole, StorageType } from './types';
 import type { StrategyResult, Tier } from './storageStrategy';
 import { resolveStorageStrategy } from './storageStrategy';
 import type { MediaStoreAdapter } from './adapters/MediaStoreAdapter';
 import { FileSystemMediaStore } from './adapters/FileSystemMediaStore';
-import { IndexedDBMediaStore } from './adapters/IndexedDBMediaStore';
 import { CloudMediaStore } from './adapters/CloudMediaStore';
 import { DataUriLegacyMediaStore } from './adapters/DataUriLegacyMediaStore';
 import {
@@ -27,37 +29,38 @@ import { logClientEvent } from '../utils/clientLog';
 // ------------------------------ Adapter factory ------------------------------
 
 let _fsStore: FileSystemMediaStore | null = null;
-let _idbStore: IndexedDBMediaStore | null = null;
 let _legacyStore: DataUriLegacyMediaStore | null = null;
 let _cloudStore: CloudMediaStore | null = null;
 
 function getFs(): FileSystemMediaStore { return (_fsStore ||= new FileSystemMediaStore()); }
-function getIdb(): IndexedDBMediaStore { return (_idbStore ||= new IndexedDBMediaStore()); }
 function getLegacy(): DataUriLegacyMediaStore { return (_legacyStore ||= new DataUriLegacyMediaStore()); }
-function getLocalForPlatform(): MediaStoreAdapter {
-  return Platform.OS === 'web' ? getIdb() : getFs();
-}
+
 function getCloud(): CloudMediaStore {
-  if (!_cloudStore) _cloudStore = new CloudMediaStore({ fallback: getLocalForPlatform() });
+  if (!_cloudStore) _cloudStore = new CloudMediaStore({ fallback: getFs() });
   return _cloudStore;
 }
 
+/** Resolve the correct *write* adapter for a given strategy. */
 function adapterForStrategy(strategy: StrategyResult): MediaStoreAdapter {
   switch (strategy.preferredBackend) {
     case 'cloud': return getCloud();
-    case 'indexeddb': return getIdb();
     case 'filesystem': return getFs();
-    default: return getLocalForPlatform();
+    default: return getFs();
   }
 }
 
+/** Resolve the correct *read* adapter for an existing asset. */
 function adapterForAsset(asset: MediaAsset): MediaStoreAdapter {
   switch (asset.storageType) {
-    case 'indexeddb': return getIdb();
     case 'local-file': return getFs();
     case 'cloud': return getCloud();
     case 'data-uri-legacy': return getLegacy();
-    default: return getLocalForPlatform();
+    // `indexeddb` is quarantined — no production writes produce it; if a
+    // legacy v2 record from earlier web-preview testing surfaces, we
+    // still need to return *something*, so fall through to the legacy
+    // resolver which can at least return null cleanly.
+    case 'indexeddb': return getLegacy();
+    default: return getFs();
   }
 }
 
@@ -65,23 +68,17 @@ function adapterForAsset(asset: MediaAsset): MediaStoreAdapter {
 
 export interface SaveMediaContext {
   tier: Tier | null | undefined;
+  /** Accepted for compatibility; ignored — mobile only. */
   platform?: string;
   role?: MediaRole;
   huntId?: string;
 }
 
-/**
- * Persist image bytes to the correct backend (tier + platform aware).
- * Registers the resulting MediaAsset in the media index.
- */
 export async function saveMedia(
   input: MediaInput,
   ctx: SaveMediaContext,
 ): Promise<MediaAsset> {
-  const strategy = resolveStorageStrategy({
-    tier: ctx.tier ?? null,
-    platform: ctx.platform || Platform.OS,
-  });
+  const strategy = resolveStorageStrategy({ tier: ctx.tier ?? null });
   const adapter = adapterForStrategy(strategy);
   const stored = await adapter.save(input);
   const asset: MediaAsset = {
@@ -93,11 +90,6 @@ export async function saveMedia(
   return asset;
 }
 
-/**
- * Convenience: persist many base64 images for a hunt at once. Returns
- * the MediaAsset array in input order. Failures emit placeholders so
- * the caller's mediaRefs stay aligned.
- */
 export async function saveMediaBatch(
   images: string[],
   ctx: SaveMediaContext,
@@ -114,7 +106,7 @@ export async function saveMediaBatch(
       logClientEvent({
         event: 'persist_degraded',
         data: {
-          reason: 'saveMedia failed',
+          reason: 'saveMedia failed (device disk or adapter error)',
           hunt_id: ctx.huntId,
           index: i,
           error: (err as any)?.message,
@@ -122,23 +114,20 @@ export async function saveMediaBatch(
       });
     }
   }
-  await indexMediaBatch(out);  // no-op if already indexed; keeps batch atomic
+  await indexMediaBatch(out);
   return out;
 }
 
-/** Fetch a MediaAsset by its stable id. */
 export async function getMedia(imageId: string): Promise<MediaAsset | null> {
   return getMediaById(imageId);
 }
 
-/** Resolve an imageId to a displayable URI. Null if unresolvable. */
 export async function resolveMediaUri(imageId: string): Promise<string | null> {
   const asset = await getMediaById(imageId);
   if (!asset) return null;
   return resolveAsset(asset);
 }
 
-/** Resolve a MediaAsset directly (used by hydration). */
 export async function resolveAsset(asset: MediaAsset | null | undefined): Promise<string | null> {
   if (!asset) return null;
   try {
@@ -146,7 +135,6 @@ export async function resolveAsset(asset: MediaAsset | null | undefined): Promis
   } catch { return null; }
 }
 
-/** Delete media bytes and index entry. */
 export async function deleteMedia(imageId: string): Promise<void> {
   const asset = await getMediaById(imageId);
   if (asset) {
@@ -155,12 +143,10 @@ export async function deleteMedia(imageId: string): Promise<void> {
   await removeMediaFromIndex(imageId);
 }
 
-/** List all media associated with a given hunt. */
 export async function listMediaForHunt(huntId: string): Promise<MediaAsset[]> {
   return indexListForHunt(huntId);
 }
 
-/** Remove every media asset associated with a hunt. */
 export async function removeMediaForHunt(huntId: string): Promise<number> {
   const assets = await indexListForHunt(huntId);
   for (const a of assets) {
@@ -170,11 +156,6 @@ export async function removeMediaForHunt(huntId: string): Promise<number> {
   return removed.length;
 }
 
-/**
- * Legacy migration: take a list of inline base64 images, persist each
- * to the tier-correct backend, index them against `huntId`, and
- * return the resulting MediaAsset[] (in input order).
- */
 export async function migrateLegacyBase64Media(
   base64Images: string[],
   ctx: SaveMediaContext,

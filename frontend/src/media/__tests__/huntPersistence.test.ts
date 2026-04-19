@@ -1,5 +1,9 @@
-// Raven Scout — Tests for v3 split persistence pure logic.
+// Raven Scout — Tests for v3 split persistence pure logic (mobile).
 // Run with:  yarn test:unit
+//
+// SUPPORTED RUNTIME: native mobile (iOS / Android). There are no web
+// paths in the production storage layer; these tests verify tier →
+// strategy resolution + reference-only persisted shapes.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,31 +42,50 @@ function mkMetadata() {
 
 // ============================== storageStrategy ==============================
 
-test('storageStrategy — Pro → cloud-uri / cloud', () => {
-  const r = resolveStorageStrategy({ tier: 'pro', platform: 'web' });
+test('storageStrategy — Pro → cloud-uri / cloud (stubbed)', () => {
+  const r = resolveStorageStrategy({ tier: 'pro' });
   assert.equal(r.strategy, 'cloud-uri');
   assert.equal(r.preferredBackend, 'cloud');
 });
 
-test('storageStrategy — Core/web → local-uri / indexeddb', () => {
-  const r = resolveStorageStrategy({ tier: 'core', platform: 'web' });
+test('storageStrategy — Core → local-uri / filesystem', () => {
+  const r = resolveStorageStrategy({ tier: 'core' });
   assert.equal(r.strategy, 'local-uri');
-  assert.equal(r.preferredBackend, 'indexeddb');
+  assert.equal(r.preferredBackend, 'filesystem');
 });
 
-test('storageStrategy — Trial/ios → local-uri / filesystem', () => {
-  const r = resolveStorageStrategy({ tier: 'trial', platform: 'ios' });
+test('storageStrategy — Trial → local-uri / filesystem', () => {
+  const r = resolveStorageStrategy({ tier: 'trial' });
   assert.equal(r.strategy, 'local-uri');
   assert.equal(r.preferredBackend, 'filesystem');
 });
 
 test('storageStrategy — case-insensitive tier', () => {
-  assert.equal(resolveStorageStrategy({ tier: 'PRO', platform: 'web' }).strategy, 'cloud-uri');
+  assert.equal(resolveStorageStrategy({ tier: 'PRO' }).strategy, 'cloud-uri');
 });
 
 test('storageStrategy — missing tier defaults to trial behavior', () => {
-  const r = resolveStorageStrategy({ tier: null as any, platform: 'web' });
+  const r = resolveStorageStrategy({ tier: null as any });
   assert.equal(r.strategy, 'local-uri');
+  assert.equal(r.preferredBackend, 'filesystem');
+});
+
+test('storageStrategy — platform argument is accepted but ignored', () => {
+  // Even with platform='web' (not a production runtime), the resolver
+  // still returns the same tier-based mapping. This confirms tier is
+  // the only dimension.
+  const a = resolveStorageStrategy({ tier: 'pro', platform: 'web' });
+  const b = resolveStorageStrategy({ tier: 'pro', platform: 'ios' });
+  assert.equal(a.strategy, b.strategy);
+  assert.equal(a.preferredBackend, b.preferredBackend);
+});
+
+test('storageStrategy — no backend ever resolves to indexeddb', () => {
+  for (const tier of ['trial', 'core', 'pro']) {
+    const r = resolveStorageStrategy({ tier });
+    assert.notEqual(r.preferredBackend, 'indexeddb' as any,
+      `tier=${tier}: indexeddb backend is quarantined`);
+  }
 });
 
 // ============================== detection / stripping ==============================
@@ -70,7 +93,7 @@ test('storageStrategy — missing tier defaults to trial behavior', () => {
 test('isBase64DataUri detects data URIs', () => {
   assert.equal(isBase64DataUri('data:image/png;base64,AAAA'), true);
   assert.equal(isBase64DataUri('file:///tmp/a.jpg'), false);
-  assert.equal(isBase64DataUri('idb://assets/abc'), false);
+  assert.equal(isBase64DataUri('null'), false);
   assert.equal(isBase64DataUri(null), false);
   assert.equal(isBase64DataUri(undefined), false);
 });
@@ -122,7 +145,7 @@ test('isLegacyV2Hunt detects v2 combined records', () => {
     isLegacyV2Hunt({
       id: '1',
       schema: 'hunt.persisted.v2',
-      mediaAssets: [{ imageId: 'x', storageType: 'indexeddb', uri: 'idb://x/x', mime: 'image/jpeg', createdAt: '' }],
+      mediaAssets: [{ imageId: 'x', storageType: 'local-file', uri: 'file:///x', mime: 'image/jpeg', createdAt: '' }],
     }),
     true,
   );
@@ -171,8 +194,6 @@ test('buildPersistedAnalysis: stores NO MediaAsset inline', () => {
     storageStrategy: 'local-uri',
   });
   const json = JSON.stringify(analysis);
-  // mediaRefs are string ids; MediaAsset objects (with storageType, uri,
-  // etc.) must not appear in the persisted analysis record.
   assert.ok(!/\"storageType\":/.test(json), 'analysis record must not embed MediaAsset shapes');
   assert.ok(!/\"uri\":/.test(json));
   assert.ok(!/\"storageKey\":/.test(json));
@@ -207,7 +228,7 @@ test('extractMetadata: defaults null for missing optional fields', () => {
 
 test('invariant: buildPersistedAnalysis for every tier yields reference-only record', () => {
   for (const tier of ['trial', 'core', 'pro']) {
-    const strategy = resolveStorageStrategy({ tier, platform: 'web' });
+    const strategy = resolveStorageStrategy({ tier });
     const analysis = buildPersistedAnalysis({
       id: `h_${tier}`,
       metadata: mkMetadata(),
@@ -219,7 +240,6 @@ test('invariant: buildPersistedAnalysis for every tier yields reference-only rec
     const json = JSON.stringify(analysis);
     assert.ok(!/data:image\/[a-z]+;base64,/i.test(json),
       `tier=${tier}: persisted analysis must not contain base64`);
-    // Must reference media by id only
     assert.deepEqual(analysis.mediaRefs, ['img_1']);
   }
 });

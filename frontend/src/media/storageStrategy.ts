@@ -1,32 +1,33 @@
 // Raven Scout — Tier-aware storage strategy resolver.
 //
-// Single source of truth. Do not re-derive tier→strategy mappings
-// anywhere else in the codebase.
+// SUPPORTED RUNTIME: native mobile (iOS / Android) only.
+//
+// Tier mapping:
+//   Core / Trial → local-uri  (Expo FileSystem)
+//   Pro          → cloud-uri  (stubbed; backed by local FileSystem until
+//                  the real cloud upload ships via CloudMediaStore)
+//
+// Platform input is accepted for API symmetry but intentionally
+// ignored — there is only one production runtime.
 
 import type { StorageStrategy } from './types';
 
 export type Tier = 'trial' | 'core' | 'pro' | string;
-export type PlatformName = 'ios' | 'android' | 'web' | string;
 
 export interface StrategyInput {
   tier: Tier | null | undefined;
-  platform: PlatformName;
+  /** Accepted but ignored — mobile only. */
+  platform?: string;
 }
 
 export interface StrategyResult {
   strategy: StorageStrategy;
-  /**
-   * The *effective* backing store. For Pro we want 'cloud' long-term
-   * but currently fall back to local storage until real cloud upload
-   * is wired in (see CloudMediaStore TODO).
-   */
-  preferredBackend: 'filesystem' | 'indexeddb' | 'cloud' | 'none';
+  preferredBackend: 'filesystem' | 'cloud' | 'none';
   reason: string;
 }
 
 export function resolveStorageStrategy(input: StrategyInput): StrategyResult {
-  const { tier, platform } = input;
-  const normalizedTier = (tier || 'trial').toLowerCase();
+  const normalizedTier = (input.tier || 'trial').toLowerCase();
 
   if (normalizedTier === 'pro') {
     return {
@@ -36,14 +37,7 @@ export function resolveStorageStrategy(input: StrategyInput): StrategyResult {
     };
   }
 
-  // Core / Trial / unknown — local media storage.
-  if (platform === 'web') {
-    return {
-      strategy: 'local-uri',
-      preferredBackend: 'indexeddb',
-      reason: `${normalizedTier}-web`,
-    };
-  }
+  // Core / Trial / unknown — device-local file storage.
   return {
     strategy: 'local-uri',
     preferredBackend: 'filesystem',
