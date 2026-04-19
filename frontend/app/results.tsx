@@ -24,7 +24,7 @@ import { useNetwork } from '../src/hooks/useNetwork';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/analysisAdapter';
 import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
-import { useMapFocus, findClosestLocalOverlay } from '../src/utils/mapFocus';
+import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_WIDTH = SCREEN_WIDTH - 32;
@@ -171,11 +171,11 @@ export default function ResultsScreen() {
     setTimeout(() => {
       rootScrollRef.current?.scrollTo({ y: 0, animated: true });
     }, 50);
-    // Find nearest local overlay and mark selected to highlight the DraggableMarker
-    const { x_percent, y_percent } = focusState.target;
-    const nearest = findClosestLocalOverlay(x_percent, y_percent, overlays, 18);
-    if (nearest) {
-      setSelectedOverlay(nearest);
+    // Resolve nearest local overlay using the priority chain — this
+    // avoids false-linking when the best candidate is too weak.
+    const resolved = resolveLocalOverlayForFocus(focusState.target, overlays);
+    if (resolved) {
+      setSelectedOverlay(resolved as OverlayMarker);
     } else {
       setSelectedOverlay(null);
     }
