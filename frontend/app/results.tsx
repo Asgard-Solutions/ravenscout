@@ -25,7 +25,10 @@ import TacticalMapView from '../src/map/TacticalMapView';
 import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/analysisAdapter';
 import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
 import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
-import { getCurrentHuntEntry } from '../src/store/currentHuntStore';
+import { loadHunt as loadHuntFromStore } from '../src/media/huntPersistence';
+import { resolveAsset } from '../src/media/mediaStore';
+import type { RuntimeHunt } from '../src/media/types';
+import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -222,51 +225,54 @@ export default function ResultsScreen() {
     };
   }, [params.huntId]);
 
+  const { user } = useAuth();
+
   const loadHuntAsync = async (): Promise<{ hunt: HuntRecord; warning: string | null } | null> => {
     const huntId = params.huntId as string | undefined;
     if (!huntId) return null;
 
-    // Priority 1: in-memory store (survives navigation this session even
-    // when AsyncStorage/localStorage writes failed).
-    const memoryEntry = getCurrentHuntEntry(huntId);
-    if (memoryEntry) {
-      const warning = memoryEntry.persistFailed
-        ? 'Session-only: this hunt was not saved (storage full). Take notes before leaving.'
-        : null;
-      if (memoryEntry.persistFailed) {
-        logClientEvent({
-          event: 'hunt_loaded_from_memory_fallback',
-          data: { hunt_id: huntId, persist_error: memoryEntry.persistError },
-        });
+    const res = await loadHuntFromStore(huntId, (user as any)?.tier);
+    if (!res) return null;
+    const runtime = res.hunt as RuntimeHunt & any;
+
+    // Resolve each MediaAsset into a displayable URI (file://, blob:,
+    // https://, or data:...). Use any runtime-provided display URIs first
+    // (these are kept fresh for the current session after analysis).
+    const assets = runtime.mediaAssets || [];
+    const preExisting: (string | null)[] = Array.isArray(runtime.mediaDisplayUris)
+      ? runtime.mediaDisplayUris
+      : [];
+    const resolved: string[] = [];
+    for (let i = 0; i < assets.length; i++) {
+      const pre = preExisting[i];
+      if (typeof pre === 'string' && pre.length > 0) {
+        resolved.push(pre);
+      } else {
+        const uri = await resolveAsset(assets[i]);
+        resolved.push(uri || '');
       }
-      return { hunt: memoryEntry.record as HuntRecord, warning };
     }
 
-    // Priority 2: hunt_history list
-    try {
-      const data = await AsyncStorage.getItem('hunt_history');
-      if (data) {
-        const history: HuntRecord[] = JSON.parse(data);
-        const found = history.find(h => h.id === huntId);
-        if (found) return { hunt: found, warning: null };
-      }
-    } catch {}
+    // Shape the record into the legacy HuntRecord surface the rest of
+    // this screen already consumes (mapImage + mapImages + result + …)
+    // so we don't have to rewrite the whole file.
+    const primaryIdx = Math.max(0, Math.min(resolved.length - 1, runtime.primaryMediaIndex || 0));
+    const adapted: HuntRecord & { primaryMapIndex?: number } = {
+      id: runtime.id,
+      species: runtime.species,
+      speciesName: runtime.speciesName,
+      date: runtime.date,
+      timeWindow: runtime.timeWindow,
+      windDirection: runtime.windDirection,
+      mapImage: resolved[primaryIdx] || undefined,
+      mapImages: resolved,
+      primaryMapIndex: primaryIdx,
+      result: runtime.result,
+      createdAt: runtime.createdAt,
+      locationCoords: runtime.locationCoords ?? undefined,
+    };
 
-    // Priority 3: current_hunt fallback slot
-    try {
-      const current = await AsyncStorage.getItem('current_hunt');
-      if (current) {
-        const parsed: HuntRecord = JSON.parse(current);
-        if (parsed.id === huntId) return { hunt: parsed, warning: null };
-      }
-    } catch {}
-
-    // Not found anywhere — emit telemetry so we can spot regressions.
-    logClientEvent({
-      event: 'hunt_not_found',
-      data: { hunt_id: huntId, reason: 'missing_from_all_sources' },
-    });
-    return null;
+    return { hunt: adapted, warning: res.warningMessage };
   };
 
   // Legacy: kept in case retry button needs a plain loader

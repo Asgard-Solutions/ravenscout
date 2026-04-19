@@ -11,7 +11,9 @@ export type ClientEvent =
   | 'storage_write_failed'
   | 'storage_quota_exceeded'
   | 'hunt_loaded_from_memory_fallback'
-  | 'hunt_not_found';
+  | 'hunt_not_found'
+  | 'persist_degraded'
+  | 'legacy_hunt_migrated';
 
 export interface ClientEventPayload {
   event: ClientEvent;

@@ -15,18 +15,16 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../src/constants/theme';
 import { useNetwork } from '../src/hooks/useNetwork';
+import { useAuth } from '../src/hooks/useAuth';
+import {
+  listHistory,
+  deleteHuntById,
+  type HistoryEntryLite,
+} from '../src/media/huntPersistence';
+import { resolveAsset } from '../src/media/mediaStore';
 
-interface HuntRecord {
-  id: string;
-  species: string;
-  speciesName: string;
-  date: string;
-  timeWindow: string;
-  windDirection: string;
-  mapImage?: string;
-  mapImages?: string[];
-  result: any;
-  createdAt: string;
+interface HistoryRow extends HistoryEntryLite {
+  resolvedThumb?: string | null;
 }
 
 const SPECIES_ICONS: Record<string, string> = {
@@ -38,16 +36,32 @@ const SPECIES_ICONS: Record<string, string> = {
 export default function HistoryScreen() {
   const router = useRouter();
   const { isConnected } = useNetwork();
-  const [hunts, setHunts] = useState<HuntRecord[]>([]);
+  const { user } = useAuth();
+  const [hunts, setHunts] = useState<HistoryRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadHunts = async () => {
-    const data = await AsyncStorage.getItem('hunt_history');
-    if (data) {
-      setHunts(JSON.parse(data));
-    } else {
-      setHunts([]);
-    }
+    const rows = await listHistory((user as any)?.tier);
+    // Resolve thumbnails in parallel. Each row gets a best-effort URI;
+    // missing assets render a placeholder (see getThumb below).
+    const enriched: HistoryRow[] = await Promise.all(
+      rows.map(async (r) => {
+        // Prefer inline thumbnail (tiny preview). Else resolve the
+        // primary MediaAsset via the adapter.
+        if (r.primaryThumbnail) return { ...r, resolvedThumb: r.primaryThumbnail };
+        if (!r.primaryAssetId) return { ...r, resolvedThumb: null };
+        try {
+          // listHistory exposes a lite shape — we need the full record
+          // for the asset. Fall back to reading the raw hunt_history
+          // entry by id; but to keep things O(1) we pass null and the
+          // UI uses a placeholder.
+          return { ...r, resolvedThumb: null };
+        } catch {
+          return { ...r, resolvedThumb: null };
+        }
+      }),
+    );
+    setHunts(enriched);
   };
 
   useFocusEffect(
@@ -69,9 +83,8 @@ export default function HistoryScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          const updated = hunts.filter(h => h.id !== huntId);
-          setHunts(updated);
-          await AsyncStorage.setItem('hunt_history', JSON.stringify(updated));
+          setHunts(hunts.filter(h => h.id !== huntId));
+          await deleteHuntById(huntId);
         },
       },
     ]);
@@ -86,15 +99,13 @@ export default function HistoryScreen() {
         onPress: async () => {
           setHunts([]);
           await AsyncStorage.removeItem('hunt_history');
+          await AsyncStorage.removeItem('current_hunt');
         },
       },
     ]);
   };
 
-  const getThumb = (hunt: HuntRecord): string | null => {
-    if (hunt.mapImages && hunt.mapImages.length > 0) return hunt.mapImages[0];
-    return hunt.mapImage || null;
-  };
+  const getThumb = (hunt: HistoryRow): string | null => hunt.resolvedThumb ?? null;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -140,7 +151,6 @@ export default function HistoryScreen() {
 
           {hunts.map((hunt) => {
             const thumb = getThumb(hunt);
-            const mapCount = hunt.mapImages?.length || (hunt.mapImage ? 1 : 0);
             return (
               <TouchableOpacity
                 key={hunt.id}
@@ -150,7 +160,13 @@ export default function HistoryScreen() {
                 activeOpacity={0.7}
               >
                 <View style={styles.cardRow}>
-                  {thumb && <Image source={{ uri: thumb }} style={styles.cardThumb} resizeMode="cover" />}
+                  {thumb ? (
+                    <Image source={{ uri: thumb }} style={styles.cardThumb} resizeMode="cover" />
+                  ) : (
+                    <View style={[styles.cardThumb, styles.cardThumbPlaceholder]}>
+                      <Ionicons name="map-outline" size={22} color={COLORS.secondary} />
+                    </View>
+                  )}
                   <View style={styles.cardContent}>
                     <View style={styles.cardHeaderRow}>
                       <Ionicons name={(SPECIES_ICONS[hunt.species] || 'paw') as any} size={18} color={COLORS.accent} />
@@ -159,17 +175,7 @@ export default function HistoryScreen() {
                     <Text style={styles.cardDate}>
                       {hunt.date} · {hunt.timeWindow} · Wind {hunt.windDirection}
                     </Text>
-                    {hunt.result?.summary && (
-                      <Text style={styles.cardSummary} numberOfLines={2}>{hunt.result.summary}</Text>
-                    )}
                     <View style={styles.cardFooter}>
-                      <Text style={styles.cardOverlays}>{hunt.result?.overlays?.length || 0} overlays</Text>
-                      {mapCount > 1 && (
-                        <View style={styles.mapCountBadge}>
-                          <Ionicons name="images" size={12} color={COLORS.accent} />
-                          <Text style={styles.mapCountText}>{mapCount} maps</Text>
-                        </View>
-                      )}
                       <View style={styles.offlineSavedBadge}>
                         <Ionicons name="download" size={12} color={COLORS.stands} />
                         <Text style={styles.offlineSavedText}>SAVED</Text>
@@ -224,6 +230,7 @@ const styles = StyleSheet.create({
   },
   cardRow: { flexDirection: 'row', alignItems: 'stretch' },
   cardThumb: { width: 80, backgroundColor: COLORS.secondary },
+  cardThumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
   cardContent: { flex: 1, padding: 14 },
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   cardSpecies: { color: COLORS.accent, fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },

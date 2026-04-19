@@ -23,8 +23,7 @@ import { COLORS, SPECIES, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
 import TacticalMapView from '../src/map/TacticalMapView';
-import { setCurrentHunt } from '../src/store/currentHuntStore';
-import { logClientEvent } from '../src/utils/clientLog';
+import { saveHunt } from '../src/media/huntPersistence';
 
 const { width } = Dimensions.get('window');
 const STEPS = ['Species', 'Maps', 'Conditions', 'Review'];
@@ -340,65 +339,31 @@ export default function SetupScreen() {
         const overlaysWithIds = (data.result.overlays || []).map((o: any, i: number) => ({
           ...o, id: `ai-${i}-${Date.now()}`, isCustom: false,
         }));
-        const huntRecord = {
-          id: data.result.id, species: selectedSpecies,
+        const enrichedResult = { ...data.result, overlays: overlaysWithIds };
+
+        // Persist via the tier-aware media + persistence layer. This
+        // ingests images into the right backend (FileSystem / IndexedDB
+        // / cloud-stub), strips base64 from the record, applies the
+        // storage budget, and updates the in-memory session store.
+        await saveHunt({
+          tier: (user as any)?.tier,
+          analysisResult: enrichedResult,
+          species: selectedSpecies,
           speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
-          date: huntDate, timeWindow, windDirection, temperature, propertyType, region,
-          mapImages, mapImage: mapImages[primaryMapIndex],
-          primaryMapIndex,
-          result: { ...data.result, overlays: overlaysWithIds },
-          weatherData, locationCoords,
-          createdAt: new Date().toISOString(),
-        };
-
-        // 1) Try to persist to AsyncStorage (best-effort).
-        let persisted = false;
-        let persistError: string | null = null;
-        try {
-          const existing = await AsyncStorage.getItem('hunt_history');
-          let history = existing ? JSON.parse(existing) : [];
-          if (history.length > 3) history = history.slice(0, 3);
-          history.unshift(huntRecord);
-          await AsyncStorage.setItem('hunt_history', JSON.stringify(history));
-          persisted = true;
-        } catch (storageErr: any) {
-          persistError = storageErr?.message || String(storageErr);
-          // Fallback: clear history, try storing just the current hunt.
-          try {
-            await AsyncStorage.removeItem('hunt_history');
-            await AsyncStorage.setItem('current_hunt', JSON.stringify(huntRecord));
-            persisted = true;
-          } catch (fallbackErr: any) {
-            persistError = `${persistError} | fallback: ${fallbackErr?.message || fallbackErr}`;
-          }
-        }
-
-        // 2) ALWAYS stash in the in-memory store — this guarantees
-        //    results.tsx can render the hunt this session even if both
-        //    AsyncStorage writes failed.
-        setCurrentHunt(huntRecord.id, huntRecord, {
-          persistFailed: !persisted,
-          persistError,
+          date: huntDate,
+          timeWindow,
+          windDirection,
+          temperature,
+          propertyType,
+          region,
+          weatherData,
+          locationCoords,
+          base64Images: mapImages,
+          primaryMediaIndex: primaryMapIndex,
         });
 
-        if (!persisted) {
-          // Telemetry: track how often we hit this path.
-          const approxSize = (() => {
-            try { return JSON.stringify(huntRecord).length; } catch { return -1; }
-          })();
-          logClientEvent({
-            event: 'storage_write_failed',
-            data: {
-              hunt_id: huntRecord.id,
-              approx_payload_bytes: approxSize,
-              image_count: mapImages.length,
-              error: persistError,
-            },
-          });
-        }
-
         if (refreshUser) refreshUser();
-        router.push({ pathname: '/results', params: { huntId: huntRecord.id } });
+        router.push({ pathname: '/results', params: { huntId: data.result.id } });
       } else {
         const msg = data.error || data.message || 'Analysis failed. Please try again.';
         const isLimitError = msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('upgrade');

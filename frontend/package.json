@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:unit": "node --test --import tsx src/utils/__tests__/mapFocusMatching.test.ts"
+    "test:unit": "node --test --import tsx src/utils/__tests__/mapFocusMatching.test.ts src/media/__tests__/huntPersistence.test.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
@@ -24,6 +24,7 @@
     "expo": "54.0.33",
     "expo-blur": "~15.0.8",
     "expo-constants": "~18.0.13",
+    "expo-file-system": "~19.0.21",
     "expo-font": "~14.0.11",
     "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",
