@@ -472,8 +472,10 @@ SPECIES_DATA = {
 # ============================================================
 # AI ANALYSIS (unchanged)
 # ============================================================
-async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial") -> AnalysisResult:
+async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial") -> dict:
     from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    from prompt_builder import assemble_system_prompt, assemble_user_prompt, get_repair_prompt, get_evidence_level
+    from schema_validator import parse_llm_response, validate_and_normalize, convert_v2_to_v1
 
     api_key = os.environ.get("EMERGENT_LLM_KEY")
     if not api_key:
@@ -483,119 +485,86 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
     if not species:
         raise ValueError(f"Unknown species: {conditions.animal}")
 
-    species_rules = "\n".join(f"- {r}" for r in species["behavior_rules"])
+    # Determine actual images to send (tier-gated)
+    images_to_send = [map_image_base64]
+    if tier == "pro" and additional_images:
+        images_to_send.extend(additional_images)
 
-    # Pro users with multiple images get enhanced context
-    has_extra_images = tier == "pro" and additional_images and len(additional_images) > 0
-    multi_image_note = ""
-    if has_extra_images:
-        multi_image_note = f"""
+    actual_image_count = len(images_to_send)
+    conditions_dict = conditions.model_dump()
 
-MULTI-IMAGE ANALYSIS (Pro):
-You are provided {len(additional_images) + 1} images total. The FIRST image is the PRIMARY map — all overlay coordinates (x_percent, y_percent) MUST be placed relative to this first image only.
-The additional {len(additional_images)} image(s) are reference views of the same area (e.g., satellite, topo, street). Use them to gain additional terrain context (vegetation, elevation, water, roads) but place all overlays on the primary image."""
+    # Build prompts using modular builder
+    system_prompt = assemble_system_prompt(
+        animal=conditions.animal,
+        conditions=conditions_dict,
+        species_data=SPECIES_DATA,
+        image_count=actual_image_count,
+        tier=tier,
+    )
+    user_prompt_text = assemble_user_prompt(
+        species_name=species["name"],
+        conditions=conditions_dict,
+        image_count=actual_image_count,
+    )
 
-    system_prompt = f"""You are Raven Scout, an expert hunting strategist AI. You analyze map imagery and provide tactical hunting setup recommendations.
+    logger.info(f"Prompt built: tier={tier}, images={actual_image_count}, species={conditions.animal}, schema=v2")
 
-You MUST respond with valid JSON only. No markdown, no code blocks, no extra text.
+    # Assemble image contents with labels
+    image_contents = []
+    for idx, img in enumerate(images_to_send):
+        clean = img.split(",", 1)[1] if "," in img else img
+        image_contents.append(ImageContent(image_base64=clean))
 
-Species: {species['name']}
-Species Behavior Rules:
-{species_rules}
-
-Hunt Conditions:
-- Date: {conditions.hunt_date}
-- Time Window: {conditions.time_window}
-- Wind Direction: {conditions.wind_direction}
-- Temperature: {conditions.temperature or 'Not specified'}
-- Precipitation: {conditions.precipitation or 'None'}
-- Property Type: {conditions.property_type or 'public'}
-- Region: {conditions.region or 'Not specified'}
-
-OVERLAY COLOR CODING:
-- "stand" (Forest Green) = Recommended stand/blind placement
-- "corridor" (Amber/Orange) = Likely animal travel corridors
-- "access_route" (Sky Blue) = Suggested access routes for the hunter
-- "avoid" (Deep Red) = Areas to avoid (wind exposure, high visibility, pressure)
-{multi_image_note}
-Analyze the map image and respond with this exact JSON structure:
-{{
-  "overlays": [
-    {{
-      "type": "stand|corridor|access_route|avoid",
-      "label": "Short descriptive label",
-      "x_percent": 0-100,
-      "y_percent": 0-100,
-      "width_percent": null or 5-30 for zones,
-      "height_percent": null or 5-30 for zones,
-      "reasoning": "Brief explanation why this spot matters",
-      "confidence": "low|medium|high"
-    }}
-  ],
-  "summary": "2-3 sentence overview of the recommended hunt plan",
-  "top_setups": ["Setup 1 description", "Setup 2 description", "Setup 3 description"],
-  "wind_notes": "Wind analysis and how it affects the setup",
-  "best_time": "Recommended time based on conditions and species",
-  "key_assumptions": ["Assumption 1", "Assumption 2"],
-  "species_tips": ["Tip 1 for this species in these conditions", "Tip 2"]
-}}
-
-Provide 3-6 overlay markers covering stands, corridors, access routes, and avoid zones. Place them at realistic positions on the map. Each x_percent and y_percent should be between 5 and 95."""
+    # Add image labels to user prompt if multi-image
+    if actual_image_count > 1:
+        labels = ["Image 1: PRIMARY coordinate reference map"]
+        for i in range(1, actual_image_count):
+            labels.append(f"Image {i + 1}: Supporting reference view")
+        user_prompt_text = "\n".join(labels) + "\n\n" + user_prompt_text
 
     session_id = str(uuid.uuid4())
     chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_prompt)
     chat.with_model("openai", "gpt-5.2")
 
-    clean_base64 = map_image_base64
-    if "," in clean_base64:
-        clean_base64 = clean_base64.split(",", 1)[1]
-
-    image_contents = [ImageContent(image_base64=clean_base64)]
-
-    # Pro users: attach additional reference images
-    if has_extra_images:
-        for extra_img in additional_images:
-            extra_clean = extra_img
-            if "," in extra_clean:
-                extra_clean = extra_clean.split(",", 1)[1]
-            image_contents.append(ImageContent(image_base64=extra_clean))
-
-    user_msg_text = f"Analyze this map for a {species['name']} hunt. Conditions: {conditions.time_window} hunt, wind from {conditions.wind_direction}. Provide tactical overlay recommendations as JSON."
-    if has_extra_images:
-        user_msg_text = f"Analyze these {len(image_contents)} map images for a {species['name']} hunt. The FIRST image is the PRIMARY — place all overlay coordinates on it. Additional images are reference views of the same area. Conditions: {conditions.time_window} hunt, wind from {conditions.wind_direction}. Provide tactical overlay recommendations as JSON."
-
-    user_message = UserMessage(
-        text=user_msg_text,
-        file_contents=image_contents
-    )
-
+    user_message = UserMessage(text=user_prompt_text, file_contents=image_contents)
     response = await chat.send_message(user_message)
-    logger.info(f"AI Response received, length: {len(response)}")
+    logger.info(f"AI response received: len={len(response)}")
 
-    response_text = response.strip()
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        lines = [line for line in lines if not line.startswith("```")]
-        response_text = "\n".join(lines)
+    # Parse and validate
+    parse_ok, parsed, parse_err = parse_llm_response(response)
 
-    parsed = json.loads(response_text)
+    if not parse_ok:
+        logger.warning(f"Parse failed: {parse_err}. Attempting repair...")
+        repair_prompt = get_repair_prompt(response)
+        repair_msg = UserMessage(text=repair_prompt)
+        repair_response = await chat.send_message(repair_msg)
+        parse_ok, parsed, parse_err = parse_llm_response(repair_response)
+        if not parse_ok:
+            raise ValueError(f"LLM response repair failed: {parse_err}")
+        logger.info("Repair succeeded")
 
-    overlays = []
-    for o in parsed.get("overlays", []):
-        overlays.append(OverlayMarker(
-            type=o.get("type", "stand"), label=o.get("label", "Marker"),
-            x_percent=float(o.get("x_percent", 50)), y_percent=float(o.get("y_percent", 50)),
-            width_percent=float(o["width_percent"]) if o.get("width_percent") else None,
-            height_percent=float(o["height_percent"]) if o.get("height_percent") else None,
-            reasoning=o.get("reasoning", ""), confidence=o.get("confidence", "medium")
-        ))
+    # Check schema version
+    schema_ver = parsed.get("schema_version")
+    if schema_ver == "v2":
+        is_valid, validation_errors, normalized = validate_and_normalize(parsed)
+        if validation_errors:
+            logger.info(f"Validation normalized {len(validation_errors)} issues: {validation_errors[:3]}")
 
-    return AnalysisResult(
-        overlays=overlays, summary=parsed.get("summary", "Analysis complete."),
-        top_setups=parsed.get("top_setups", []), wind_notes=parsed.get("wind_notes", ""),
-        best_time=parsed.get("best_time", ""), key_assumptions=parsed.get("key_assumptions", []),
-        species_tips=parsed.get("species_tips", [])
-    )
+        # Return both v2 (full) and v1 (legacy compat)
+        v1_compat = convert_v2_to_v1(normalized)
+        return {
+            "schema_version": "v2",
+            "v2": normalized,
+            "v1": v1_compat,
+        }
+    else:
+        # Old-style v1 response — wrap it
+        logger.info("LLM returned v1-style response, wrapping")
+        return {
+            "schema_version": "v1",
+            "v2": None,
+            "v1": parsed,
+        }
 
 
 # ============================================================
@@ -617,7 +586,7 @@ async def get_species():
     return {"species": species_list}
 
 
-@api_router.post("/analyze-hunt", response_model=AnalyzeResponse)
+@api_router.post("/analyze-hunt")
 async def analyze_hunt(request: Request):
     """AI analysis endpoint - ENFORCES subscription limits."""
     body = await request.json()
@@ -639,7 +608,7 @@ async def analyze_hunt(request: Request):
 
     try:
         logger.info(f"Analyzing hunt for {analyze_req.conditions.animal} (user: {user['user_id']}, tier: {tier_key}, images: 1+{len(analyze_req.additional_images or [])})")
-        result = await analyze_map_with_ai(
+        raw_result = await analyze_map_with_ai(
             analyze_req.conditions,
             analyze_req.map_image_base64,
             additional_images=analyze_req.additional_images if tier_key == "pro" else None,
@@ -652,12 +621,37 @@ async def analyze_hunt(request: Request):
             await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
         )
 
-        return AnalyzeResponse(success=True, result=result, usage=updated_usage)
+        # Build response: include both v1 compat and v2 full data
+        result_id = str(uuid.uuid4())
+        v1_data = raw_result.get("v1", {})
+
+        # v1 compat for frontend overlay rendering
+        result = {
+            "id": result_id,
+            "schema_version": raw_result.get("schema_version", "v1"),
+            "overlays": v1_data.get("overlays", []),
+            "summary": v1_data.get("summary", ""),
+            "top_setups": v1_data.get("top_setups", []),
+            "wind_notes": v1_data.get("wind_notes", ""),
+            "best_time": v1_data.get("best_time", ""),
+            "key_assumptions": v1_data.get("key_assumptions", []),
+            "species_tips": v1_data.get("species_tips", []),
+        }
+
+        # Attach v2 data if available
+        if raw_result.get("v2"):
+            result["v2"] = raw_result["v2"]
+
+        return JSONResponse({
+            "success": True,
+            "result": result,
+            "usage": updated_usage,
+        })
     except json.JSONDecodeError:
-        return AnalyzeResponse(success=False, error="Failed to parse AI response. Please try again.")
+        return JSONResponse({"success": False, "error": "Failed to parse AI response. Please try again.", "usage": None})
     except Exception as e:
         logger.error(f"Analysis error: {e}")
-        return AnalyzeResponse(success=False, error=str(e))
+        return JSONResponse({"success": False, "error": str(e), "usage": None})
 
 
 # ============================================================
