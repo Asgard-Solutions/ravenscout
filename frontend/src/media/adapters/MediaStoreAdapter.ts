@@ -1,10 +1,24 @@
 // Raven Scout — Storage adapter interface.
 
-import type { MediaAsset, MediaInput, StorageType } from '../types';
+import type { MediaAsset, MediaInput, MediaRole, StorageType } from '../types';
+
+/**
+ * Optional context passed down to adapters on write. Adapters that
+ * need it (e.g. cloud uploads that bake huntId/role into the storage
+ * key) may consume it; adapters that don't (local filesystem) can
+ * safely ignore it.
+ *
+ * Adding a new optional argument keeps backwards compatibility with
+ * pre-v3.1 adapters.
+ */
+export interface MediaStoreSaveContext {
+  huntId?: string;
+  role?: MediaRole;
+}
 
 export interface MediaStoreAdapter {
   readonly id: StorageType;
-  save(input: MediaInput): Promise<MediaAsset>;
+  save(input: MediaInput, ctx?: MediaStoreSaveContext): Promise<MediaAsset>;
   resolve(asset: MediaAsset): Promise<string | null>;
   remove(asset: MediaAsset): Promise<void>;
   has(asset: MediaAsset): Promise<boolean>;

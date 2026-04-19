@@ -12,7 +12,7 @@ has been removed from the production path.
 | Bundler | Metro via Expo Router |
 | Device storage | Expo FileSystem (`cacheDirectory`) |
 | Key/value store | AsyncStorage (backed by native secure storage) |
-| Cloud (Pro) | **Stubbed** — local FileSystem today, one-file swap when real upload ships |
+| Cloud (Pro) | **AWS S3 + pre-signed URLs** — direct device → S3 upload via Expo FileSystem `uploadAsync` |
 | Web path | Not supported — development previews only |
 
 ## Two-store split architecture

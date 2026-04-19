@@ -55,6 +55,14 @@ export interface MediaAsset {
    * Only set on `role='primary'` assets.
    */
   thumbnailRef?: string;
+  /**
+   * Pro-tier fallback flag. Set to true when a Pro user's image
+   * could not be uploaded to the cloud (offline, presign failure, etc.)
+   * and the bytes are being retained on the device as a temporary
+   * fallback. The media record is still usable — the UI should render
+   * normally — and a future sync pass can retry the upload.
+   */
+  pendingCloudSync?: boolean;
 }
 
 export interface MediaInput {

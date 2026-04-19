@@ -382,6 +382,159 @@ async def get_tiers():
 
 
 # ============================================================
+# CLOUD MEDIA (Pro tier — AWS S3 pre-signed upload flow)
+# ============================================================
+# Storage key format: hunts/{userId}/{huntId}/{role}/{imageId}.{ext}
+# The mobile client never sees AWS credentials — it asks us to mint a
+# short-lived signed URL and uploads the bytes directly to S3.
+import s3_service  # noqa: E402
+
+
+_ALLOWED_MEDIA_EXT = {"jpg", "jpeg", "png", "webp"}
+_ALLOWED_MEDIA_ROLES = {"primary", "context", "thumbnail"}
+
+
+class PresignUploadBody(BaseModel):
+    imageId: str = Field(..., min_length=1, max_length=128)
+    huntId: Optional[str] = Field(None, max_length=128)
+    role: str = Field("primary")
+    mime: str = Field("image/jpeg")
+    extension: str = Field("jpg")
+
+
+class PresignDownloadBody(BaseModel):
+    storageKey: str = Field(..., min_length=1)
+
+
+class MediaDeleteBody(BaseModel):
+    storageKey: str = Field(..., min_length=1)
+
+
+def _require_cloud_media_user(user: dict) -> None:
+    """Only Pro users may use cloud media storage."""
+    tier_key = user.get("tier", "trial")
+    if tier_key != "pro":
+        raise HTTPException(
+            status_code=403,
+            detail="Cloud media storage is a Pro tier feature.",
+        )
+
+
+def _guard_storage_key_owner(user: dict, key: str) -> None:
+    """Ensure the storage key belongs to this user.
+
+    Key format: hunts/{userId}/{huntId}/{role}/{imageId}.{ext}
+    Rejects path traversal and cross-user access.
+    """
+    if ".." in key or key.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid storage key")
+    parts = key.split("/")
+    if len(parts) < 2 or parts[0] != "hunts":
+        raise HTTPException(status_code=400, detail="Invalid storage key")
+    owner = parts[1]
+    if owner != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Storage key does not belong to caller")
+
+
+@api_router.post("/media/presign-upload")
+async def presign_media_upload(body: PresignUploadBody, request: Request):
+    """Mint a short-lived pre-signed PUT URL for a Pro user to upload
+    a single compressed image directly to S3.
+
+    Request is authenticated — key is scoped to the caller's user_id.
+    """
+    user = await get_current_user(request)
+    _require_cloud_media_user(user)
+
+    role = (body.role or "primary").lower()
+    if role not in _ALLOWED_MEDIA_ROLES:
+        raise HTTPException(status_code=400, detail=f"role must be one of {sorted(_ALLOWED_MEDIA_ROLES)}")
+    ext = (body.extension or "jpg").lstrip(".").lower()
+    if ext == "jpeg":
+        ext = "jpg"
+    if ext not in _ALLOWED_MEDIA_EXT:
+        raise HTTPException(status_code=400, detail=f"extension must be one of {sorted(_ALLOWED_MEDIA_EXT)}")
+
+    mime = body.mime or "image/jpeg"
+    if not mime.startswith("image/"):
+        raise HTTPException(status_code=400, detail="mime must be an image/* type")
+
+    if not s3_service.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Cloud media storage is not configured on this server.",
+        )
+
+    key = s3_service.build_storage_key(
+        user_id=user["user_id"],
+        hunt_id=body.huntId,
+        role=role,
+        image_id=body.imageId,
+        extension=ext,
+    )
+
+    try:
+        upload_url, asset_url, expires_in = s3_service.presign_upload(key, mime)
+    except Exception as e:
+        logger.error(f"presign_upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate upload URL")
+
+    return {
+        "uploadUrl": upload_url,
+        "assetUrl": asset_url,
+        "storageKey": key,
+        "expiresIn": expires_in,
+        "privateDelivery": s3_service.is_private_delivery(),
+        "mime": mime,
+    }
+
+
+@api_router.post("/media/presign-download")
+async def presign_media_download(body: PresignDownloadBody, request: Request):
+    """Mint a short-lived pre-signed GET URL for a Pro user's asset.
+
+    Only needed when the bucket is private (no CloudFront/public base
+    configured). Keys are checked to ensure they belong to the caller.
+    """
+    user = await get_current_user(request)
+    _require_cloud_media_user(user)
+    _guard_storage_key_owner(user, body.storageKey)
+    if not s3_service.is_configured():
+        raise HTTPException(status_code=503, detail="Cloud media storage is not configured")
+
+    try:
+        download_url, expires_in = s3_service.presign_download(body.storageKey)
+    except Exception as e:
+        logger.error(f"presign_download failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate download URL")
+
+    return {
+        "downloadUrl": download_url,
+        "expiresIn": expires_in,
+    }
+
+
+@api_router.post("/media/delete")
+async def delete_media_object(body: MediaDeleteBody, request: Request):
+    """Best-effort cloud delete for a single object.
+
+    Key ownership is enforced; the endpoint is idempotent and returns
+    `success=True` even when the object is already absent.
+    """
+    user = await get_current_user(request)
+    _require_cloud_media_user(user)
+    _guard_storage_key_owner(user, body.storageKey)
+
+    if not s3_service.is_configured():
+        # Pretend success so client can clean up local state; log it.
+        logger.warning("media/delete called but S3 not configured; skipping remote delete")
+        return {"success": False, "reason": "S3 not configured"}
+
+    ok = s3_service.delete_object(body.storageKey)
+    return {"success": ok}
+
+
+# ============================================================
 # MODELS (unchanged)
 # ============================================================
 class HuntConditions(BaseModel):

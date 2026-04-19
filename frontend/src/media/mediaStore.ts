@@ -99,7 +99,7 @@ export async function saveMedia(
       height: compressed.height || input.height,
     };
   }
-  const stored = await adapter.save(payload);
+  const stored = await adapter.save(payload, { huntId: ctx.huntId, role });
   const asset: MediaAsset = {
     ...stored,
     role,
@@ -131,7 +131,10 @@ async function saveThumbnailFor(
     }
     const strategy = resolveStorageStrategy({ tier: ctx.tier ?? null });
     const adapter = adapterForStrategy(strategy);
-    const stored = await adapter.save({ base64: thumb.dataUri, mime: thumb.mime });
+    const stored = await adapter.save(
+      { base64: thumb.dataUri, mime: thumb.mime },
+      { huntId: ctx.huntId, role: 'thumbnail' },
+    );
     const asset: MediaAsset = {
       ...stored,
       role: 'thumbnail',
