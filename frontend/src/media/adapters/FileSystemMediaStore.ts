@@ -1,7 +1,4 @@
-// Raven Scout — Expo FileSystem-backed adapter (native iOS / Android).
-//
-// Stores raw bytes on disk under `cacheDirectory/raven-media/<id>.<ext>`
-// and persists only the file:// URI. This never touches AsyncStorage.
+// Raven Scout — Expo FileSystem-backed adapter (native).
 
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
@@ -9,7 +6,7 @@ import type { MediaAsset, MediaInput } from '../types';
 import {
   approxBase64Bytes,
   inferMime,
-  newAssetId,
+  newImageId,
   rawBase64,
   type MediaStoreAdapter,
 } from './MediaStoreAdapter';
@@ -28,12 +25,8 @@ async function ensureDir(): Promise<string> {
   const dir = `${base}${DIR_NAME}/`;
   try {
     const info = await FileSystem.getInfoAsync(dir);
-    if (!info.exists) {
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-    }
-  } catch {
-    // Best-effort
-  }
+    if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  } catch {}
   return dir;
 }
 
@@ -43,16 +36,15 @@ export class FileSystemMediaStore implements MediaStoreAdapter {
   async save(input: MediaInput): Promise<MediaAsset> {
     const mime = input.mime || inferMime(input.base64, 'image/jpeg');
     const b64 = rawBase64(input.base64);
-    const assetId = newAssetId('local');
+    const imageId = newImageId('fs');
     const dir = await ensureDir();
-    const uri = `${dir}${assetId}.${mimeToExt(mime)}`;
-
+    const uri = `${dir}${imageId}.${mimeToExt(mime)}`;
     await FileSystem.writeAsStringAsync(uri, b64, {
       encoding: (FileSystem as any).EncodingType?.Base64 || 'base64',
     });
-
     return {
-      assetId,
+      imageId,
+      role: 'primary',   // default; caller overrides
       storageType: 'local-file',
       uri,
       storageKey: uri,
@@ -70,19 +62,13 @@ export class FileSystemMediaStore implements MediaStoreAdapter {
     try {
       const info = await FileSystem.getInfoAsync(asset.uri);
       return info.exists ? asset.uri : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   async remove(asset: MediaAsset): Promise<void> {
     if (Platform.OS === 'web') return;
     if (!asset.uri) return;
-    try {
-      await FileSystem.deleteAsync(asset.uri, { idempotent: true });
-    } catch {
-      // Best-effort
-    }
+    try { await FileSystem.deleteAsync(asset.uri, { idempotent: true }); } catch {}
   }
 
   async has(asset: MediaAsset): Promise<boolean> {
@@ -91,8 +77,6 @@ export class FileSystemMediaStore implements MediaStoreAdapter {
     try {
       const info = await FileSystem.getInfoAsync(asset.uri);
       return !!info.exists;
-    } catch {
-      return false;
-    }
+    } catch { return false; }
   }
 }

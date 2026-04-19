@@ -21,7 +21,7 @@ import {
   deleteHuntById,
   type HistoryEntryLite,
 } from '../src/media/huntPersistence';
-import { resolveAsset } from '../src/media/mediaStore';
+import { resolveAsset, resolveMediaUri } from '../src/media/mediaStore';
 
 interface HistoryRow extends HistoryEntryLite {
   resolvedThumb?: string | null;
@@ -48,17 +48,15 @@ export default function HistoryScreen() {
       rows.map(async (r) => {
         // Prefer inline thumbnail (tiny preview). Else resolve the
         // primary MediaAsset via the adapter.
-        if (r.primaryThumbnail) return { ...r, resolvedThumb: r.primaryThumbnail };
-        if (!r.primaryAssetId) return { ...r, resolvedThumb: null };
-        try {
-          // listHistory exposes a lite shape — we need the full record
-          // for the asset. Fall back to reading the raw hunt_history
-          // entry by id; but to keep things O(1) we pass null and the
-          // UI uses a placeholder.
-          return { ...r, resolvedThumb: null };
-        } catch {
-          return { ...r, resolvedThumb: null };
+        if (r.primaryMediaRef) {
+          try {
+            const uri = await resolveMediaUri(r.primaryMediaRef);
+            return { ...r, resolvedThumb: uri };
+          } catch {
+            return { ...r, resolvedThumb: null };
+          }
         }
+        return { ...r, resolvedThumb: null };
       }),
     );
     setHunts(enriched);

@@ -26,8 +26,6 @@ import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/ana
 import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
 import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
 import { loadHunt as loadHuntFromStore } from '../src/media/huntPersistence';
-import { resolveAsset } from '../src/media/mediaStore';
-import type { RuntimeHunt } from '../src/media/types';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 
@@ -233,43 +231,30 @@ export default function ResultsScreen() {
 
     const res = await loadHuntFromStore(huntId, (user as any)?.tier);
     if (!res) return null;
-    const runtime = res.hunt as RuntimeHunt & any;
+    const hydrated = res.hunt;
 
-    // Resolve each MediaAsset into a displayable URI (file://, blob:,
-    // https://, or data:...). Use any runtime-provided display URIs first
-    // (these are kept fresh for the current session after analysis).
-    const assets = runtime.mediaAssets || [];
-    const preExisting: (string | null)[] = Array.isArray(runtime.mediaDisplayUris)
-      ? runtime.mediaDisplayUris
-      : [];
-    const resolved: string[] = [];
-    for (let i = 0; i < assets.length; i++) {
-      const pre = preExisting[i];
-      if (typeof pre === 'string' && pre.length > 0) {
-        resolved.push(pre);
-      } else {
-        const uri = await resolveAsset(assets[i]);
-        resolved.push(uri || '');
-      }
-    }
+    // Map the tier-unified HydratedHuntResult into the legacy HuntRecord
+    // shape that the rest of this screen consumes. Missing media render
+    // as empty strings so the Image component falls back to the
+    // placeholder without crashing.
+    const displayUris: string[] = hydrated.displayUris.map(u => u || '');
+    const primaryIdx = hydrated.primaryMedia
+      ? hydrated.media.findIndex(m => m.asset.imageId === hydrated.primaryMedia?.asset.imageId)
+      : 0;
 
-    // Shape the record into the legacy HuntRecord surface the rest of
-    // this screen already consumes (mapImage + mapImages + result + …)
-    // so we don't have to rewrite the whole file.
-    const primaryIdx = Math.max(0, Math.min(resolved.length - 1, runtime.primaryMediaIndex || 0));
     const adapted: HuntRecord & { primaryMapIndex?: number } = {
-      id: runtime.id,
-      species: runtime.species,
-      speciesName: runtime.speciesName,
-      date: runtime.date,
-      timeWindow: runtime.timeWindow,
-      windDirection: runtime.windDirection,
-      mapImage: resolved[primaryIdx] || undefined,
-      mapImages: resolved,
-      primaryMapIndex: primaryIdx,
-      result: runtime.result,
-      createdAt: runtime.createdAt,
-      locationCoords: runtime.locationCoords ?? undefined,
+      id: hydrated.id,
+      species: hydrated.metadata.species,
+      speciesName: hydrated.metadata.speciesName,
+      date: hydrated.metadata.date,
+      timeWindow: hydrated.metadata.timeWindow,
+      windDirection: hydrated.metadata.windDirection,
+      mapImage: hydrated.primaryDisplayUri || undefined,
+      mapImages: displayUris,
+      primaryMapIndex: Math.max(0, primaryIdx),
+      result: hydrated.analysis,
+      createdAt: hydrated.createdAt,
+      locationCoords: hydrated.metadata.locationCoords ?? undefined,
     };
 
     return { hunt: adapted, warning: res.warningMessage };

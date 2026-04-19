@@ -1,148 +1,207 @@
-# Raven Scout — Media Persistence Architecture
+# Raven Scout — Media / Analysis Split Architecture (v3)
 
 ## TL;DR
 
-Hunt images no longer live inside AsyncStorage/localStorage. They flow
-through a tier-aware storage strategy:
+Two **independent** persistence stores + a hydration layer that joins
+them for the UI:
 
-| Tier         | Platform | Where bytes live        | What's persisted in AsyncStorage |
-|--------------|----------|-------------------------|----------------------------------|
-| Core / Trial | native   | Expo FileSystem cache   | `MediaAsset` ref (`file://…`)    |
-| Core / Trial | web      | IndexedDB object store  | `MediaAsset` ref (`idb://…`)     |
-| Pro          | any      | **Cloud (stub today)**  | `MediaAsset` ref w/ `storageType='cloud'` |
+```
+┌──────────────────────┐          ┌─────────────────────────┐
+│  AnalysisStore       │          │  MediaStore              │
+│  key: raven_analysis │          │  bytes → platform adapter│
+│  PersistedHuntAnalysis│          │  index → raven_media_idx │
+│  (refs only)         │          │  (MediaAsset metadata)   │
+└──────────┬───────────┘          └───────────┬─────────────┘
+           │                                  │
+           └────────── HuntHydration ─────────┘
+                       │
+                       ▼
+              HydratedHuntResult (UI)
+```
 
-AsyncStorage / localStorage is NEVER allowed to contain base64 image
-data. A recursive stripping pass runs right before every write as a
-final safeguard.
+AsyncStorage / localStorage never contains image bytes. The analysis
+record stores only `mediaRefs: string[]` — image ids that resolve
+through the MediaStore + MediaIndex to the tier-correct backend.
 
-## Where things live
+## Files
 
 | File | Role |
 |---|---|
-| `src/media/types.ts` | `MediaAsset`, `RuntimeMediaAsset`, `PersistedHunt`, `RuntimeHunt`, `LegacyHuntRecord`, strategy + storage type unions |
-| `src/media/storageStrategy.ts` | Single `resolveStorageStrategy({tier, platform})` — the only place tier→backend mapping lives |
-| `src/media/adapters/MediaStoreAdapter.ts` | Interface + shared helpers (`rawBase64`, `inferMime`, `newAssetId`) |
-| `src/media/adapters/FileSystemMediaStore.ts` | Native adapter using `expo-file-system` |
-| `src/media/adapters/IndexedDBMediaStore.ts` | Web adapter using IndexedDB object store |
-| `src/media/adapters/CloudMediaStore.ts` | **Pro adapter stub** — delegates bytes to local store, stamps `storageType='cloud'`. `TODO(cloud-upload)` is the only place to change when real cloud ships |
-| `src/media/adapters/DataUriLegacyMediaStore.ts` | Read-only — resolves legacy inline `data:` URIs so old hunts still render during migration |
-| `src/media/mediaStore.ts` | Facade: `ingestImage`, `extractAndStoreImages`, `resolveAsset`, `removeAsset`, `adapterForStrategy`, `adapterForAsset` |
-| `src/media/huntSerialization.ts` | **Pure** functions only: `isBase64DataUri`, `stripBase64Images`, `toPersistedHunt`, `fromPersistedHunt`, `buildRuntimeHunt`, `isLegacyHunt` |
-| `src/media/safePersist.ts` | Storage-budget ladder — drops thumbnails → weather → media assets → metadata-only |
-| `src/media/huntMigration.ts` | Lazy migration from pre-v2 records (base64 inline) to v2 (reference-only) |
-| `src/media/huntPersistence.ts` | **High-level API** used by screens: `saveHunt`, `loadHunt`, `listHistory`, `deleteHuntById` |
+| `src/media/types.ts` | Domain types. `PersistedHuntAnalysis` (v3), `MediaAsset`, `RuntimeHunt`, `HydratedHuntResult`, legacy shapes |
+| `src/media/storageStrategy.ts` | Tier → strategy resolver (single source of truth) |
+| `src/media/analysisStore.ts` | AnalysisStore. Key `raven_analysis_v1`. CRUD: `saveAnalysis`, `loadAnalysis`, `listAnalysisHistory`, `updateAnalysis`, `deleteAnalysis` |
+| `src/media/mediaIndex.ts` | AsyncStorage key `raven_media_index_v1` — reverse lookup of MediaAsset by imageId, plus `listMediaForHunt(huntId)` |
+| `src/media/mediaStore.ts` | Public MediaStore API: `saveMedia`, `saveMediaBatch`, `getMedia`, `resolveMediaUri`, `resolveAsset`, `deleteMedia`, `listMediaForHunt`, `removeMediaForHunt`, `migrateLegacyBase64Media` |
+| `src/media/adapters/MediaStoreAdapter.ts` | Interface + helpers (`rawBase64`, `inferMime`, `newImageId`) |
+| `src/media/adapters/FileSystemMediaStore.ts` | Native adapter (expo-file-system/legacy) |
+| `src/media/adapters/IndexedDBMediaStore.ts` | Web adapter |
+| `src/media/adapters/CloudMediaStore.ts` | Pro cloud-stub. `TODO(cloud-upload)` |
+| `src/media/adapters/DataUriLegacyMediaStore.ts` | Read-only legacy resolver |
+| `src/media/huntHydration.ts` | `hydrateHuntResult`, `hydrateRuntimeHuntFromAnalysis`, `saveHunt`, `listHistory`, `deleteHuntById`. Owns lazy migration |
+| `src/media/huntSerialization.ts` | Pure: `stripBase64Images`, `isLegacyV1Hunt`, `isLegacyV2Hunt`, `buildPersistedAnalysis`, `extractMetadata` |
+| `src/media/huntPersistence.ts` | Thin compatibility facade over the three above |
+| `src/media/__tests__/huntPersistence.test.ts` | 16 pure-logic tests + 22 matching tests = 38 total |
 
-## Runtime vs persisted
+## Domain types
 
-Two explicit TypeScript types:
+```ts
+// Analysis — reference only
+interface PersistedHuntAnalysis {
+  schema: 'hunt.analysis.v1';
+  id: string;
+  createdAt: string;
+  metadata: HuntMetadata;
+  analysis: any;                 // LLM JSON
+  mediaRefs: string[];           // image ids
+  primaryMediaRef: string | null;
+  storageStrategy: StorageStrategy;
+}
 
-- `RuntimeHunt` — used by UI screens. May carry `mediaDisplayUris`
-  (ephemeral base64/blob URLs for the current session).
-- `PersistedHunt` — what lives in AsyncStorage. `schema='hunt.persisted.v2'`,
-  `mediaAssets: MediaAsset[]`, NO base64 anywhere.
+// Media — binary ref
+interface MediaAsset {
+  imageId: string;
+  huntId?: string;               // reverse index
+  role: 'primary' | 'context' | 'thumbnail';
+  storageType: 'local-file' | 'indexeddb' | 'cloud' | 'data-uri-legacy';
+  uri: string;
+  storageKey?: string;
+  mime: string;
+  width?: number; height?: number; bytes?: number;
+  createdAt: string;
+}
 
-Transformation goes through `toPersistedHunt()` (runtime → persisted)
-which runs `stripBase64Images()` as an invariant-enforcing safeguard.
-
-## Ingestion pipeline (save flow)
-
-`setup.tsx` calls `saveHunt({ tier, base64Images, analysisResult, … })`
-and the library handles the rest:
-
-1. `resolveStorageStrategy` picks the adapter.
-2. `extractAndStoreImages` writes bytes into FileSystem / IndexedDB /
-   Cloud-stub. Returns `MediaAsset[]` (reference-only) + runtime-only
-   display URIs (raw base64 kept for the current session).
-3. `buildRuntimeHunt` assembles the hunt record.
-4. `setCurrentHunt(...)` stashes the runtime record in the in-memory
-   store so results.tsx can render immediately regardless of storage
-   outcome.
-5. `toPersistedHunt` strips any lingering base64.
-6. `applyBudget` runs the degradation ladder if the serialized record
-   is above the 2.5 MB per-record target.
-7. `AsyncStorage.setItem('hunt_history', ...)` — if this throws we
-   fall back to a single-slot `current_hunt` write.
-8. Telemetry: `storage_write_failed` / `persist_degraded` emit
-   structured events to `/api/log/client-event`.
-
-## Load flow
-
-`loadHunt(id, tier)` tries sources in this order:
-
-1. **In-memory** (`currentHuntStore`) — fastest; survives navigation
-   within the session even if AsyncStorage writes failed.
-2. **hunt_history** — the normal path.
-3. **current_hunt** — fallback slot.
-
-If the record matches `isLegacyHunt()`, it is migrated on-the-fly via
-`migrateLegacyHunt()` and written back, freeing localStorage room for
-new hunts. Telemetry event: `legacy_hunt_migrated`.
-
-## Storage budget guard
-
-`applyBudget(record, maxBytes = 2_500_000)` progressively degrades:
-
-```
-noop → drop-thumbnails → drop-weather → drop-media-assets → metadata-only
+// UI-facing
+interface HydratedHuntResult {
+  id: string;
+  createdAt: string;
+  metadata: HuntMetadata;
+  analysis: any;
+  media: HydratedMedia[];
+  primaryMedia: HydratedMedia | null;
+  primaryDisplayUri: string | null;
+  displayUris: (string | null)[];
+  missingMediaCount: number;
+  fromSessionCache: boolean;
+  warning: string | null;
+}
 ```
 
-`metadata-only` produces a record containing just `id`, species,
-date, time window, overlay count — enough for history display when
-nothing else fits.
+## Data flow
 
-## Diagnostics / telemetry
+### Save
 
-All logged via `utils/clientLog.ts` → `POST /api/log/client-event`:
+```
+setup.tsx
+    ↓ saveHunt({ tier, base64Images, analysisResult, … })
+huntHydration.saveHunt
+    ├─ resolveStorageStrategy(tier, platform)
+    ├─ mediaStore.saveMediaBatch(base64Images, { tier, huntId, role })
+    │     └─ adapter.save(...) + mediaIndex.indexMedia(...)
+    ├─ buildPersistedAnalysis({ mediaRefs: imageIds, … })
+    ├─ analysisStore.saveAnalysis(...)
+    ├─ currentHuntStore.setCurrentHunt(runtime)   ← session cache
+    └─ return HydratedHuntResult
+```
 
-- `storage_write_failed` — both AsyncStorage writes threw
-- `persist_degraded`    — persistedOk but one or more budget stages fired
-- `hunt_loaded_from_memory_fallback` — rendered from in-memory after persistence failure
+### Load
+
+```
+results.tsx
+    ↓ loadHunt(id, tier) → hydrateHuntResult(id, tier)
+huntHydration.hydrateHuntResult
+    1. currentHuntStore.getCurrentHuntEntry(id)   ← fastest path
+    2. analysisStore.loadAnalysis(id)
+    3. legacy hunt_history / current_hunt         ← migrate inline → v3
+        ├─ isLegacyV2Hunt → migrateV2ToV3
+        ├─ isLegacyV1Hunt → migrateV1ToV3
+    ↓
+hydrateRuntimeHuntFromAnalysis(analysis, sessionUris?)
+    for each imageId in analysis.mediaRefs:
+        session cache hit?       → use inline URI (just-captured)
+        mediaStore.getMedia(id)  → MediaAsset
+        mediaStore.resolveAsset  → display URI (null OK)
+    ↓
+HydratedHuntResult
+```
+
+### Invariant
+
+`JSON.stringify(persistedAnalysis)` matches neither
+`/data:image\/[a-z]+;base64,/i` nor contains `"storageType"` /
+`"uri"` / `"storageKey"` keys. Covered by a tier-wide test
+("invariant: buildPersistedAnalysis for every tier yields
+reference-only record").
+
+## Tier-aware media backends
+
+| Tier | Strategy | Backend | How bytes are stored |
+|---|---|---|---|
+| trial / core (native) | `local-uri` | `filesystem` | `file://cacheDir/raven-media/<id>.jpg` via Expo FileSystem |
+| trial / core (web) | `local-uri` | `indexeddb` | Blob in object store `raven-scout-media/assets` |
+| pro (any) | `cloud-uri` | `cloud` | **Stubbed today** — bytes go to the local adapter, record is stamped `storageType='cloud'`. `TODO(cloud-upload)` in `CloudMediaStore` is the one change needed to ship real cloud uploads |
+
+Tier logic lives **only** in `storageStrategy.ts`. UI code never
+branches on tier for persistence decisions.
+
+## Migration
+
+Legacy records are migrated on first access (lazy). Two paths:
+
+- **v1** (base64 inlined as `mapImages`): extract → `saveMediaBatch` →
+  `MediaAsset[]` → `buildPersistedAnalysis` → `saveAnalysis` →
+  legacy entry removed from `hunt_history`.
+- **v2** (combined record with `mediaAssets` inline): promote each
+  asset to the media index (no re-upload needed — URIs are already
+  persistent) → `saveAnalysis` → legacy entry removed.
+
+Every migration emits `legacy_hunt_migrated` telemetry with the source
+version, strategy, and extracted count.
+
+## Diagnostics
+
+All events flow through `utils/clientLog.ts` → `POST
+/api/log/client-event`:
+
+- `storage_write_failed` — analysisStore or mediaIndex write threw
+- `persist_degraded` — one or more media saves failed during batch
+- `hunt_loaded_from_memory_fallback` — session cache used because
+  persistence is marked failed
 - `hunt_not_found` — loader exhausted all sources
-- `legacy_hunt_migrated` — pre-v2 record converted to v2 on access
+- `legacy_hunt_migrated` — v1 or v2 record upgraded to v3
 
-None of these events contain image bytes.
+No image bytes are ever logged.
 
 ## UX contract
 
-- Result screen always renders if the hunt exists in any of the three
-  sources — the old "RESULTS NOT FOUND" path is only reachable if the
-  id is truly missing.
-- A dismissible gold banner shows on `results.tsx` when the current
-  hunt failed to persist: *"Session-only: this hunt was not saved
-  (storage full). Take notes before leaving."*
-- Missing images render a neutral map-outline placeholder on both
-  `history.tsx` and `results.tsx` — never a broken image or crash.
+- Analysis **always** loads if it's in any of the three sources.
+- Results screen renders even when every media asset is missing.
+- History cards show a neutral `map-outline` icon when a thumbnail
+  can't be resolved.
+- Dismissible gold banner on `results.tsx` when session-only mode is
+  active (persistence failed).
 
 ## Known limitations
 
-- **Pro cloud upload is a stub.** `CloudMediaStore` delegates bytes
-  to the same local adapter Core uses but stamps the persisted record
-  with `storageType='cloud'`. When real cloud ships, change only
-  `CloudMediaStore.save/resolve` — nothing else.
-- **Thumbnails are not pre-rendered.** `MediaAsset.thumbnail` is a
-  schema-level hook but we don't generate tiny previews today. History
-  list falls back to a placeholder icon; full-resolution images load
-  lazily via `resolveAsset()` when a card is tapped.
-- **IndexedDB quota per origin is finite.** If the browser runs out,
-  individual `ingestImage` calls throw → `extractAndStoreImages` emits
-  a placeholder `MediaAsset` with empty `uri` so the rest of the hunt
-  still saves. Results page renders with placeholder thumbs in that
-  case.
-- **No background migration job.** Migration is lazy (on load). A
-  device that never reopens an old hunt keeps the legacy record until
-  the user opens it.
-- **Integration tests are manual.** Unit coverage is pure logic only
-  (`yarn test:unit`, 41 assertions). Storage adapter I/O is exercised
-  through the app.
+- **Pro cloud-upload is a stub.** Real uploads require filling in
+  `CloudMediaStore.save` and `.resolve`. Nothing else needs to change.
+- **Thumbnails are not pre-rendered.** `MediaAsset` has no
+  `thumbnail` field in v3; history list resolves the primary media on
+  demand. If this becomes slow, generate 64×64 thumbnails during
+  `saveMedia` and store them as separate `role='thumbnail'` assets.
+- **No background migration.** Legacy records are migrated on open.
+  Devices that never reopen old hunts keep those records until
+  access.
+- **Integration adapters are not unit-tested.** 38 pure-logic tests
+  cover type shape, strategy resolver, base64 stripping, legacy
+  detection, and the "reference-only" invariant. Adapter I/O is
+  exercised through the app.
 
 ## Extending
 
-**To add a new tier → storage mapping:** edit `storageStrategy.ts`
-only. No other file should branch on tier.
-
-**To plug in real cloud uploads:** implement `save` / `resolve` in
-`adapters/CloudMediaStore.ts`; leave everything else alone.
-
-**To add a new degradation stage:** add a step in `safePersist.ts`
-between existing ones, update the `DegradationStep` union, and add a
-test in `__tests__/huntPersistence.test.ts`.
+- Add a tier: edit `storageStrategy.ts` only.
+- Add a backend: implement `MediaStoreAdapter`, register in
+  `mediaStore.adapterForStrategy` + `adapterForAsset`.
+- Add a schema version: bump types, teach `huntHydration` migrator to
+  handle the old → new path.
+- Expand analysis fields: add to `PersistedHuntAnalysis` and
+  `HuntMetadata` — mediaStore and hydration layer are unaffected.

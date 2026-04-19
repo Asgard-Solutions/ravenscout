@@ -1,9 +1,4 @@
-// Raven Scout — Legacy data-URI adapter.
-//
-// Used ONLY to resolve assets that were persisted before v2 of the
-// persistence schema (i.e. base64 data URIs stored directly inside
-// hunt records). Nothing new is ever saved through this adapter — the
-// migration step upgrades hits to a real adapter on first access.
+// Raven Scout — Legacy data-URI adapter (read-only).
 
 import type { MediaAsset, MediaInput } from '../types';
 import type { MediaStoreAdapter } from './MediaStoreAdapter';
@@ -12,7 +7,7 @@ export class DataUriLegacyMediaStore implements MediaStoreAdapter {
   readonly id = 'data-uri-legacy' as const;
 
   async save(_input: MediaInput): Promise<MediaAsset> {
-    throw new Error('DataUriLegacyMediaStore is read-only (no new writes)');
+    throw new Error('DataUriLegacyMediaStore is read-only');
   }
 
   async resolve(asset: MediaAsset): Promise<string | null> {
@@ -21,11 +16,7 @@ export class DataUriLegacyMediaStore implements MediaStoreAdapter {
     return null;
   }
 
-  async remove(): Promise<void> {
-    // No-op: the bytes live inline in a hunt record, so deletion is
-    // performed by migrating the whole record.
-  }
-
+  async remove(): Promise<void> {}
   async has(asset: MediaAsset): Promise<boolean> {
     return !!asset.uri && asset.uri.startsWith('data:');
   }

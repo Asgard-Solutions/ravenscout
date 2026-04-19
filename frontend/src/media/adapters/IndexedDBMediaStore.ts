@@ -1,16 +1,10 @@
 // Raven Scout — IndexedDB-backed adapter (web).
-//
-// Stores binary blobs keyed by `assetId` in a dedicated object store.
-// The persisted `MediaAsset.uri` uses an `idb://` pseudo-scheme that
-// only this adapter knows how to resolve (to a fresh object URL). That
-// keeps persisted records stable across sessions even though object
-// URLs themselves are not.
 
 import type { MediaAsset, MediaInput } from '../types';
 import {
   approxBase64Bytes,
   inferMime,
-  newAssetId,
+  newImageId,
   rawBase64,
   type MediaStoreAdapter,
 } from './MediaStoreAdapter';
@@ -29,9 +23,7 @@ function openDb(): Promise<IDBDatabase> {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
+      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -53,7 +45,6 @@ function putBlob(db: IDBDatabase, key: string, blob: Blob): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
 }
-
 function getBlob(db: IDBDatabase, key: string): Promise<Blob | null> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readonly');
@@ -62,9 +53,8 @@ function getBlob(db: IDBDatabase, key: string): Promise<Blob | null> {
     req.onerror = () => reject(req.error);
   });
 }
-
 function deleteKey(db: IDBDatabase, key: string): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     tx.objectStore(STORE_NAME).delete(key);
     tx.oncomplete = () => resolve();
@@ -76,25 +66,20 @@ export class IndexedDBMediaStore implements MediaStoreAdapter {
   readonly id = 'indexeddb' as const;
 
   async save(input: MediaInput): Promise<MediaAsset> {
-    if (!isWebIdbAvailable()) {
-      throw new Error('IndexedDB unavailable');
-    }
+    if (!isWebIdbAvailable()) throw new Error('IndexedDB unavailable');
     const mime = input.mime || inferMime(input.base64, 'image/jpeg');
     const b64 = rawBase64(input.base64);
     const bytes = approxBase64Bytes(b64);
-    const assetId = newAssetId('idb');
-    const storageKey = assetId;
-
+    const imageId = newImageId('idb');
+    const storageKey = imageId;
     const db = await openDb();
     try {
       const blob = base64ToBlob(b64, mime);
       await putBlob(db, storageKey, blob);
-    } finally {
-      db.close();
-    }
-
+    } finally { db.close(); }
     return {
-      assetId,
+      imageId,
+      role: 'primary',
       storageType: 'indexeddb',
       uri: `${URI_PREFIX}${storageKey}`,
       storageKey,
@@ -115,20 +100,14 @@ export class IndexedDBMediaStore implements MediaStoreAdapter {
       const blob = await getBlob(db, key);
       if (!blob) return null;
       return URL.createObjectURL(blob);
-    } finally {
-      db.close();
-    }
+    } finally { db.close(); }
   }
 
   async remove(asset: MediaAsset): Promise<void> {
     if (!isWebIdbAvailable()) return;
     const key = asset.storageKey || asset.uri.slice(URI_PREFIX.length);
     const db = await openDb();
-    try {
-      await deleteKey(db, key);
-    } finally {
-      db.close();
-    }
+    try { await deleteKey(db, key); } finally { db.close(); }
   }
 
   async has(asset: MediaAsset): Promise<boolean> {
@@ -138,9 +117,7 @@ export class IndexedDBMediaStore implements MediaStoreAdapter {
     try {
       const blob = await getBlob(db, key);
       return !!blob;
-    } finally {
-      db.close();
-    }
+    } finally { db.close(); }
   }
 }
 

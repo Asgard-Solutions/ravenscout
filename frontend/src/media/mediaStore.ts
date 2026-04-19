@@ -1,150 +1,185 @@
-// Raven Scout — Top-level media store facade.
+// Raven Scout — Media Store facade.
 //
-// One entry point for the rest of the app. Picks the right adapter
-// based on the storage strategy and platform, and exposes:
-//   - ingestImage()  — save raw/base64 input, returns a persisted
-//                      MediaAsset (reference only, no base64)
-//   - resolveAsset() — get a displayable URI for an asset
-//   - removeAsset()  — delete the backing bytes
+// Public API the rest of the app uses. Delegates bytes to a platform
+// adapter selected by the storage strategy resolver, and keeps a
+// lightweight index (mediaIndex) for reverse lookup by imageId and
+// for `listMediaForHunt`.
 
 import { Platform } from 'react-native';
-import type { MediaAsset, MediaInput, StorageType } from './types';
-import type { StrategyResult } from './storageStrategy';
+import type { MediaAsset, MediaInput, MediaRole, StorageType } from './types';
+import type { StrategyResult, Tier } from './storageStrategy';
+import { resolveStorageStrategy } from './storageStrategy';
 import type { MediaStoreAdapter } from './adapters/MediaStoreAdapter';
 import { FileSystemMediaStore } from './adapters/FileSystemMediaStore';
 import { IndexedDBMediaStore } from './adapters/IndexedDBMediaStore';
 import { CloudMediaStore } from './adapters/CloudMediaStore';
 import { DataUriLegacyMediaStore } from './adapters/DataUriLegacyMediaStore';
+import {
+  getMediaById,
+  indexMedia,
+  indexMediaBatch,
+  listMediaForHunt as indexListForHunt,
+  removeMediaFromIndex,
+  removeMediaForHunt as indexRemoveForHunt,
+} from './mediaIndex';
+import { logClientEvent } from '../utils/clientLog';
 
-// ------------------------------ Factory ------------------------------
+// ------------------------------ Adapter factory ------------------------------
 
 let _fsStore: FileSystemMediaStore | null = null;
 let _idbStore: IndexedDBMediaStore | null = null;
 let _legacyStore: DataUriLegacyMediaStore | null = null;
 let _cloudStore: CloudMediaStore | null = null;
 
-function getFileSystemStore(): FileSystemMediaStore {
-  if (!_fsStore) _fsStore = new FileSystemMediaStore();
-  return _fsStore;
+function getFs(): FileSystemMediaStore { return (_fsStore ||= new FileSystemMediaStore()); }
+function getIdb(): IndexedDBMediaStore { return (_idbStore ||= new IndexedDBMediaStore()); }
+function getLegacy(): DataUriLegacyMediaStore { return (_legacyStore ||= new DataUriLegacyMediaStore()); }
+function getLocalForPlatform(): MediaStoreAdapter {
+  return Platform.OS === 'web' ? getIdb() : getFs();
 }
-function getIndexedDbStore(): IndexedDBMediaStore {
-  if (!_idbStore) _idbStore = new IndexedDBMediaStore();
-  return _idbStore;
-}
-function getLegacyStore(): DataUriLegacyMediaStore {
-  if (!_legacyStore) _legacyStore = new DataUriLegacyMediaStore();
-  return _legacyStore;
-}
-function getLocalStoreForPlatform(): MediaStoreAdapter {
-  return Platform.OS === 'web' ? getIndexedDbStore() : getFileSystemStore();
-}
-function getCloudStore(): CloudMediaStore {
-  if (!_cloudStore) {
-    _cloudStore = new CloudMediaStore({ fallback: getLocalStoreForPlatform() });
-  }
+function getCloud(): CloudMediaStore {
+  if (!_cloudStore) _cloudStore = new CloudMediaStore({ fallback: getLocalForPlatform() });
   return _cloudStore;
 }
 
-/** Pick the right *write* adapter based on a resolved strategy. */
-export function adapterForStrategy(strategy: StrategyResult): MediaStoreAdapter {
+function adapterForStrategy(strategy: StrategyResult): MediaStoreAdapter {
   switch (strategy.preferredBackend) {
-    case 'cloud':
-      return getCloudStore();
-    case 'indexeddb':
-      return getIndexedDbStore();
-    case 'filesystem':
-      return getFileSystemStore();
-    default:
-      return getLocalStoreForPlatform();
+    case 'cloud': return getCloud();
+    case 'indexeddb': return getIdb();
+    case 'filesystem': return getFs();
+    default: return getLocalForPlatform();
   }
 }
 
-/** Pick the right *read* adapter for an existing MediaAsset. */
-export function adapterForAsset(asset: MediaAsset): MediaStoreAdapter {
+function adapterForAsset(asset: MediaAsset): MediaStoreAdapter {
   switch (asset.storageType) {
-    case 'indexeddb': return getIndexedDbStore();
-    case 'local-file': return getFileSystemStore();
-    case 'cloud': return getCloudStore();
-    case 'data-uri-legacy': return getLegacyStore();
-    default: return getLocalStoreForPlatform();
+    case 'indexeddb': return getIdb();
+    case 'local-file': return getFs();
+    case 'cloud': return getCloud();
+    case 'data-uri-legacy': return getLegacy();
+    default: return getLocalForPlatform();
   }
 }
 
 // ------------------------------ Public API ------------------------------
 
-/**
- * Persist an image input to the storage backend implied by the given
- * strategy, returning a reference-only MediaAsset.
- */
-export async function ingestImage(
-  strategy: StrategyResult,
-  input: MediaInput,
-): Promise<MediaAsset> {
-  const adapter = adapterForStrategy(strategy);
-  return adapter.save(input);
+export interface SaveMediaContext {
+  tier: Tier | null | undefined;
+  platform?: string;
+  role?: MediaRole;
+  huntId?: string;
 }
 
 /**
- * Resolve an asset to a displayable URI. Returns null if the asset is
- * missing or corrupted — callers should render a placeholder.
+ * Persist image bytes to the correct backend (tier + platform aware).
+ * Registers the resulting MediaAsset in the media index.
  */
+export async function saveMedia(
+  input: MediaInput,
+  ctx: SaveMediaContext,
+): Promise<MediaAsset> {
+  const strategy = resolveStorageStrategy({
+    tier: ctx.tier ?? null,
+    platform: ctx.platform || Platform.OS,
+  });
+  const adapter = adapterForStrategy(strategy);
+  const stored = await adapter.save(input);
+  const asset: MediaAsset = {
+    ...stored,
+    role: ctx.role || stored.role || 'primary',
+    huntId: ctx.huntId,
+  };
+  await indexMedia(asset);
+  return asset;
+}
+
+/**
+ * Convenience: persist many base64 images for a hunt at once. Returns
+ * the MediaAsset array in input order. Failures emit placeholders so
+ * the caller's mediaRefs stay aligned.
+ */
+export async function saveMediaBatch(
+  images: string[],
+  ctx: SaveMediaContext,
+): Promise<MediaAsset[]> {
+  const out: MediaAsset[] = [];
+  for (let i = 0; i < images.length; i++) {
+    const b = images[i];
+    if (!b) continue;
+    const role: MediaRole = i === 0 ? 'primary' : 'context';
+    try {
+      const asset = await saveMedia({ base64: b }, { ...ctx, role });
+      out.push(asset);
+    } catch (err) {
+      logClientEvent({
+        event: 'persist_degraded',
+        data: {
+          reason: 'saveMedia failed',
+          hunt_id: ctx.huntId,
+          index: i,
+          error: (err as any)?.message,
+        },
+      });
+    }
+  }
+  await indexMediaBatch(out);  // no-op if already indexed; keeps batch atomic
+  return out;
+}
+
+/** Fetch a MediaAsset by its stable id. */
+export async function getMedia(imageId: string): Promise<MediaAsset | null> {
+  return getMediaById(imageId);
+}
+
+/** Resolve an imageId to a displayable URI. Null if unresolvable. */
+export async function resolveMediaUri(imageId: string): Promise<string | null> {
+  const asset = await getMediaById(imageId);
+  if (!asset) return null;
+  return resolveAsset(asset);
+}
+
+/** Resolve a MediaAsset directly (used by hydration). */
 export async function resolveAsset(asset: MediaAsset | null | undefined): Promise<string | null> {
   if (!asset) return null;
   try {
-    const adapter = adapterForAsset(asset);
-    return await adapter.resolve(asset);
-  } catch {
-    return null;
-  }
+    return await adapterForAsset(asset).resolve(asset);
+  } catch { return null; }
 }
 
-export async function removeAsset(asset: MediaAsset): Promise<void> {
-  try {
-    const adapter = adapterForAsset(asset);
-    await adapter.remove(asset);
-  } catch {
-    // Best-effort
+/** Delete media bytes and index entry. */
+export async function deleteMedia(imageId: string): Promise<void> {
+  const asset = await getMediaById(imageId);
+  if (asset) {
+    try { await adapterForAsset(asset).remove(asset); } catch {}
   }
+  await removeMediaFromIndex(imageId);
 }
 
-/** True if the asset's storageType implies the bytes live inline. */
-export function isLegacyInlineAsset(asset: MediaAsset): boolean {
-  return asset.storageType === 'data-uri-legacy' ||
-    (typeof asset.uri === 'string' && asset.uri.startsWith('data:'));
+/** List all media associated with a given hunt. */
+export async function listMediaForHunt(huntId: string): Promise<MediaAsset[]> {
+  return indexListForHunt(huntId);
+}
+
+/** Remove every media asset associated with a hunt. */
+export async function removeMediaForHunt(huntId: string): Promise<number> {
+  const assets = await indexListForHunt(huntId);
+  for (const a of assets) {
+    try { await adapterForAsset(a).remove(a); } catch {}
+  }
+  const removed = await indexRemoveForHunt(huntId);
+  return removed.length;
 }
 
 /**
- * Take a list of base64 images + a strategy, persist each into the
- * appropriate storage adapter, and return MediaAsset[] + display URIs
- * for the runtime side. If a per-image ingest fails, a placeholder
- * asset is emitted so the UI still renders a slot.
+ * Legacy migration: take a list of inline base64 images, persist each
+ * to the tier-correct backend, index them against `huntId`, and
+ * return the resulting MediaAsset[] (in input order).
  */
-export async function extractAndStoreImages(
+export async function migrateLegacyBase64Media(
   base64Images: string[],
-  strategy: StrategyResult,
-): Promise<{ assets: MediaAsset[]; displayUris: string[] }> {
-  const assets: MediaAsset[] = [];
-  const displayUris: string[] = [];
-  for (const img of base64Images) {
-    if (!img) continue;
-    try {
-      const asset = await ingestImage(strategy, { base64: img });
-      assets.push(asset);
-      // Keep the raw base64 as the session display URI — fastest for
-      // the just-captured image; never persisted.
-      displayUris.push(img);
-    } catch {
-      assets.push({
-        assetId: `missing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        storageType: 'local-file',
-        uri: '',
-        mime: 'image/jpeg',
-        createdAt: new Date().toISOString(),
-      });
-      displayUris.push(img);
-    }
-  }
-  return { assets, displayUris };
+  ctx: SaveMediaContext,
+): Promise<MediaAsset[]> {
+  return saveMediaBatch(base64Images, ctx);
 }
 
 export type { StorageType, MediaAsset, MediaInput };

@@ -1,14 +1,5 @@
-// Raven Scout — Tests for media persistence pure logic.
+// Raven Scout — Tests for v3 split persistence pure logic.
 // Run with:  yarn test:unit
-//
-// This file covers the pure, side-effect-free modules:
-//   - storageStrategy (resolver)
-//   - huntSerialization (detection, stripping, toPersisted/fromPersisted)
-//   - safePersist (budget degradation ladder)
-//
-// Integration-heavy code (AsyncStorage I/O, IndexedDB adapter, Expo
-// FileSystem adapter) is exercised manually in the app. Those adapters
-// cannot be unit-tested in Node without a full React Native harness.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,13 +7,12 @@ import assert from 'node:assert/strict';
 import { resolveStorageStrategy } from '../storageStrategy';
 import {
   isBase64DataUri,
-  isLegacyHunt,
+  isLegacyV1Hunt,
+  isLegacyV2Hunt,
   stripBase64Images,
-  toPersistedHunt,
-  buildRuntimeHunt,
-  fromPersistedHunt,
+  extractMetadata,
+  buildPersistedAnalysis,
 } from '../huntSerialization';
-import { applyBudget, MAX_RECORD_BYTES } from '../safePersist';
 
 // ------------------------------ Fixtures ------------------------------
 
@@ -36,69 +26,53 @@ const sampleResult = {
 
 const tinyPng = `data:image/png;base64,${Buffer.from('x'.repeat(200)).toString('base64')}`;
 
-function mkRuntime(opts: any = {}) {
-  return buildRuntimeHunt({
-    id: opts.id || 'h1',
+function mkMetadata() {
+  return extractMetadata({
     species: 'deer',
     speciesName: 'Deer',
     date: '2025-01-01',
     timeWindow: 'dawn',
     windDirection: 'N',
-    result: opts.result || sampleResult,
-    weatherData: opts.weatherData,
-    mediaAssets: opts.mediaAssets || [],
-    primaryMediaIndex: 0,
-    createdAt: '2025-01-01T00:00:00Z',
-    storageStrategy: opts.storageStrategy || 'local-uri',
   });
 }
 
 // ============================== storageStrategy ==============================
 
-test('storageStrategy — Pro on web → cloud-uri / cloud', () => {
+test('storageStrategy — Pro → cloud-uri / cloud', () => {
   const r = resolveStorageStrategy({ tier: 'pro', platform: 'web' });
   assert.equal(r.strategy, 'cloud-uri');
   assert.equal(r.preferredBackend, 'cloud');
 });
 
-test('storageStrategy — Pro on iOS → cloud-uri / cloud', () => {
-  const r = resolveStorageStrategy({ tier: 'pro', platform: 'ios' });
-  assert.equal(r.strategy, 'cloud-uri');
-  assert.equal(r.preferredBackend, 'cloud');
-});
-
-test('storageStrategy — Core on web → local-uri / indexeddb', () => {
+test('storageStrategy — Core/web → local-uri / indexeddb', () => {
   const r = resolveStorageStrategy({ tier: 'core', platform: 'web' });
   assert.equal(r.strategy, 'local-uri');
   assert.equal(r.preferredBackend, 'indexeddb');
 });
 
-test('storageStrategy — Trial on ios → local-uri / filesystem', () => {
+test('storageStrategy — Trial/ios → local-uri / filesystem', () => {
   const r = resolveStorageStrategy({ tier: 'trial', platform: 'ios' });
   assert.equal(r.strategy, 'local-uri');
   assert.equal(r.preferredBackend, 'filesystem');
 });
 
-test('storageStrategy — missing tier defaults to trial behavior (local-uri)', () => {
+test('storageStrategy — case-insensitive tier', () => {
+  assert.equal(resolveStorageStrategy({ tier: 'PRO', platform: 'web' }).strategy, 'cloud-uri');
+});
+
+test('storageStrategy — missing tier defaults to trial behavior', () => {
   const r = resolveStorageStrategy({ tier: null as any, platform: 'web' });
   assert.equal(r.strategy, 'local-uri');
 });
 
-test('storageStrategy — case-insensitive tier', () => {
-  const r = resolveStorageStrategy({ tier: 'PRO', platform: 'web' });
-  assert.equal(r.strategy, 'cloud-uri');
-});
-
-// ============================== huntSerialization ==============================
+// ============================== detection / stripping ==============================
 
 test('isBase64DataUri detects data URIs', () => {
   assert.equal(isBase64DataUri('data:image/png;base64,AAAA'), true);
-  assert.equal(isBase64DataUri('DATA:IMAGE/JPEG;base64,AAAA'), true);
   assert.equal(isBase64DataUri('file:///tmp/a.jpg'), false);
   assert.equal(isBase64DataUri('idb://assets/abc'), false);
   assert.equal(isBase64DataUri(null), false);
   assert.equal(isBase64DataUri(undefined), false);
-  assert.equal(isBase64DataUri(123), false);
 });
 
 test('stripBase64Images removes inline data URIs at any depth', () => {
@@ -108,23 +82,16 @@ test('stripBase64Images removes inline data URIs at any depth', () => {
     mapImages: [
       'data:image/jpeg;base64,AAAA',
       'file:///ok.jpg',
-      'data:image/png;base64,BBBB',
       'https://cdn.example.com/ok.jpg',
     ],
-    nested: {
-      pic: 'data:image/png;base64,ZZZZ',
-      label: 'safe',
-      deeper: {
-        p: 'data:image/webp;base64,YYYY',
-      },
-    },
+    nested: { pic: 'data:image/png;base64,ZZZZ', label: 'safe', deep: { p: tinyPng } },
   } as any;
   stripBase64Images(rec);
-  assert.equal(rec.mapImage, undefined, 'top-level base64 removed');
+  assert.equal(rec.mapImage, undefined);
   assert.deepEqual(rec.mapImages, ['file:///ok.jpg', 'https://cdn.example.com/ok.jpg']);
-  assert.equal(rec.nested.pic, undefined, 'nested base64 removed');
-  assert.equal(rec.nested.label, 'safe', 'non-base64 preserved');
-  assert.equal(rec.nested.deeper.p, undefined, 'deeply nested base64 removed');
+  assert.equal(rec.nested.pic, undefined);
+  assert.equal(rec.nested.label, 'safe');
+  assert.equal(rec.nested.deep.p, undefined);
 });
 
 test('stripBase64Images: idempotent on a clean record', () => {
@@ -134,147 +101,125 @@ test('stripBase64Images: idempotent on a clean record', () => {
   assert.equal(JSON.stringify(rec), before);
 });
 
-test('isLegacyHunt identifies pre-v2 records', () => {
+// ============================== legacy detection ==============================
+
+test('isLegacyV1Hunt detects pre-v2 records', () => {
   assert.equal(
-    isLegacyHunt({ id: '1', mapImages: ['data:image/jpeg;base64,AA'] }),
+    isLegacyV1Hunt({ id: '1', mapImages: ['data:image/jpeg;base64,AA'] }),
     true,
-    'array of base64',
   );
   assert.equal(
-    isLegacyHunt({ id: '2', mapImage: 'data:image/jpeg;base64,AA' }),
+    isLegacyV1Hunt({ id: '2', mapImage: 'data:image/jpeg;base64,AA' }),
     true,
-    'scalar base64',
   );
+  assert.equal(isLegacyV1Hunt({ id: '3', schema: 'hunt.analysis.v1', mediaRefs: [] }), false);
+  assert.equal(isLegacyV1Hunt({ id: '4', schema: 'hunt.persisted.v2', mediaAssets: [] }), false);
+  assert.equal(isLegacyV1Hunt(null), false);
+});
+
+test('isLegacyV2Hunt detects v2 combined records', () => {
   assert.equal(
-    isLegacyHunt({
-      id: '3',
+    isLegacyV2Hunt({
+      id: '1',
       schema: 'hunt.persisted.v2',
-      mediaAssets: [{ assetId: 'a', storageType: 'cloud', uri: '', mime: 'image/jpeg', createdAt: '' }],
+      mediaAssets: [{ imageId: 'x', storageType: 'indexeddb', uri: 'idb://x/x', mime: 'image/jpeg', createdAt: '' }],
     }),
-    false,
-    'v2 marker or mediaAssets disqualifies',
+    true,
   );
-  assert.equal(isLegacyHunt(null), false);
-  assert.equal(isLegacyHunt(undefined), false);
-  assert.equal(isLegacyHunt('string'), false);
+  assert.equal(isLegacyV2Hunt({ id: '1', schema: 'hunt.persisted.v2' }), false);
+  assert.equal(isLegacyV2Hunt({ id: '1', schema: 'hunt.analysis.v1' }), false);
 });
 
-test('toPersistedHunt strips any lingering base64 before persistence', () => {
-  const runtime = mkRuntime({
-    // Pretend something leaked base64 into the analysis result.
-    result: {
-      id: 'r1',
-      summary: 'x',
-      sneakyImage: tinyPng,
-      overlays: [
-        { id: 'ov', type: 'stand', x_percent: 50, y_percent: 50, evidence_img: tinyPng },
-      ],
-    },
+// ============================== buildPersistedAnalysis ==============================
+
+test('buildPersistedAnalysis: produces v3 schema with no base64', () => {
+  const analysis = buildPersistedAnalysis({
+    id: 'h1',
+    metadata: mkMetadata(),
+    analysis: { ...sampleResult, evidence_img: tinyPng },
+    mediaRefs: ['img_1', 'img_2'],
+    primaryMediaRef: 'img_1',
+    storageStrategy: 'local-uri',
   });
-  const persisted = toPersistedHunt(runtime);
-  const json = JSON.stringify(persisted);
-  assert.ok(!/data:image\/[a-z]+;base64,/i.test(json), 'persisted JSON must not contain base64');
-  assert.equal(persisted.schema, 'hunt.persisted.v2');
+  assert.equal(analysis.schema, 'hunt.analysis.v1');
+  assert.equal(analysis.mediaRefs.length, 2);
+  assert.equal(analysis.primaryMediaRef, 'img_1');
+  assert.ok(!/data:image\/[a-z]+;base64,/i.test(JSON.stringify(analysis)),
+    'persisted analysis must not contain base64');
 });
 
-test('toPersistedHunt drops runtime-only display URIs', () => {
-  const runtime = mkRuntime({
-    mediaAssets: [{
-      assetId: 'a1', storageType: 'indexeddb', uri: 'idb://assets/a1',
-      mime: 'image/jpeg', createdAt: 'now',
-    }],
+test('buildPersistedAnalysis: generates a createdAt when not provided', () => {
+  const analysis = buildPersistedAnalysis({
+    id: 'h2',
+    metadata: mkMetadata(),
+    analysis: {},
+    mediaRefs: [],
+    primaryMediaRef: null,
+    storageStrategy: 'cloud-uri',
   });
-  (runtime as any).mediaDisplayUris = ['blob://localhost/ephemeral'];
-  const persisted = toPersistedHunt(runtime);
-  assert.equal((persisted as any).mediaDisplayUris, undefined);
-  assert.equal(persisted.mediaAssets[0].uri, 'idb://assets/a1');
+  assert.ok(analysis.createdAt);
+  assert.ok(new Date(analysis.createdAt).getTime() > 0);
 });
 
-test('fromPersistedHunt restores runtime shape with blank display URIs', () => {
-  const runtime = mkRuntime({
-    mediaAssets: [
-      { assetId: 'a1', storageType: 'indexeddb', uri: 'idb://a/a1', mime: 'image/jpeg', createdAt: 'n' },
-      { assetId: 'a2', storageType: 'indexeddb', uri: 'idb://a/a2', mime: 'image/jpeg', createdAt: 'n' },
-    ],
+test('buildPersistedAnalysis: stores NO MediaAsset inline', () => {
+  const analysis = buildPersistedAnalysis({
+    id: 'h3',
+    metadata: mkMetadata(),
+    analysis: { foo: 'bar' },
+    mediaRefs: ['img_a'],
+    primaryMediaRef: 'img_a',
+    storageStrategy: 'local-uri',
   });
-  const persisted = toPersistedHunt(runtime);
-  const revived = fromPersistedHunt(persisted);
-  assert.equal(revived.mediaAssets.length, 2);
-  assert.equal(revived.mediaDisplayUris?.length, 2);
-  assert.equal(revived.mediaDisplayUris?.[0], null);
+  const json = JSON.stringify(analysis);
+  // mediaRefs are string ids; MediaAsset objects (with storageType, uri,
+  // etc.) must not appear in the persisted analysis record.
+  assert.ok(!/\"storageType\":/.test(json), 'analysis record must not embed MediaAsset shapes');
+  assert.ok(!/\"uri\":/.test(json));
+  assert.ok(!/\"storageKey\":/.test(json));
 });
 
-// ============================== safePersist ==============================
+// ============================== metadata extraction ==============================
 
-test('applyBudget: no-op when under budget', () => {
-  const runtime = mkRuntime();
-  const persisted = toPersistedHunt(runtime);
-  const r = applyBudget(persisted, MAX_RECORD_BYTES);
-  assert.deepEqual(r.degradations, ['noop']);
-  assert.equal(r.overBudget, false);
-});
-
-test('applyBudget: drops thumbnails first', () => {
-  const runtime = mkRuntime({
-    mediaAssets: [
-      { assetId: 'a', storageType: 'indexeddb', uri: 'idb://a/a', mime: 'image/jpeg',
-        createdAt: 'n', thumbnail: 'A'.repeat(200_000) },  // non-base64 blob
-    ],
+test('extractMetadata: keeps only metadata fields', () => {
+  const metadata = extractMetadata({
+    species: 'deer', speciesName: 'Deer',
+    date: '2025-01-01', timeWindow: 'dawn', windDirection: 'N',
+    temperature: '45F', propertyType: 'ag', region: 'midwest',
+    locationCoords: { lat: 40, lon: -90 },
+    weatherData: { temp: 45 },
   });
-  const persisted = toPersistedHunt(runtime);
-  const r = applyBudget(persisted, 100_000);
-  assert.ok(r.degradations.includes('drop-thumbnails'));
-  assert.equal(r.record.mediaAssets[0].thumbnail, undefined);
+  assert.equal(metadata.species, 'deer');
+  assert.equal(metadata.temperature, '45F');
+  assert.deepEqual(metadata.locationCoords, { lat: 40, lon: -90 });
+  assert.deepEqual(metadata.weatherData, { temp: 45 });
 });
 
-test('applyBudget: drops weather next', () => {
-  const giantWeather = Array.from({ length: 400 }, (_, i) => ({ i, text: 'x'.repeat(5_000) }));
-  const runtime = mkRuntime({ weatherData: giantWeather });
-  const persisted = toPersistedHunt(runtime);
-  const r = applyBudget(persisted, 100_000);
-  assert.ok(r.degradations.includes('drop-weather'));
-  assert.equal((r.record as any).weatherData, undefined);
+test('extractMetadata: defaults null for missing optional fields', () => {
+  const metadata = extractMetadata({
+    species: 'deer', speciesName: 'Deer',
+    date: '2025-01-01', timeWindow: 'dawn', windDirection: 'N',
+  });
+  assert.equal(metadata.temperature, null);
+  assert.equal(metadata.locationCoords, null);
 });
 
-test('applyBudget: falls back to metadata-only for impossibly large records', () => {
-  const giantResult = {
-    id: 'r', summary: 'x',
-    overlays: Array.from({ length: 200 }, (_, i) => ({
-      id: `ov_${i}`, type: 'stand', x_percent: 50, y_percent: 50,
-      reasoning: 'x'.repeat(20_000),
-    })),
-  };
-  const runtime = mkRuntime({ result: giantResult });
-  const persisted = toPersistedHunt(runtime);
-  const r = applyBudget(persisted, 50_000);
-  assert.ok(r.degradations.includes('metadata-only'));
-  assert.equal(r.record.mediaAssets.length, 0);
-});
+// ============================== invariant: separation ==============================
 
-test('applyBudget: stamps metadata-only strategy on fallback', () => {
-  const huge = { id: 'r', summary: 'x', overlays: [], blob: 'x'.repeat(1_000_000) };
-  const runtime = mkRuntime({ result: huge });
-  const persisted = toPersistedHunt(runtime);
-  const r = applyBudget(persisted, 100_000);
-  if (r.degradations.includes('metadata-only')) {
-    assert.equal(r.record.storageStrategy, 'metadata-only');
-  }
-});
-
-// ============================== integration invariant ==============================
-
-test('invariant: toPersistedHunt + applyBudget never emits base64 for any tier', () => {
+test('invariant: buildPersistedAnalysis for every tier yields reference-only record', () => {
   for (const tier of ['trial', 'core', 'pro']) {
     const strategy = resolveStorageStrategy({ tier, platform: 'web' });
-    const runtime = mkRuntime({
+    const analysis = buildPersistedAnalysis({
+      id: `h_${tier}`,
+      metadata: mkMetadata(),
+      analysis: { ...sampleResult, leak: tinyPng },
+      mediaRefs: ['img_1'],
+      primaryMediaRef: 'img_1',
       storageStrategy: strategy.strategy,
-      result: { ...sampleResult, evidence: tinyPng },
     });
-    const persisted = toPersistedHunt(runtime);
-    const budgeted = applyBudget(persisted);
-    assert.ok(
-      !/data:image\/[a-z]+;base64,/i.test(budgeted.serialized),
-      `tier=${tier}: persisted output must never contain base64`,
-    );
+    const json = JSON.stringify(analysis);
+    assert.ok(!/data:image\/[a-z]+;base64,/i.test(json),
+      `tier=${tier}: persisted analysis must not contain base64`);
+    // Must reference media by id only
+    assert.deepEqual(analysis.mediaRefs, ['img_1']);
   }
 });

@@ -1,21 +1,18 @@
 // Raven Scout — Cloud object-storage adapter (STUB).
 //
-// TODO(cloud-upload): replace the local-store fallback below with real
-// S3/GCS uploads once the object-storage integration is provisioned.
-// The caller contract is frozen — ONLY swap the body here, do not
-// change the MediaAsset / MediaStoreAdapter signatures.
+// TODO(cloud-upload): Replace the local-store fallback body below
+// with real S3/GCS uploads once the object-storage integration ships.
+// This is the ONLY file that needs to change — the outer API
+// (MediaStoreAdapter + MediaAsset shape) is frozen.
 //
-// Today this stub:
-//   1. Delegates persistence to whichever local adapter is configured
-//      (FileSystem on native, IndexedDB on web).
-//   2. Rewrites the returned MediaAsset with storageType='cloud' so
-//      the persisted record looks cloud-native (assetId, storageKey,
-//      storageType) — which is the shape we want in production. This
-//      means the migration surface on the day we flip the switch is
-//      a single file.
+// Today the stub delegates byte persistence to the platform-local
+// adapter (FileSystem on native, IndexedDB on web) but stamps the
+// resulting MediaAsset with `storageType='cloud'`. When real cloud
+// ships, swap the body of `save()` to upload and return a real
+// https:// URI.
 
 import type { MediaAsset, MediaInput } from '../types';
-import { newAssetId, type MediaStoreAdapter } from './MediaStoreAdapter';
+import { newImageId, type MediaStoreAdapter } from './MediaStoreAdapter';
 
 export interface CloudStubConfig {
   fallback: MediaStoreAdapter;
@@ -27,29 +24,17 @@ export class CloudMediaStore implements MediaStoreAdapter {
   constructor(private readonly config: CloudStubConfig) {}
 
   async save(input: MediaInput): Promise<MediaAsset> {
-    // TODO(cloud-upload): replace with real upload call and return
-    // a cloud URL. Until then we keep bytes in the local fallback but
-    // shape the persisted record as if it were cloud.
-    const localAsset = await this.config.fallback.save(input);
-    const cloudAssetId = newAssetId('cloud');
+    // TODO(cloud-upload): replace with: const uploaded = await uploadToCloud(input);
+    const local = await this.config.fallback.save(input);
     return {
-      ...localAsset,
-      assetId: cloudAssetId,
+      ...local,
+      imageId: newImageId('cloud'),
       storageType: 'cloud',
-      // The URI stays pointing at the local store — CloudMediaStore.resolve
-      // below will delegate to the fallback to pull bytes until real cloud
-      // URLs are available.
-      uri: localAsset.uri,
-      storageKey: localAsset.storageKey,
     };
   }
 
   async resolve(asset: MediaAsset): Promise<string | null> {
-    // TODO(cloud-upload): if asset.uri starts with https:// return it directly
-    if (asset.uri && /^https?:\/\//i.test(asset.uri)) {
-      return asset.uri;
-    }
-    // Otherwise fall back to the local store.
+    if (asset.uri && /^https?:\/\//i.test(asset.uri)) return asset.uri;
     return this.config.fallback.resolve(asset);
   }
 

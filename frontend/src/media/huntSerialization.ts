@@ -1,47 +1,49 @@
-// Raven Scout — Hunt serialization: runtime ↔ persisted (PURE).
+// Raven Scout — Hunt serialization utilities (pure).
 //
-// CRITICAL INVARIANT: toPersistedHunt() guarantees the returned object
-// contains NO base64 data URIs anywhere. stripBase64Images() is the
-// final safeguard applied right before writing to AsyncStorage.
-//
-// This file has NO runtime side-effects and NO React Native imports.
-// Image ingestion (which needs platform adapters) lives in
-// `mediaStore.ts` as `extractAndStoreImages`.
+// Contains only transformations that DO NOT touch React Native or
+// storage adapters. Safe to import from Node tests.
 
 import type {
-  LegacyHuntRecord,
-  MediaAsset,
-  PersistedHunt,
-  RuntimeHunt,
+  HuntMetadata,
+  LegacyV1HuntRecord,
+  LegacyV2HuntRecord,
+  PersistedHuntAnalysis,
+  StorageStrategy,
 } from './types';
 
 const BASE64_RE = /data:image\/[a-z]+;base64,/i;
 
 // ------------------------------ Detection ------------------------------
 
-/** True if the input is (or contains) a base64 data URI. */
 export function isBase64DataUri(s: unknown): boolean {
   return typeof s === 'string' && BASE64_RE.test(s);
 }
 
-/** Detect if a hunt record is in the legacy shape (has mapImages as base64). */
-export function isLegacyHunt(record: any): record is LegacyHuntRecord {
+export function isLegacyV1Hunt(record: any): record is LegacyV1HuntRecord {
   if (!record || typeof record !== 'object') return false;
   if (record.schema === 'hunt.persisted.v2') return false;
-  if (Array.isArray(record.mediaAssets)) return false;
+  if (record.schema === 'hunt.analysis.v1') return false;
   const hasBase64Array = Array.isArray(record.mapImages) &&
     record.mapImages.some((m: unknown) => isBase64DataUri(m));
   const hasBase64Scalar = isBase64DataUri(record.mapImage);
   return hasBase64Array || hasBase64Scalar ||
-    (Array.isArray(record.mapImages) && record.mapImages.length > 0);
+    (Array.isArray(record.mapImages) && record.mapImages.length > 0) ||
+    (typeof record.mapImage === 'string' && record.mapImage.length > 0);
+}
+
+export function isLegacyV2Hunt(record: any): record is LegacyV2HuntRecord {
+  return !!record &&
+    typeof record === 'object' &&
+    record.schema === 'hunt.persisted.v2' &&
+    Array.isArray(record.mediaAssets);
 }
 
 // ------------------------------ Strip ------------------------------
 
 /**
  * Recursively strip any base64 image data URIs from an object. The
- * input is mutated in place AND returned. Use ONLY on records destined
- * for AsyncStorage.
+ * input is mutated in place AND returned. Final safeguard before any
+ * AsyncStorage write.
  */
 export function stripBase64Images<T>(record: T): T {
   const seen = new WeakSet<object>();
@@ -70,10 +72,9 @@ export function stripBase64Images<T>(record: T): T {
   return walk(record) as T;
 }
 
-// ------------------------------ Runtime ↔ Persisted ------------------------------
+// ------------------------------ Metadata helpers ------------------------------
 
-export interface BuildRuntimeHuntInput {
-  id: string;
+export function extractMetadata(input: {
   species: string;
   speciesName: string;
   date: string;
@@ -82,20 +83,10 @@ export interface BuildRuntimeHuntInput {
   temperature?: string | number | null;
   propertyType?: string;
   region?: string;
-  result: any;
   weatherData?: any;
   locationCoords?: { lat: number; lon: number } | null;
-  createdAt: string;
-  mediaAssets: MediaAsset[];
-  mediaDisplayUris?: (string | null)[];
-  primaryMediaIndex: number;
-  storageStrategy: 'local-uri' | 'cloud-uri' | 'metadata-only';
-}
-
-export function buildRuntimeHunt(input: BuildRuntimeHuntInput): RuntimeHunt {
+}): HuntMetadata {
   return {
-    schema: 'hunt.persisted.v2',
-    id: input.id,
     species: input.species,
     speciesName: input.speciesName,
     date: input.date,
@@ -104,48 +95,28 @@ export function buildRuntimeHunt(input: BuildRuntimeHuntInput): RuntimeHunt {
     temperature: input.temperature ?? null,
     propertyType: input.propertyType,
     region: input.region,
-    result: input.result,
     weatherData: input.weatherData,
     locationCoords: input.locationCoords ?? null,
-    createdAt: input.createdAt,
-    mediaAssets: input.mediaAssets,
-    mediaDisplayUris: input.mediaDisplayUris,
-    primaryMediaIndex: input.primaryMediaIndex,
+  };
+}
+
+export function buildPersistedAnalysis(input: {
+  id: string;
+  createdAt?: string;
+  metadata: HuntMetadata;
+  analysis: any;
+  mediaRefs: string[];
+  primaryMediaRef: string | null;
+  storageStrategy: StorageStrategy;
+}): PersistedHuntAnalysis {
+  return stripBase64Images({
+    schema: 'hunt.analysis.v1',
+    id: input.id,
+    createdAt: input.createdAt || new Date().toISOString(),
+    metadata: input.metadata,
+    analysis: input.analysis,
+    mediaRefs: input.mediaRefs,
+    primaryMediaRef: input.primaryMediaRef,
     storageStrategy: input.storageStrategy,
-  };
-}
-
-/**
- * Produce a shape safe for AsyncStorage. Strips any lingering base64
- * and drops runtime-only fields (mediaDisplayUris).
- */
-export function toPersistedHunt(runtime: RuntimeHunt): PersistedHunt {
-  const clone: any = JSON.parse(JSON.stringify({
-    schema: 'hunt.persisted.v2',
-    id: runtime.id,
-    species: runtime.species,
-    speciesName: runtime.speciesName,
-    date: runtime.date,
-    timeWindow: runtime.timeWindow,
-    windDirection: runtime.windDirection,
-    temperature: runtime.temperature ?? null,
-    propertyType: runtime.propertyType,
-    region: runtime.region,
-    result: runtime.result,
-    weatherData: runtime.weatherData,
-    locationCoords: runtime.locationCoords ?? null,
-    createdAt: runtime.createdAt,
-    mediaAssets: runtime.mediaAssets,
-    primaryMediaIndex: runtime.primaryMediaIndex,
-    storageStrategy: runtime.storageStrategy,
-  }));
-  return stripBase64Images(clone) as PersistedHunt;
-}
-
-/** Reverse: persisted record → runtime with no display URIs populated yet. */
-export function fromPersistedHunt(persisted: PersistedHunt): RuntimeHunt {
-  return {
-    ...persisted,
-    mediaDisplayUris: new Array(persisted.mediaAssets?.length || 0).fill(null),
-  };
+  });
 }
