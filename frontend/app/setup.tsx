@@ -57,6 +57,7 @@ export default function SetupScreen() {
   // Form state
   const [selectedSpecies, setSelectedSpecies] = useState('');
   const [mapImages, setMapImages] = useState<string[]>([]);
+  const [primaryMapIndex, setPrimaryMapIndex] = useState(0);
   const [mapInputMode, setMapInputMode] = useState<'upload' | 'interactive'>('upload');
   const [showInteractiveMap, setShowInteractiveMap] = useState(false);
   const [coordInput, setCoordInput] = useState('');
@@ -123,7 +124,20 @@ export default function SetupScreen() {
   };
 
   const removeMap = (index: number) => {
-    setMapImages(prev => prev.filter((_, i) => i !== index));
+    setMapImages(prev => {
+      const updated = prev.filter((_, i) => i !== index);
+      // Adjust primary index
+      if (index === primaryMapIndex) {
+        setPrimaryMapIndex(0);
+      } else if (index < primaryMapIndex) {
+        setPrimaryMapIndex(prev2 => Math.max(0, prev2 - 1));
+      }
+      return updated;
+    });
+  };
+
+  const setPrimary = (index: number) => {
+    setPrimaryMapIndex(index);
   };
 
   const captureMapView = () => {
@@ -298,7 +312,7 @@ export default function SetupScreen() {
             property_type: propertyType,
             region: region || null,
           },
-          map_image_base64: mapImages[0],
+          map_image_base64: mapImages[primaryMapIndex],
         }),
       });
 
@@ -325,7 +339,8 @@ export default function SetupScreen() {
           id: data.result.id, species: selectedSpecies,
           speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
           date: huntDate, timeWindow, windDirection, temperature, propertyType, region,
-          mapImages, mapImage: mapImages[0],
+          mapImages, mapImage: mapImages[primaryMapIndex],
+          primaryMapIndex,
           result: { ...data.result, overlays: overlaysWithIds },
           weatherData, locationCoords,
           createdAt: new Date().toISOString(),
@@ -605,14 +620,14 @@ export default function SetupScreen() {
 
                   {/* Show captured maps */}
                   {mapImages.length > 0 && (
-                    <MapImageList images={mapImages} onRemove={removeMap} />
+                    <MapImageList images={mapImages} onRemove={removeMap} primaryIndex={primaryMapIndex} onSetPrimary={setPrimary} />
                   )}
                 </View>
               )}
 
               {/* Shared: Show all maps with delete — both modes */}
               {mapInputMode === 'upload' && mapImages.length > 0 && (
-                <MapImageList images={mapImages} onRemove={removeMap} />
+                <MapImageList images={mapImages} onRemove={removeMap} primaryIndex={primaryMapIndex} onSetPrimary={setPrimary} />
               )}
 
               {/* Tip */}
@@ -868,27 +883,38 @@ export default function SetupScreen() {
   );
 }
 
-function MapImageList({ images, onRemove }: { images: string[]; onRemove: (idx: number) => void }) {
+function MapImageList({ images, onRemove, primaryIndex, onSetPrimary }: { images: string[]; onRemove: (idx: number) => void; primaryIndex: number; onSetPrimary?: (idx: number) => void }) {
   return (
     <View style={styles.mapListContainer}>
       <Text style={styles.mapListTitle}>MAPS READY ({images.length})</Text>
-      {images.map((img, idx) => (
-        <View key={idx} style={styles.mapListItem}>
-          <Image source={{ uri: img }} style={styles.mapListImage} resizeMode="cover" />
-          <View style={styles.mapListInfo}>
-            <Text style={styles.mapListLabel}>Map {idx + 1}</Text>
-            {idx === 0 && <Text style={styles.mapListPrimary}>Used for AI analysis</Text>}
+      {images.map((img, idx) => {
+        const isPrimary = idx === primaryIndex;
+        return (
+          <View key={idx} style={[styles.mapListItem, isPrimary && styles.mapListItemPrimary]}>
+            <Image source={{ uri: img }} style={styles.mapListImage} resizeMode="cover" />
+            <View style={styles.mapListInfo}>
+              <Text style={styles.mapListLabel}>Map {idx + 1}</Text>
+              {isPrimary ? (
+                <Text style={styles.mapListPrimary}>Overlays applied here</Text>
+              ) : onSetPrimary ? (
+                <TouchableOpacity testID={`set-primary-${idx}`} onPress={() => onSetPrimary(idx)}>
+                  <Text style={styles.mapListSetPrimary}>Tap to set as primary</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.mapListRef}>Reference image</Text>
+              )}
+            </View>
+            <TouchableOpacity
+              testID={`delete-map-${idx}`}
+              style={styles.mapListDelete}
+              onPress={() => onRemove(idx)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="trash-outline" size={20} color={COLORS.avoidZones} />
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            testID={`delete-map-${idx}`}
-            style={styles.mapListDelete}
-            onPress={() => onRemove(idx)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="trash-outline" size={20} color={COLORS.avoidZones} />
-          </TouchableOpacity>
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -1120,6 +1146,9 @@ const styles = StyleSheet.create({
   mapListInfo: { flex: 1 },
   mapListLabel: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '700' },
   mapListPrimary: { color: COLORS.accent, fontSize: 11, fontWeight: '600', marginTop: 2 },
+  mapListSetPrimary: { color: COLORS.accessRoutes, fontSize: 11, fontWeight: '600', marginTop: 2, textDecorationLine: 'underline' },
+  mapListRef: { color: COLORS.fogGray, fontSize: 11, marginTop: 2 },
+  mapListItemPrimary: { borderColor: COLORS.accent, borderWidth: 2 },
   mapListDelete: {
     width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(198, 40, 40, 0.12)', borderWidth: 1, borderColor: 'rgba(198, 40, 40, 0.25)',

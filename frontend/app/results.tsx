@@ -183,6 +183,8 @@ export default function ResultsScreen() {
   };
 
   const mapImages = hunt ? getMapImages() : [];
+  const primaryIdx = (hunt as any)?.primaryMapIndex ?? 0;
+  const primaryImage = mapImages[primaryIdx] || mapImages[0] || null;
 
   // --- Edit Mode Functions ---
   const enterEditMode = () => {
@@ -452,50 +454,18 @@ export default function ResultsScreen() {
           </View>
         )}
 
-        {/* ANALYSIS VIEW - Uploaded Image + Overlays */}
+        {/* ANALYSIS VIEW - Primary Image + Overlays */}
         {viewMode === 'analysis' && (
         <View style={styles.mapSection}>
-          {mapImages.length > 1 && (
-            <View style={styles.mapTabs}>
-              {mapImages.map((_, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  testID={`map-tab-${idx}`}
-                  style={[styles.mapTab, currentMapIndex === idx && styles.mapTabActive]}
-                  onPress={() => scrollToMap(idx)}
-                >
-                  <Text style={[styles.mapTabText, currentMapIndex === idx && styles.mapTabTextActive]}>
-                    MAP {idx + 1}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
+          {/* Primary image with overlays */}
           <View style={styles.mapContainer}>
-            {mapImages.length > 0 ? (
-            <ScrollView
-              ref={mapScrollRef}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              scrollEnabled={!editMode && mapImages.length > 1}
-              onMomentumScrollEnd={(e) => {
-                const idx = Math.round(e.nativeEvent.contentOffset.x / MAP_WIDTH);
-                setCurrentMapIndex(idx);
-              }}
-              style={{ width: MAP_WIDTH }}
-            >
-              {mapImages.map((img, mapIdx) => (
-                <View
-                  key={mapIdx}
-                  style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
-                  onTouchEnd={editMode && addMode ? handleMapPress : undefined}
-                >
-                  <Image source={{ uri: img }} style={styles.mapImage} resizeMode="cover" />
-                </View>
-              ))}
-            </ScrollView>
+            {primaryImage ? (
+              <View
+                style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
+                onTouchEnd={editMode && addMode ? handleMapPress : undefined}
+              >
+                <Image source={{ uri: primaryImage }} style={styles.mapImage} resizeMode="cover" />
+              </View>
             ) : (
               <View style={{ width: MAP_WIDTH, height: MAP_HEIGHT }} onTouchEnd={editMode && addMode ? handleMapPress : undefined}>
                 <TacticalMapView
@@ -507,7 +477,7 @@ export default function ResultsScreen() {
               </View>
             )}
 
-            {/* Overlay markers */}
+            {/* Overlay markers — ALWAYS on the primary image */}
             {overlays.map((overlay, idx) => (
               <DraggableMarker
                 key={overlay.id}
@@ -536,15 +506,21 @@ export default function ResultsScreen() {
             )}
           </View>
 
-          {/* Map page dots */}
+          {/* Reference images (non-primary) */}
           {mapImages.length > 1 && (
-            <View style={styles.pageDots}>
-              {mapImages.map((_, idx) => (
-                <View
-                  key={idx}
-                  style={[styles.pageDot, currentMapIndex === idx && styles.pageDotActive]}
-                />
-              ))}
+            <View style={styles.refImagesSection}>
+              <Text style={styles.refImagesTitle}>REFERENCE IMAGES</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {mapImages.map((img, idx) => {
+                  if (idx === primaryIdx) return null;
+                  return (
+                    <View key={idx} style={styles.refImageCard}>
+                      <Image source={{ uri: img }} style={styles.refImage} resizeMode="cover" />
+                      <Text style={styles.refImageLabel}>Map {idx + 1}</Text>
+                    </View>
+                  );
+                })}
+              </ScrollView>
             </View>
           )}
         </View>
@@ -941,6 +917,12 @@ const styles = StyleSheet.create({
   pageDots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 8 },
   pageDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(58, 74, 82, 0.6)' },
   pageDotActive: { backgroundColor: COLORS.accent, width: 20 },
+  // Reference images
+  refImagesSection: { marginTop: 12 },
+  refImagesTitle: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 8 },
+  refImageCard: { width: 100, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)' },
+  refImage: { width: 100, height: 70 },
+  refImageLabel: { color: COLORS.fogGray, fontSize: 9, fontWeight: '600', textAlign: 'center', paddingVertical: 4, backgroundColor: 'rgba(58, 74, 82, 0.5)' },
   overlayMarker: {
     position: 'absolute', width: 32, height: 32, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center', elevation: 5,
