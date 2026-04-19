@@ -20,6 +20,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, CUSTOM_MARKER_TYPES } from '../src/constants/theme';
 import { useNetwork } from '../src/hooks/useNetwork';
 import TacticalMapView from '../src/map/TacticalMapView';
+import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/analysisAdapter';
+import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_WIDTH = SCREEN_WIDTH - 32;
@@ -122,6 +124,9 @@ export default function ResultsScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
+  // v2 analysis view model
+  const [analysisVM, setAnalysisVM] = useState<AnalysisViewModel | null>(null);
+
   // Multi-map state
   const [currentMapIndex, setCurrentMapIndex] = useState(0);
   const mapScrollRef = useRef<ScrollView>(null);
@@ -173,6 +178,13 @@ export default function ResultsScreen() {
     setOverlays(withIds);
     setOriginalOverlays(JSON.parse(JSON.stringify(withIds)));
     setLoadFailed(false);
+    // Build v2 analysis view model
+    try {
+      const vm = buildAnalysisViewModel(found.result);
+      setAnalysisVM(vm);
+    } catch {
+      setAnalysisVM(null);
+    }
   };
 
   const getMapImages = (): string[] => {
@@ -566,53 +578,29 @@ export default function ResultsScreen() {
           </View>
         )}
 
-        {/* Summary */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>ANALYSIS SUMMARY</Text>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryText}>{result.summary}</Text>
-          </View>
-        </View>
-
-        {/* Top Setups */}
-        {result.top_setups.length > 0 && (
+        {/* === v2 Analysis Sections === */}
+        {analysisVM ? (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>TOP SETUPS</Text>
-            {result.top_setups.map((setup, idx) => (
-              <View key={idx} style={styles.setupCard}>
-                <View style={styles.setupNumber}>
-                  <Text style={styles.setupNumberText}>{idx + 1}</Text>
-                </View>
-                <Text style={styles.setupText}>{setup}</Text>
-              </View>
-            ))}
+            <AnalysisSummaryCard vm={analysisVM} />
+            <TopSetupsSection setups={analysisVM.topSetups} />
+            <WindAnalysisCard vm={analysisVM} />
+            {analysisVM.hasMapObservations && (
+              <MapObservationsSection observations={analysisVM.mapObservations} />
+            )}
+            <AssumptionsCard
+              assumptions={analysisVM.keyAssumptions}
+              limitations={analysisVM.confidenceSummary.main_limitations}
+            />
+            {analysisVM.hasSpeciesTips && (
+              <SpeciesTipsCard tips={analysisVM.speciesTips} />
+            )}
           </View>
-        )}
-
-        {/* Wind & Timing */}
-        <View style={styles.infoGrid}>
-          <View style={styles.infoCard}>
-            <Ionicons name="compass" size={22} color={COLORS.accessRoutes} />
-            <Text style={styles.infoLabel}>WIND NOTES</Text>
-            <Text style={styles.infoValue}>{result.wind_notes}</Text>
-          </View>
-          <View style={styles.infoCard}>
-            <Ionicons name="time" size={22} color={COLORS.accent} />
-            <Text style={styles.infoLabel}>BEST TIME</Text>
-            <Text style={styles.infoValue}>{result.best_time}</Text>
-          </View>
-        </View>
-
-        {/* Species Tips */}
-        {result.species_tips.length > 0 && (
+        ) : (
+          /* Legacy v1 fallback */
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>SPECIES TIPS</Text>
-            {result.species_tips.map((tip, idx) => (
-              <View key={idx} style={styles.tipRow}>
-                <Ionicons name="paw" size={14} color={COLORS.accent} />
-                <Text style={styles.tipText}>{tip}</Text>
-              </View>
-            ))}
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryText}>{result.summary}</Text>
+            </View>
           </View>
         )}
 
