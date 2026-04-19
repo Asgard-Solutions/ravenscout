@@ -21,7 +21,12 @@ import {
   deleteHuntById,
   type HistoryEntryLite,
 } from '../src/media/huntPersistence';
-import { resolveAsset, resolveMediaUri } from '../src/media/mediaStore';
+import {
+  resolveAsset,
+  resolveMediaUri,
+  getMedia,
+  clearAllDeviceMedia,
+} from '../src/media/mediaStore';
 
 interface HistoryRow extends HistoryEntryLite {
   resolvedThumb?: string | null;
@@ -42,21 +47,18 @@ export default function HistoryScreen() {
 
   const loadHunts = async () => {
     const rows = await listHistory((user as any)?.tier);
-    // Resolve thumbnails in parallel. Each row gets a best-effort URI;
-    // missing assets render a placeholder (see getThumb below).
     const enriched: HistoryRow[] = await Promise.all(
       rows.map(async (r) => {
-        // Prefer inline thumbnail (tiny preview). Else resolve the
-        // primary MediaAsset via the adapter.
-        if (r.primaryMediaRef) {
-          try {
-            const uri = await resolveMediaUri(r.primaryMediaRef);
-            return { ...r, resolvedThumb: uri };
-          } catch {
-            return { ...r, resolvedThumb: null };
-          }
+        if (!r.primaryMediaRef) return { ...r, resolvedThumb: null };
+        try {
+          // Prefer thumbnail asset (160px) if the primary points to one.
+          const primary = await getMedia(r.primaryMediaRef);
+          const thumbId = primary?.thumbnailRef || r.primaryMediaRef;
+          const uri = await resolveMediaUri(thumbId);
+          return { ...r, resolvedThumb: uri };
+        } catch {
+          return { ...r, resolvedThumb: null };
         }
-        return { ...r, resolvedThumb: null };
       }),
     );
     setHunts(enriched);
@@ -89,18 +91,24 @@ export default function HistoryScreen() {
   };
 
   const clearAll = () => {
-    Alert.alert('Clear All Hunts', 'Delete all saved hunt plans?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear All',
-        style: 'destructive',
-        onPress: async () => {
-          setHunts([]);
-          await AsyncStorage.removeItem('hunt_history');
-          await AsyncStorage.removeItem('current_hunt');
+    Alert.alert(
+      'Clear All Hunts',
+      'Delete all saved hunt plans AND any cached map images stored on this device?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            setHunts([]);
+            await AsyncStorage.removeItem('hunt_history');
+            await AsyncStorage.removeItem('current_hunt');
+            await AsyncStorage.removeItem('raven_analysis_v1');
+            await clearAllDeviceMedia();
+          },
         },
-      },
-    ]);
+      ],
+    );
   };
 
   const getThumb = (hunt: HistoryRow): string | null => hunt.resolvedThumb ?? null;

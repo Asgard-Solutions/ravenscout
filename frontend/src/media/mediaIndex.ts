@@ -65,6 +65,10 @@ export async function getMediaById(imageId: string): Promise<MediaAsset | null> 
   return all.find(a => a.imageId === imageId) || null;
 }
 
+export async function listAllIndexedMedia(): Promise<MediaAsset[]> {
+  return readAll();
+}
+
 export async function listMediaForHunt(huntId: string): Promise<MediaAsset[]> {
   if (!huntId) return [];
   const all = await readAll();

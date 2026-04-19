@@ -78,4 +78,15 @@ export class FileSystemMediaStore implements MediaStoreAdapter {
       return !!info.exists;
     } catch { return false; }
   }
+
+  /**
+   * Best-effort: delete the entire raven-media cache directory. Used
+   * by the "clear all device media" debug action.
+   */
+  async removeAll(): Promise<void> {
+    try {
+      const dir = await ensureDir();
+      await FileSystem.deleteAsync(dir, { idempotent: true });
+    } catch {}
+  }
 }

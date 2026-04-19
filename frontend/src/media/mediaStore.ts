@@ -23,8 +23,14 @@ import {
   listMediaForHunt as indexListForHunt,
   removeMediaFromIndex,
   removeMediaForHunt as indexRemoveForHunt,
+  wipeMediaIndex,
 } from './mediaIndex';
 import { logClientEvent } from '../utils/clientLog';
+import {
+  buildThumbnail,
+  compressImage,
+  profileForTier,
+} from './imageProcessor';
 
 // ------------------------------ Adapter factory ------------------------------
 
@@ -80,14 +86,57 @@ export async function saveMedia(
 ): Promise<MediaAsset> {
   const strategy = resolveStorageStrategy({ tier: ctx.tier ?? null });
   const adapter = adapterForStrategy(strategy);
-  const stored = await adapter.save(input);
+  // Compress unless explicitly skipped (thumbnails / already-processed).
+  const role = ctx.role || 'primary';
+  let payload = input;
+  if (role !== 'thumbnail') {
+    const profile = profileForTier(ctx.tier);
+    const compressed = await compressImage(input.base64, profile);
+    payload = {
+      base64: compressed.dataUri,
+      mime: compressed.mime,
+      width: compressed.width || input.width,
+      height: compressed.height || input.height,
+    };
+  }
+  const stored = await adapter.save(payload);
   const asset: MediaAsset = {
     ...stored,
-    role: ctx.role || stored.role || 'primary',
+    role,
     huntId: ctx.huntId,
   };
   await indexMedia(asset);
   return asset;
+}
+
+/** Save a thumbnail for an existing primary asset. Best-effort. */
+async function saveThumbnailFor(
+  primaryBase64: string,
+  ctx: SaveMediaContext,
+): Promise<MediaAsset | null> {
+  try {
+    const thumb = await buildThumbnail(primaryBase64);
+    const strategy = resolveStorageStrategy({ tier: ctx.tier ?? null });
+    const adapter = adapterForStrategy(strategy);
+    const stored = await adapter.save({ base64: thumb.dataUri, mime: thumb.mime });
+    const asset: MediaAsset = {
+      ...stored,
+      role: 'thumbnail',
+      huntId: ctx.huntId,
+    };
+    await indexMedia(asset);
+    return asset;
+  } catch (err) {
+    logClientEvent({
+      event: 'persist_degraded',
+      data: {
+        reason: 'thumbnail_generation_failed',
+        hunt_id: ctx.huntId,
+        error: (err as any)?.message,
+      },
+    });
+    return null;
+  }
 }
 
 export async function saveMediaBatch(
@@ -101,6 +150,14 @@ export async function saveMediaBatch(
     const role: MediaRole = i === 0 ? 'primary' : 'context';
     try {
       const asset = await saveMedia({ base64: b }, { ...ctx, role });
+      // Only the primary gets a thumbnail (history list anchor).
+      if (role === 'primary') {
+        const thumb = await saveThumbnailFor(b, ctx);
+        if (thumb) {
+          asset.thumbnailRef = thumb.imageId;
+          await indexMedia(asset); // re-index with thumbnailRef
+        }
+      }
       out.push(asset);
     } catch (err) {
       logClientEvent({
@@ -149,11 +206,61 @@ export async function listMediaForHunt(huntId: string): Promise<MediaAsset[]> {
 
 export async function removeMediaForHunt(huntId: string): Promise<number> {
   const assets = await indexListForHunt(huntId);
+  // Also queue any thumbnails referenced by primaries (in case they
+  // weren't tagged with huntId for any reason).
+  const thumbIds = new Set<string>();
+  for (const a of assets) {
+    if (a.thumbnailRef) thumbIds.add(a.thumbnailRef);
+  }
   for (const a of assets) {
     try { await adapterForAsset(a).remove(a); } catch {}
   }
+  for (const tid of thumbIds) {
+    if (assets.some(a => a.imageId === tid)) continue;
+    const t = await getMediaById(tid);
+    if (t) {
+      try { await adapterForAsset(t).remove(t); } catch {}
+      await removeMediaFromIndex(tid);
+    }
+  }
   const removed = await indexRemoveForHunt(huntId);
-  return removed.length;
+  return removed.length + thumbIds.size;
+}
+
+/**
+ * Wipe ALL media bytes + the index. Intended for a manual "clear all
+ * device media" debug action. Does not touch the AnalysisStore so the
+ * user can still see metadata-only history if they want.
+ */
+export async function clearAllDeviceMedia(): Promise<number> {
+  // Read every asset, ask its adapter to delete the bytes, then
+  // wipe the index. Index-only orphans are removed by wipeMediaIndex.
+  const fs = getFs();
+  // We can iterate via index; if some assets are missing in the index,
+  // their files will be GC'd by the OS eventually. Best-effort.
+  let count = 0;
+  try {
+    // Reuse indexListForHunt with a sentinel — it filters by huntId.
+    // Instead, read everything by clearing only what we know about.
+    const known = await listAllIndexed();
+    for (const a of known) {
+      try {
+        await adapterForAsset(a).remove(a);
+        count++;
+      } catch {}
+    }
+  } catch {}
+  // Best-effort: clear the on-disk media directory altogether.
+  try { await fs.removeAll?.(); } catch {}
+  await wipeMediaIndex();
+  return count;
+}
+
+async function listAllIndexed(): Promise<MediaAsset[]> {
+  // Defer to mediaIndex's internal reader by importing dynamically to
+  // avoid circular deps.
+  const mod = await import('./mediaIndex');
+  return mod.listAllIndexedMedia();
 }
 
 export async function migrateLegacyBase64Media(

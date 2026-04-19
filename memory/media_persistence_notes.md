@@ -65,7 +65,37 @@ production runtime.
 | `src/media/huntHydration.ts` | `hydrateHuntResult`, `saveHunt`, `listHistory`, lazy migration |
 | `src/media/huntSerialization.ts` | Pure: `stripBase64Images`, legacy detection, `buildPersistedAnalysis` |
 | `src/media/huntPersistence.ts` | Compatibility facade |
+| `src/media/imageProfiles.ts` | **NEW** — Pure: `PROFILE_PRO`, `PROFILE_CORE`, `PROFILE_THUMBNAIL`, `profileForTier()` |
+| `src/media/imageProcessor.ts` | **NEW** — Wraps `expo-image-manipulator`. `compressImage(input, profile)`, `buildThumbnail(input)` |
+| `src/media/__tests__/imageProcessor.test.ts` | **NEW** — Pure profile tests (Pro vs Core, defaults, case-insensitive) |
 | `src/media/__tests__/huntPersistence.test.ts` | 18 pure tests (+22 matching) — all mobile-oriented |
+
+## Image processing on ingest
+
+`saveMedia()` runs every primary/context image through
+`expo-image-manipulator` before handing bytes to the adapter.
+
+| Tier | Profile | Max dimension | JPEG quality |
+|---|---|---|---|
+| Pro | `PROFILE_PRO` | 2048 px | 0.85 |
+| Core / Trial | `PROFILE_CORE` | 1280 px | 0.70 |
+
+The thumbnail profile (`PROFILE_THUMBNAIL`, 160 px / 0.50) runs in
+parallel for every primary asset and is stored as a separate
+`role='thumbnail'` MediaAsset. The primary asset's `thumbnailRef`
+holds the thumbnail's `imageId`. History cards prefer `thumbnailRef`
+over `primaryMediaRef` for fast list rendering.
+
+## Hunt deletion / device cleanup
+
+- `deleteHuntById(id)` removes the analysis record AND calls
+  `removeMediaForHunt(id)` which deletes every byte (primary,
+  context, thumbnail) plus index entries for that hunt.
+- `clearAllDeviceMedia()` (exposed via `mediaStore` and the
+  `huntPersistence` facade) wipes every byte managed by adapters,
+  removes the entire `raven-media` cache directory, and clears the
+  media index. The "Clear All Hunts" action on history.tsx now also
+  wipes all device media in addition to AsyncStorage keys.
 
 ## What was removed in the mobile-only cleanup
 

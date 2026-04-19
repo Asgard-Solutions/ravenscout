@@ -30,6 +30,7 @@ export {
   listMediaForHunt,
   removeMediaForHunt,
   migrateLegacyBase64Media,
+  clearAllDeviceMedia,
 } from './mediaStore';
 
 export {

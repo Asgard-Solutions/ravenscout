@@ -50,6 +50,11 @@ export interface MediaAsset {
   height?: number;
   bytes?: number;
   createdAt: string;
+  /**
+   * If present, points to a `role='thumbnail'` MediaAsset imageId.
+   * Only set on `role='primary'` assets.
+   */
+  thumbnailRef?: string;
 }
 
 export interface MediaInput {
