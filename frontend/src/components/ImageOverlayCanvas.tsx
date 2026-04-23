@@ -8,10 +8,9 @@
 // Design rules:
 //   1. Overlay anchors live in IMAGE-SPACE (x_percent, y_percent of
 //      the natural image). Children are absolute-positioned within
-//      the Animated container that has the image's display size —
-//      i.e. at scale=1 their on-screen pixel position matches the
-//      image exactly. When the container scales, both image and
-//      anchors scale together. No screen-space math required.
+//      an inner View whose rect EXACTLY matches the rendered image
+//      rect (letterbox-aware) — so at scale=1 they sit on the exact
+//      pixel they were anchored to, regardless of container aspect.
 //   2. We use `react-native-gesture-handler` (v2) `Gesture.Pinch`
 //      and `Gesture.Pan` composed simultaneously, with
 //      `react-native-reanimated` shared values for transform.
@@ -23,8 +22,13 @@
 //   5. When `overlayStatus === 'stale'` we tint a banner on top so
 //      the user knows the overlay is tied to a different image
 //      basis and should re-analyze.
+//   6. Image is rendered with `resizeMode="contain"` — the full
+//      analyzed image is ALWAYS visible. Letterbox padding (if any)
+//      is drawn as container background; markers never land on it.
+//
+// Coordinate contract: see src/utils/imageFit.ts.
 
-import React, { useImperativeHandle, forwardRef, useCallback } from 'react';
+import React, { useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -35,11 +39,23 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { COLORS } from '../constants/theme';
+import { computeFittedImageRect } from '../utils/imageFit';
 
 export interface ImageOverlayCanvasProps {
   imageUri: string | null;
+  /** Outer container size (fixed). */
   width: number;
   height: number;
+  /**
+   * Natural dimensions of the ANALYZED image (the image the LLM
+   * saw). When provided, the image is rendered with contain
+   * letterboxing and overlay children are laid out inside the
+   * fitted rect — keeping x_percent/y_percent aligned to real image
+   * pixels. When omitted / 0, we degrade to full-container layout
+   * (legacy hunts lack these dims).
+   */
+  imageNaturalWidth?: number;
+  imageNaturalHeight?: number;
   /** Overlay markers/decoration children rendered in image-space. */
   children?: React.ReactNode;
   /** Enable pinch / pan / double-tap-to-reset. Defaults to true. */
@@ -49,7 +65,8 @@ export interface ImageOverlayCanvasProps {
   /**
    * Called when the user taps the canvas (in image-space percent).
    * Only fires when `enableZoom` is false, so marker-add flows work
-   * predictably at scale=1.
+   * predictably at scale=1. Coordinates are clamped to [0,100]; taps
+   * in the letterbox padding are rejected (callback not fired).
    */
   onTapImageSpace?: (xPct: number, yPct: number) => void;
   /** Fallback block (e.g. TacticalMapView) when imageUri is null. */
@@ -73,6 +90,8 @@ export const ImageOverlayCanvas = forwardRef<
     imageUri,
     width,
     height,
+    imageNaturalWidth,
+    imageNaturalHeight,
     children,
     enableZoom = true,
     overlayStatus = 'valid',
@@ -88,6 +107,19 @@ export const ImageOverlayCanvas = forwardRef<
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+
+  // Single canonical fitted rect — used for both the image and its
+  // child overlays so they share the exact same coordinate space.
+  const fitted = useMemo(
+    () =>
+      computeFittedImageRect(
+        width,
+        height,
+        imageNaturalWidth ?? 0,
+        imageNaturalHeight ?? 0,
+      ),
+    [width, height, imageNaturalWidth, imageNaturalHeight],
+  );
 
   const resetTransform = useCallback(() => {
     scale.value = withTiming(1);
@@ -176,12 +208,24 @@ export const ImageOverlayCanvas = forwardRef<
 
   // Single-tap to image-space — only active when zoom is disabled
   // (so marker-add flows work at scale=1 as the old code expects).
+  // Taps inside the fitted-image rect are forwarded as percent of
+  // that rect (NOT the container); taps in the letterbox pad are
+  // dropped so users can't add markers onto blank background.
   const tap = Gesture.Tap()
     .enabled(!!onTapImageSpace && !enableZoom)
     .numberOfTaps(1)
     .onEnd(e => {
-      const xPct = (e.x / width) * 100;
-      const yPct = (e.y / height) * 100;
+      const localX = e.x - fitted.offsetX;
+      const localY = e.y - fitted.offsetY;
+      if (
+        localX < 0 || localX > fitted.width ||
+        localY < 0 || localY > fitted.height ||
+        fitted.width <= 0 || fitted.height <= 0
+      ) {
+        return;
+      }
+      const xPct = (localX / fitted.width) * 100;
+      const yPct = (localY / fitted.height) * 100;
       if (onTapImageSpace) runOnJS(onTapImageSpace)(xPct, yPct);
     });
 
@@ -210,16 +254,39 @@ export const ImageOverlayCanvas = forwardRef<
           style={[styles.transformed, { width, height }, animatedStyle]}
         >
           {imageUri ? (
-            <Image
-              source={{ uri: imageUri }}
-              style={{ width, height }}
-              resizeMode="cover"
-            />
+            // Inner letterbox-aware rect. EVERY child (image + markers)
+            // positions against THIS rect, so overlay
+            // `x_percent/y_percent` land on the exact image pixels
+            // the LLM anchored them to.
+            <View
+              testID="overlay-canvas-fitted-rect"
+              style={{
+                position: 'absolute',
+                left: fitted.offsetX,
+                top: fitted.offsetY,
+                width: fitted.width,
+                height: fitted.height,
+              }}
+              pointerEvents="box-none"
+            >
+              <Image
+                source={{ uri: imageUri }}
+                style={{ width: fitted.width, height: fitted.height }}
+                // `contain` would add its OWN internal letterbox if
+                // the aspect drifted — but because the inner rect is
+                // already sized to the image's aspect, any resizeMode
+                // paints edge-to-edge. 'cover' is explicitly chosen
+                // here so a 1-pixel rounding mismatch never leaves a
+                // visible gap line at the rect edge.
+                resizeMode="cover"
+              />
+              {/* Overlay markers — parent is the fitted rect, so
+                  `x_percent/y_percent` mapping is naturally correct. */}
+              {children}
+            </View>
           ) : (
             fallback
           )}
-          {/* Overlay markers — same transformed parent → perfectly aligned */}
-          {children}
         </Animated.View>
       </GestureDetector>
 

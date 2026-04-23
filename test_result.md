@@ -335,6 +335,68 @@ backend:
           expected through the HTTP layer.
 
 frontend:
+  - task: "Image-overlay fitted-rect coordinate contract (results overlay alignment fix)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/utils/imageFit.ts, /app/frontend/src/components/ImageOverlayCanvas.tsx, /app/frontend/app/results.tsx, /app/frontend/src/utils/__tests__/imageFit.test.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          User reported: /analyze-hunt succeeds (success: true,
+          full v2 result), but overlay markers on /results render
+          in the wrong places — the captured map image itself looks
+          correct, only the overlays drift.
+
+          ROOT CAUSE: ImageOverlayCanvas rendered the analyzed
+          image with resizeMode="cover" inside a fixed container
+          (MAP_WIDTH × MAP_HEIGHT). "cover" crops whichever axis
+          overflows. But the LLM returns overlays with
+          x_percent/y_percent normalized to the ANALYZED image's
+          natural pixel grid, and the client positioned markers
+          using the CONTAINER dims as the image coordinate space.
+          Any aspect-ratio mismatch between capture and container
+          drifted markers on the cropped axis.
+
+          FIX:
+          1) New /app/frontend/src/utils/imageFit.ts — ONE
+             canonical `computeFittedImageRect(cW, cH, natW, natH)`
+             returning {offsetX, offsetY, width, height, degraded}
+             + `findOutOfBoundsOverlayIndices` validator. Contract
+             documented inline.
+          2) ImageOverlayCanvas — accepts `imageNaturalWidth/Height`,
+             renders image + children inside a letterbox-aware
+             inner View so child x_percent/y_percent math lands on
+             real image pixels regardless of container aspect.
+             Tap-to-image-space rejects taps on letterbox pad.
+          3) results.tsx — computes same fitted rect from
+             `analysisBasis.naturalWidth/Height` (already captured
+             by Basis Lock at analyze time). All overlay math
+             (DraggableMarker zones + markers, FocusRing,
+             handleMapPress, handleMarkerDrag) uses FITTED_W /
+             FITTED_H. Dev-only guard loudly logs overlays that
+             fall outside [0,100] + flags degraded rects so future
+             regressions fail loudly.
+          4) 18 new tests in src/utils/__tests__/imageFit.test.ts
+             covering same-aspect / portrait / landscape /
+             post-rotation / missing dims / defensives /
+             marker coordinate round-trip / out-of-bounds detector.
+
+          Full frontend unit suite: 123/123 passing (was 105).
+          Metro bundles clean on web (1377 mods) + Android (1675 mods).
+
+          No backend change required — the v2 schema already emits
+          percent-of-analyzed-image coords; Basis Lock already
+          saves naturalWidth/Height. Legacy hunts without natural
+          dims degrade cleanly to the prior full-container layout.
+
+          Needs: on-device verification by the user (capture a map,
+          analyze, confirm marker positions visually match the LLM's
+          labeled observations).
+
   - task: "CloudMediaStore — real S3 upload (replacing stub)"
     implemented: true
     working: "NA"

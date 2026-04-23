@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -33,6 +33,10 @@ import {
   resolveAnalysisBasis,
   type ResolvedAnalysisBasis,
 } from '../src/utils/analysisContext';
+import {
+  computeFittedImageRect,
+  findOutOfBoundsOverlayIndices,
+} from '../src/utils/imageFit';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_WIDTH = SCREEN_WIDTH - 32;
@@ -328,6 +332,59 @@ export default function ResultsScreen() {
   // shows a warning banner — see the render block below.
   const overlayStatus: 'valid' | 'stale' = analysisBasis?.overlayStatus === 'stale' ? 'stale' : 'valid';
 
+  // Single canonical fitted-image rect for the analysis view. Every
+  // overlay marker, zone, focus ring, and edit-mode tap uses this
+  // rect (NOT the outer MAP_WIDTH/MAP_HEIGHT container) so
+  // x_percent/y_percent land on real image pixels even when the
+  // captured image's aspect ratio doesn't match the container.
+  //
+  // See src/utils/imageFit.ts for the coordinate contract.
+  const fittedRect = useMemo(
+    () =>
+      computeFittedImageRect(
+        MAP_WIDTH,
+        MAP_HEIGHT,
+        analysisBasis?.naturalWidth || 0,
+        analysisBasis?.naturalHeight || 0,
+      ),
+    [analysisBasis?.naturalWidth, analysisBasis?.naturalHeight],
+  );
+  const FITTED_W = fittedRect.width || MAP_WIDTH;
+  const FITTED_H = fittedRect.height || MAP_HEIGHT;
+
+  // Dev-only: loudly log any overlays that arrived out-of-bounds so
+  // future coordinate-contract regressions don't silently drop data.
+  useEffect(() => {
+    if (!__DEV__) return;
+    if (!overlays || overlays.length === 0) return;
+    const oob = findOutOfBoundsOverlayIndices(overlays, 1);
+    if (oob.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[results] ${oob.length}/${overlays.length} overlay(s) out of [0,100] bounds:`,
+        oob.map(i => ({ i, x: overlays[i]?.x_percent, y: overlays[i]?.y_percent, label: overlays[i]?.label })),
+      );
+      logClientEvent({
+        event: 'overlay_out_of_bounds',
+        data: {
+          count: oob.length,
+          total: overlays.length,
+          natural_w: analysisBasis?.naturalWidth || 0,
+          natural_h: analysisBasis?.naturalHeight || 0,
+          fitted_w: FITTED_W,
+          fitted_h: FITTED_H,
+        },
+      });
+    }
+    if (fittedRect.degraded) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[results] fittedRect degraded — natural image dimensions missing; falling back to container. ' +
+        'Overlays may drift on aspect-mismatched captures until a re-analysis is run.',
+      );
+    }
+  }, [overlays, analysisBasis?.naturalWidth, analysisBasis?.naturalHeight, FITTED_W, FITTED_H, fittedRect.degraded]);
+
   // --- Edit Mode Functions ---
   const enterEditMode = () => {
     setEditMode(true);
@@ -374,8 +431,19 @@ export default function ResultsScreen() {
   const handleMapPress = useCallback((evt: any) => {
     if (!editMode || !addMode || !addMarkerType) return;
     const { locationX, locationY } = evt.nativeEvent;
-    const xPercent = Math.max(3, Math.min(97, (locationX / MAP_WIDTH) * 100));
-    const yPercent = Math.max(3, Math.min(97, (locationY / MAP_HEIGHT) * 100));
+    // Tap in container coords → subtract letterbox offset → divide
+    // by fitted rect size → percent of the ANALYZED image. Taps
+    // that land on letterbox padding are silently rejected.
+    const localX = locationX - fittedRect.offsetX;
+    const localY = locationY - fittedRect.offsetY;
+    if (
+      localX < 0 || localX > FITTED_W ||
+      localY < 0 || localY > FITTED_H
+    ) {
+      return;
+    }
+    const xPercent = Math.max(3, Math.min(97, (localX / FITTED_W) * 100));
+    const yPercent = Math.max(3, Math.min(97, (localY / FITTED_H) * 100));
 
     const markerDef = CUSTOM_MARKER_TYPES.find(m => m.id === addMarkerType);
     const newOverlay: OverlayMarker = {
@@ -404,8 +472,8 @@ export default function ResultsScreen() {
     setOverlays(prev => {
       const updated = [...prev];
       const marker = { ...updated[index] };
-      marker.x_percent = Math.max(3, Math.min(97, marker.x_percent + (dx / MAP_WIDTH) * 100));
-      marker.y_percent = Math.max(3, Math.min(97, marker.y_percent + (dy / MAP_HEIGHT) * 100));
+      marker.x_percent = Math.max(3, Math.min(97, marker.x_percent + (dx / FITTED_W) * 100));
+      marker.y_percent = Math.max(3, Math.min(97, marker.y_percent + (dy / FITTED_H) * 100));
       updated[index] = marker;
       return updated;
     });
@@ -633,12 +701,17 @@ export default function ResultsScreen() {
                 imageUri={primaryImage}
                 width={MAP_WIDTH}
                 height={MAP_HEIGHT}
+                imageNaturalWidth={analysisBasis?.naturalWidth || 0}
+                imageNaturalHeight={analysisBasis?.naturalHeight || 0}
                 enableZoom={!editMode}
                 overlayStatus={overlayStatus}
                 testID="overlay-canvas"
               >
                 {/* Overlay markers — ALWAYS on the primary image.
-                    Positioned in image-space (%), share transform. */}
+                    Positioned in image-space (%), share transform.
+                    `parentWidth/parentHeight` are the fitted rect
+                    dims so percent math lands on real image pixels
+                    regardless of container aspect. */}
                 {overlays.map((overlay, idx) => (
                   <DraggableMarker
                     key={overlay.id}
@@ -646,6 +719,8 @@ export default function ResultsScreen() {
                     index={idx}
                     editMode={editMode}
                     isSelected={selectedOverlay?.id === overlay.id}
+                    parentWidth={FITTED_W}
+                    parentHeight={FITTED_H}
                     onPress={() => setSelectedOverlay(selectedOverlay?.id === overlay.id ? null : overlay)}
                     onDragStart={() => handleMarkerDragStart(idx)}
                     onDrag={(dx, dy) => handleMarkerDrag(idx, dx, dy)}
@@ -659,8 +734,8 @@ export default function ResultsScreen() {
                     x={focusState.target.x_percent}
                     y={focusState.target.y_percent}
                     pulse={focusPulse}
-                    mapWidth={MAP_WIDTH}
-                    mapHeight={MAP_HEIGHT}
+                    mapWidth={FITTED_W}
+                    mapHeight={FITTED_H}
                   />
                 )}
               </ImageOverlayCanvas>
@@ -923,6 +998,8 @@ function DraggableMarker({
   index,
   editMode,
   isSelected,
+  parentWidth,
+  parentHeight,
   onPress,
   onDragStart,
   onDrag,
@@ -932,6 +1009,10 @@ function DraggableMarker({
   index: number;
   editMode: boolean;
   isSelected: boolean;
+  /** Width of the fitted-image parent (NOT the outer container). */
+  parentWidth: number;
+  /** Height of the fitted-image parent (NOT the outer container). */
+  parentHeight: number;
   onPress: () => void;
   onDragStart: () => void;
   onDrag: (dx: number, dy: number) => void;
@@ -973,10 +1054,10 @@ function DraggableMarker({
         style={[
           styles.overlayZone,
           {
-            left: Math.max(0, ((overlay.x_percent - zoneWidth / 2) / 100) * MAP_WIDTH),
-            top: Math.max(0, ((overlay.y_percent - zoneHeight / 2) / 100) * MAP_HEIGHT),
-            width: (zoneWidth / 100) * MAP_WIDTH,
-            height: (zoneHeight / 100) * MAP_HEIGHT,
+            left: Math.max(0, ((overlay.x_percent - zoneWidth / 2) / 100) * parentWidth),
+            top: Math.max(0, ((overlay.y_percent - zoneHeight / 2) / 100) * parentHeight),
+            width: (zoneWidth / 100) * parentWidth,
+            height: (zoneHeight / 100) * parentHeight,
             backgroundColor: `${color}33`,
             borderColor: isSelected ? COLORS.accent : color,
             borderWidth: isSelected ? 3 : 2,
@@ -997,8 +1078,8 @@ function DraggableMarker({
       style={[
         styles.overlayMarker,
         {
-          left: (overlay.x_percent / 100) * MAP_WIDTH - 16,
-          top: (overlay.y_percent / 100) * MAP_HEIGHT - 16,
+          left: (overlay.x_percent / 100) * parentWidth - 16,
+          top: (overlay.y_percent / 100) * parentHeight - 16,
           backgroundColor: color,
           borderColor: isSelected ? COLORS.accent : '#FFFFFF',
           borderWidth: isSelected ? 3 : 2,
