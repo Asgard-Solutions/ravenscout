@@ -1,9 +1,20 @@
 """
 Raven Scout — Modular Prompt Builder
 Tier-aware, image-count-aware prompt generation for hunt analysis.
+
+Species-specific behavior is provided by `species_prompts/` (see the
+package docstring). This module stays focused on the *shared*
+pipeline: base rules, hunt conditions, image context, JSON output
+schema, constraints, and user-prompt assembly.
 """
 
 from typing import Optional
+
+from species_prompts import (
+    SpeciesPromptPack,
+    resolve_species_pack,
+)
+from species_prompts.pack import render_species_prompt_block
 
 # --- Constants ---
 
@@ -44,15 +55,25 @@ Your role is decision-support only. You do not guarantee outcomes. You provide y
 You MUST respond with valid JSON only. No markdown. No code fences. No commentary outside the JSON object."""
 
 
-def build_species_rules(animal: str, species_data: dict) -> str:
-    species = species_data.get(animal)
-    if not species:
-        return ""
-    rules = "\n".join(f"  - {r}" for r in species["behavior_rules"])
-    return f"""
-SPECIES: {species['name']}
-BEHAVIOR RULES:
-{rules}"""
+def build_species_rules(animal: str, species_data: Optional[dict] = None) -> str:
+    """Render the species-specific prompt fragment.
+
+    Delegates to the `species_prompts` registry so each species
+    gets its targeted behavior/tactical/caution/tips block instead
+    of the old single generic behavior-rules list.
+
+    The legacy `species_data` dict is accepted (and ignored) for
+    backwards compatibility with callers that haven't migrated yet.
+    """
+    _ = species_data  # legacy arg — intentionally unused
+    pack = resolve_species_pack(animal)
+    return render_species_prompt_block(pack)
+
+
+def build_species_prompt_pack_block(pack: SpeciesPromptPack) -> str:
+    """Render a pre-resolved pack directly. Thin wrapper kept for
+    explicit callers / tests."""
+    return render_species_prompt_block(pack)
 
 
 def build_hunt_conditions_block(conditions: dict) -> str:
@@ -188,7 +209,8 @@ STRICT CONSTRAINTS:
   - If imagery does not support a conclusion, lower confidence and document uncertainty in key_assumptions.
   - Provide 3-6 overlays covering stands, corridors, access routes, and avoid zones.
   - Provide 1-3 top_setups ranked by tactical advantage.
-  - Provide 2-5 map_observations describing key terrain features you identified."""
+  - Provide 2-5 map_observations describing key terrain features you identified.
+  - species_tips MUST follow the SPECIES TIPS GUIDANCE from the species block above — keep them species-specific, not generic."""
 
 
 def build_user_prompt(species_name: str, conditions: dict, image_count: int) -> str:
@@ -218,14 +240,21 @@ def build_user_prompt(species_name: str, conditions: dict, image_count: int) -> 
 def assemble_system_prompt(
     animal: str,
     conditions: dict,
-    species_data: dict,
     image_count: int,
     tier: str,
+    species_data: Optional[dict] = None,
 ) -> str:
-    """Assemble the complete system prompt from modular parts."""
+    """Assemble the complete system prompt from modular parts.
+
+    Species behavior comes from the species_prompts registry; the
+    legacy `species_data` arg is accepted only for backward compat
+    and is not used.
+    """
+    _ = species_data  # legacy — ignored
+    pack = resolve_species_pack(animal)
     parts = [
         build_base_system_prompt(),
-        build_species_rules(animal, species_data),
+        build_species_prompt_pack_block(pack),
         build_hunt_conditions_block(conditions),
         build_image_context_block(image_count, tier),
         build_output_schema_block(),
