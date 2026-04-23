@@ -1,6 +1,6 @@
 """Wild Turkey prompt pack."""
 
-from .pack import SeasonalModifier, SpeciesPromptPack
+from .pack import RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 # ----------------------------- Seasonal modifiers -----------------------------
 # Spring season focus. Fall turkey hunting uses a different playbook
@@ -137,5 +137,120 @@ TURKEY_PACK = SpeciesPromptPack(
         "peak_breeding": _TURKEY_PEAK_BREEDING,
         "early_season": _TURKEY_EARLY_SEASON,
         "late_season": _TURKEY_LATE_SEASON,
+    },
+    regional_modifiers={
+        "east_texas": RegionalModifier(
+            region_id="east_texas",
+            name="East Texas / Piney Woods",
+            behavior_adjustments=(
+                "Dense pine/hardwood cover with thick understory — visibility is low; strut zones are bounded to openings, logging roads, clearcut edges, and food plots.",
+                "Creek bottoms and hardwood drainages act as travel corridors between roost areas and openings.",
+            ),
+            tactical_adjustments=(
+                "Favor logging roads, clearcut edges, pipeline right-of-ways, and small fields as calling setups.",
+                "Quiet approach is critical in humid pine cover — sound carries farther than hunters realize.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend long open-field setups where visibility is tree-line bound.",
+                "Do NOT assume northern April breeding peak — East Texas peaks earlier.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize logging roads and clearcut edges as primary strut/travel corridors.",
+                "Call out quiet low-impact access and dense-cover visibility limits.",
+            ),
+            season_adjustments={
+                # Spring season runs early.
+                "early_season": {"months": (3,)},
+                "peak_breeding": {"months": (3, 4)},
+                "late_season": {"months": (5,)},
+            },
+        ),
+        "southeast_us": RegionalModifier(
+            region_id="southeast_us",
+            name="Southeast US",
+            behavior_adjustments=(
+                "Pine plantations, hardwood bottoms, food plots, and small clearings shape movement.",
+                "Breeding timing shifts earlier than northern April baseline — can begin in March across much of the Deep South.",
+            ),
+            tactical_adjustments=(
+                "Favor food plots, pipeline openings, and hardwood bottoms as strut-zone candidates.",
+                "Early-morning setups near roost travel corridors outperform deep-woods calling runs.",
+            ),
+            caution_adjustments=(
+                "Do NOT use a single northern April peak date across the region — variance is wide.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize early-season strut activity and openings/food-plot setups.",
+                "Acknowledge regional timing variance explicitly.",
+            ),
+            season_adjustments={
+                "early_season": {"months": (3,)},
+                "peak_breeding": {"months": (3, 4)},
+                "late_season": {"months": (5,)},
+            },
+        ),
+        "midwest": RegionalModifier(
+            region_id="midwest",
+            name="Midwest",
+            behavior_adjustments=(
+                "Field-edge movement, timber fingers, and draws shape daily routes; strut zones often sit on field corners and open ridges.",
+                "April peak breeding aligns with the northern calendar default.",
+            ),
+            tactical_adjustments=(
+                "Favor field corners, timber fingers into ag, and logging roads as strut/travel setups.",
+                "Use terrain (ridges, draws) to shield approach — ag-field corners are prime but exposed.",
+            ),
+            caution_adjustments=(
+                "Do NOT project Deep-South early-season timing here; Midwest peaks in April.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize field-corner / timber-finger setups and terrain-shielded approach.",
+            ),
+        ),
+        "plains": RegionalModifier(
+            region_id="plains",
+            name="Great Plains / Rio Grande Range",
+            behavior_adjustments=(
+                "Open country with scattered timber — movement concentrates near creek bottoms, shelterbelts, cottonwoods, and stock-tank cover.",
+                "Rio Grande turkeys in western parts of the region use larger daily ranges than eastern birds.",
+            ),
+            tactical_adjustments=(
+                "Favor creek bottoms, shelterbelts, and stock-tank cover for ambush setups.",
+                "Use terrain (ditches, draws, fencelines) to cover long approach distances.",
+            ),
+            caution_adjustments=(
+                "Do NOT project eastern-timber calling tactics onto open Plains country.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize creek/shelterbelt setups and long-approach cover discipline.",
+            ),
+            season_adjustments={
+                "peak_breeding": {"months": (4, 5)},
+            },
+        ),
+        "mountain_west": RegionalModifier(
+            region_id="mountain_west",
+            name="Mountain West / Merriam's Country",
+            behavior_adjustments=(
+                "Elevation and terrain shape movement — birds drop elevation in mornings to feed, climb to roost by evening.",
+                "Mountain turkeys (Merriam's) respond to terrain funnels and meadows more than field edges.",
+            ),
+            tactical_adjustments=(
+                "Favor meadow/park edges, ridge saddles, and logging-road transitions between roost ridges and feeding benches.",
+                "Thermal winds (downslope AM, upslope PM) affect both calling sound and scent.",
+            ),
+            caution_adjustments=(
+                "Do NOT project flat-land field-edge tactics onto mountain terrain.",
+                "Do NOT assume April peak; breeding often peaks in May at elevation.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize meadow edges, ridge saddles, and thermal wind management.",
+            ),
+            season_adjustments={
+                "early_season": {"months": (4,)},
+                "peak_breeding": {"months": (5,)},
+                "late_season": {"months": (5, 6)},
+            },
+        ),
     },
 )

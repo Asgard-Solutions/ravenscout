@@ -70,6 +70,51 @@ class SeasonalModifier:
 
 
 # -------------------------------------------------------------------
+# RegionalModifier
+# -------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RegionalModifier:
+    """Additive overlay keyed to a broad hunting region.
+
+    Fields parallel `SpeciesPromptPack` so the LLM receives familiar
+    headings. Everything is *additive* — the base species and seasonal
+    guidance still apply.
+
+    `season_adjustments` is an OPTIONAL override map consumed by
+    `seasons.resolve_seasonal_modifier`. Keys are seasonal phase_ids;
+    values are dicts that override individual fields of that phase's
+    `trigger_rules` (e.g. shifting the `months` tuple or
+    `min_temp_f`/`max_temp_f` thresholds for a region).
+
+    Example (South Texas whitetail rut shifts later):
+        season_adjustments = {"rut": {"months": (12, 1)}}
+
+    `trigger_rules` is metadata — currently informational only
+    (selection is by canonical region id, not by trigger matching).
+    """
+
+    region_id: str
+    name: str
+    trigger_rules: Mapping[str, Any] = field(default_factory=dict)
+
+    behavior_adjustments: Tuple[str, ...] = ()
+    tactical_adjustments: Tuple[str, ...] = ()
+    caution_adjustments: Tuple[str, ...] = ()
+    species_tips_adjustments: Tuple[str, ...] = ()
+
+    # Phase-id -> partial trigger_rule overrides for the seasonal
+    # selector. Unknown phase_ids are ignored.
+    season_adjustments: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+
+    confidence_note: str = (
+        "Region inference is broad. Local variation can be substantial; "
+        "lower confidence for claims that rely on narrow regional specifics."
+    )
+
+
+# -------------------------------------------------------------------
 # SpeciesPromptPack
 # -------------------------------------------------------------------
 
@@ -93,8 +138,13 @@ class SpeciesPromptPack:
     # HuntConditions.
     seasonal_modifiers: Dict[str, "SeasonalModifier"] = field(default_factory=dict)
 
-    # Placeholders kept as string tuples for future expansion layers.
-    regional_modifiers: Tuple[str, ...] = field(default_factory=tuple)
+    # Regional modifiers keyed by canonical region id (see
+    # species_prompts.regions). Resolved from hunt GPS first, then
+    # optional manual override. A regional modifier can also shift
+    # seasonal phase boundaries via its `season_adjustments` map.
+    regional_modifiers: Dict[str, "RegionalModifier"] = field(default_factory=dict)
+
+    # Placeholder kept as string tuple for future expansion layer.
     hunt_style_modifiers: Tuple[str, ...] = field(default_factory=tuple)
 
     is_fallback: bool = False
@@ -133,9 +183,6 @@ def render_species_prompt_block(pack: SpeciesPromptPack) -> str:
         _bullets(pack.species_tips_guidance),
     ]
 
-    if pack.regional_modifiers:
-        lines.append("REGIONAL MODIFIERS:")
-        lines.append(_bullets(pack.regional_modifiers))
     if pack.hunt_style_modifiers:
         lines.append("HUNT STYLE MODIFIERS:")
         lines.append(_bullets(pack.hunt_style_modifiers))
@@ -190,4 +237,68 @@ def render_no_seasonal_context_note() -> str:
         "NOTE: Insufficient data to confidently infer a seasonal phase "
         "(rut, peak breeding, drought, etc.). Do NOT assume a phase. "
         "Lower confidence for recommendations that would depend on one."
+    )
+
+
+def render_regional_modifier_block(
+    modifier: RegionalModifier,
+    region_id: str,
+    region_label: str,
+    source: str,
+) -> str:
+    """Render a resolved regional modifier as an additive prompt block.
+
+    Sits between the species pack and the seasonal modifier in the
+    assembled prompt. Adjustments are framed as *additions* to the
+    species pack — the base species rules still apply.
+
+    `source` is the value of `regionResolutionSource`
+    (``"gps"`` / ``"map_centroid"`` / ``"manual_override"`` / ``"default"``)
+    — included so the LLM knows whether the region was confidently
+    detected vs. defaulted to.
+    """
+    lines = [
+        "",
+        f"REGIONAL CONTEXT: {modifier.name} (region_id={region_id}, source={source})",
+        f"NOTE: {modifier.confidence_note}",
+        "",
+        "REGIONAL BEHAVIOR ADJUSTMENTS (apply in addition to the base species rules):",
+        _bullets(modifier.behavior_adjustments),
+        "REGIONAL TACTICAL ADJUSTMENTS:",
+        _bullets(modifier.tactical_adjustments),
+        "REGIONAL CAUTION ADJUSTMENTS (do not over-assume narrow regional specifics):",
+        _bullets(modifier.caution_adjustments),
+        "REGIONAL SPECIES TIPS ADJUSTMENTS (layer these on top of base species_tips guidance):",
+        _bullets(modifier.species_tips_adjustments),
+    ]
+    if modifier.season_adjustments:
+        lines.append("")
+        lines.append(
+            "SEASONAL TIMING SHIFT (regional): the phase boundaries "
+            "below have been adjusted for this region — apply them in "
+            "the SEASONAL CONTEXT block that follows."
+        )
+    # Region label is kept for display/debug but not asserted in the prompt.
+    _ = region_label
+    return "\n".join(lines)
+
+
+def render_no_regional_context_note(
+    region_id: str,
+    region_label: str,
+    source: str,
+) -> str:
+    """Emitted when no regional modifier is available for this pack.
+
+    The prompt still records the detected region + source so the LLM
+    can calibrate its own confidence, but no tactical adjustments are
+    injected. Keeps the prompt shape stable regardless of resolution.
+    """
+    _ = region_label
+    return (
+        f"\nREGIONAL CONTEXT: generic (region_id={region_id}, source={source})\n"
+        "NOTE: No species-specific regional modifier is applied. Fall "
+        "back to the base species pack's tactical reasoning. Do NOT "
+        "invent regional specifics; lower confidence for claims that "
+        "would depend on local geography."
     )

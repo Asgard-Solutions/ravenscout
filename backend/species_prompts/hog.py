@@ -1,6 +1,6 @@
 """Wild Hog (feral swine) prompt pack."""
 
-from .pack import SeasonalModifier, SpeciesPromptPack
+from .pack import RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 # ----------------------------- Seasonal modifiers -----------------------------
 # Hog activity is driven more by temperature and water than by
@@ -154,5 +154,90 @@ HOG_PACK = SpeciesPromptPack(
         "drought_conditions": _HOG_DROUGHT,
         "hot_weather": _HOG_HOT_WEATHER,
         "cold_weather": _HOG_COLD_WEATHER,
+    },
+    regional_modifiers={
+        "south_texas": RegionalModifier(
+            region_id="south_texas",
+            name="South Texas",
+            behavior_adjustments=(
+                "Hot, dry, brushy country — hogs depend heavily on stock tanks, wells, windmills, and any available water.",
+                "Nocturnal bias is extreme in summer; daylight movement collapses to first/last legal light.",
+                "Dense mesquite/brush provides continuous travel cover between water and feeders/ag.",
+            ),
+            tactical_adjustments=(
+                "Ambush water sources (stock tanks, troughs, seeps) with downwind cover-line approach — this is the dominant play.",
+                "Feeders + senderos + ag edges are secondary; water still usually wins in summer.",
+                "Cool-front evenings are the few daylight windows worth investing in.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend classic deer-style morning sits — South Texas hog daylight movement is too compressed.",
+                "Lower confidence on any multi-hour daylight window recommendation.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize water-ambush plays with cover-line access.",
+                "Call out nocturnal bias and value of cold fronts.",
+            ),
+            season_adjustments={
+                # Hot weather extends across most of the year.
+                "hot_weather": {"min_temp_f": 70, "months": (4, 5, 6, 7, 8, 9, 10)},
+                "drought_conditions": {"min_temp_f": 88, "months": (6, 7, 8, 9)},
+            },
+        ),
+        "east_texas": RegionalModifier(
+            region_id="east_texas",
+            name="East Texas / Piney Woods",
+            behavior_adjustments=(
+                "Wet bottoms, creek drainages, cane thickets, and palmetto provide continuous security cover + rooting habitat.",
+                "Water is abundant — wallows and creek crossings are more common than open water holes.",
+            ),
+            tactical_adjustments=(
+                "Favor creek crossings, wallows, and thick bedding cover edges as ambush setups.",
+                "Ag edges and feeders work but are often less dominant than creek-bottom travel.",
+            ),
+            caution_adjustments=(
+                "Do NOT assume open-country water-ambush logic — East Texas hogs have water everywhere.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize creek-bottom and wallow ambush plays.",
+                "Call out dense-cover visibility limits on setup selection.",
+            ),
+        ),
+        "southeast_us": RegionalModifier(
+            region_id="southeast_us",
+            name="Southeast US",
+            behavior_adjustments=(
+                "Swamps, river bottoms, pine plantations, and ag patches interlace — hogs travel extensively through wet and thick cover.",
+                "Large sounders are common on landscapes with abundant food + thick cover.",
+            ),
+            tactical_adjustments=(
+                "Favor river/creek bottom travel corridors, swamp edges, and ag-field corners against thick cover.",
+                "Plan shot availability carefully — dense cover limits effective shot windows.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply South Texas water-ambush primacy here — water is too abundant.",
+                "Lower confidence on daylight claims without cold-front or strong food concentration support.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize swamp/river-bottom travel corridors and thick-cover edge ambushes.",
+            ),
+        ),
+        "plains": RegionalModifier(
+            region_id="plains",
+            name="Great Plains",
+            behavior_adjustments=(
+                "Sparse cover concentrates hogs in creek bottoms, river corridors, and ag-edge cover — movement is more linear than in brushy country.",
+                "Water sources punch well above their cover weight in open country.",
+            ),
+            tactical_adjustments=(
+                "Favor creek/river corridor and ag-edge ambushes with strong downwind cover-line approach.",
+                "Windmills and stock tanks act as water attractors in drier sub-regions.",
+            ),
+            caution_adjustments=(
+                "Do NOT expect the continuous cover patterns of East Texas or the Southeast.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize creek-corridor and water-source ambushes with long-approach cover.",
+            ),
+        ),
     },
 )

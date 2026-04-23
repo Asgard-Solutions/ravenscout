@@ -1,6 +1,6 @@
 """Whitetail Deer prompt pack."""
 
-from .pack import SeasonalModifier, SpeciesPromptPack
+from .pack import RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 # ----------------------------- Seasonal modifiers -----------------------------
 # Trigger rules are conservative Northern Hemisphere US calendars.
@@ -191,5 +191,164 @@ WHITETAIL_PACK = SpeciesPromptPack(
         "post_rut": _WHITETAIL_POST_RUT,
         "late_season": _WHITETAIL_LATE_SEASON,
         "early_season": _WHITETAIL_EARLY_SEASON,
+    },
+    regional_modifiers={
+        "south_texas": RegionalModifier(
+            region_id="south_texas",
+            name="South Texas (Brush Country)",
+            behavior_adjustments=(
+                "Sparse, thorny brush (mesquite, huisache, prickly pear) dominates — travel follows senderos, ranch roads, water, and feeder lanes more than forested funnels.",
+                "Heat and water access strongly shape daylight movement; cool fronts matter disproportionately.",
+                "Pressure varies by ranch management — low-fence public / leased properties can behave very differently from managed high-fence ranches.",
+            ),
+            tactical_adjustments=(
+                "Bias setups along senderos, sendero intersections, water sources, and travel between feed and dense brush cover.",
+                "On warm evenings, water access setups outperform generic food-edge stands.",
+                "Morning sits can be more productive than in the Midwest when cover is thick and access is quiet.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply classic Midwest ag/timber transition logic here — the ecosystem is fundamentally different.",
+                "Do NOT assume northern rut timing; rut peaks later in South Texas.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize sendero + water + feeder travel logic.",
+                "Call out heat-stress effects on daylight movement and the outsized value of cold fronts.",
+            ),
+            season_adjustments={
+                # Rut shifts to mid-Dec into early Jan.
+                "rut": {"months": (12, 1)},
+                "pre_rut": {"months": (11,)},
+                "post_rut": {"months": (2,)},
+                # Early season extends because of long warm fall.
+                "early_season": {"months": (9, 10)},
+                "late_season": {"months": (3,)},
+            },
+            confidence_note=(
+                "South Texas rut timing varies substantially ranch-to-ranch and year-to-year. Lower confidence on any specific phase claim."
+            ),
+        ),
+        "east_texas": RegionalModifier(
+            region_id="east_texas",
+            name="East Texas / Piney Woods",
+            behavior_adjustments=(
+                "Thick pine/hardwood cover with dense understory — deer movement is tighter, more edge- and creek-bottom-bound than in open ag country.",
+                "Clearcut edges, logging roads, and creek drainages are primary travel corridors.",
+                "Hunting pressure on public land and small private tracts is typically high.",
+            ),
+            tactical_adjustments=(
+                "Favor creek crossings, clearcut edges, and logging-road travel hubs over open field setups.",
+                "Low-impact access matters more than in open ag country — noise and scent travel farther in humid pine cover.",
+                "Acorn / food-plot transitions matter but are often less dominant than cover-line travel.",
+            ),
+            caution_adjustments=(
+                "Do NOT project ag-heavy Midwest travel logic onto East Texas — food is more distributed and cover-driven.",
+                "Do NOT assume mid-November rut timing — peak is closer to late November in much of East Texas.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize cover edges, creek bottoms, and clearcut transitions.",
+                "Call out high pressure sensitivity and value of quiet access.",
+            ),
+            season_adjustments={
+                "rut": {"months": (11, 12)},
+                "post_rut": {"months": (1,)},
+            },
+        ),
+        "southeast_us": RegionalModifier(
+            region_id="southeast_us",
+            name="Southeast US",
+            behavior_adjustments=(
+                "Pine plantations, hardwood bottoms, and agricultural patches interlace — travel is typically edge-bound and cover-driven.",
+                "Mast (acorns) is a major late-fall/early-winter driver in many states.",
+                "Regional rut timing varies significantly by latitude and state — Deep South rut is weeks later than the Midwest.",
+            ),
+            tactical_adjustments=(
+                "Favor hardwood bottoms, oak flats, and cover-to-food transitions over open field setups.",
+                "Logging roads and firebreaks are important low-impact access routes and travel corridors.",
+                "For Deep South hunts, expect secondary rut activity later than Midwestern calendars suggest.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply a single regional rut date — variance is wide across the Southeast.",
+                "Do NOT over-weight open-field ag logic where pine plantations dominate.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize cover transitions, logging roads, and mast sources.",
+                "Call out state-level rut variance and lower confidence accordingly.",
+            ),
+            season_adjustments={
+                "rut": {"months": (11, 12)},
+                "post_rut": {"months": (1,)},
+            },
+        ),
+        "midwest": RegionalModifier(
+            region_id="midwest",
+            name="Midwest / Corn Belt",
+            behavior_adjustments=(
+                "Agricultural food sources (corn, soybeans, alfalfa) dominate fall behavior; bedding/food/ag transitions are the core travel frame.",
+                "Timbered fingers between ag fields are high-value funnels.",
+                "Classic Nov 5-20 rut timing applies most cleanly here.",
+            ),
+            tactical_adjustments=(
+                "Prioritize field-edge + timber-funnel setups on downwind sides of likely bedding.",
+                "Standing-corn edges and cut-corn transitions are high-value once harvest begins.",
+                "Cold-front evenings on ag food are especially productive in post-rut.",
+            ),
+            caution_adjustments=(
+                "Do NOT import southern / mountain-west tactics — deer here are ag-tied and timber-transition-driven.",
+                "Still account for pressure on small private tracts and public land.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize bedding-to-ag transitions, timber funnels, and cold-front evenings.",
+                "Call out standing-corn cover effects on travel patterns.",
+            ),
+            # No season_adjustments needed — Midwest matches base calendar.
+        ),
+        "plains": RegionalModifier(
+            region_id="plains",
+            name="Great Plains",
+            behavior_adjustments=(
+                "Sparse cover concentrates deer in river/creek bottoms, shelterbelts, CRP, and draws.",
+                "Water and thermal cover matter disproportionately in both summer and winter extremes.",
+                "Travel across open ground is rare in daylight — corridors are narrow and repeatable.",
+            ),
+            tactical_adjustments=(
+                "Setups on creek bottoms, shelterbelts, and CRP transitions dramatically outperform open-country ambitions.",
+                "Wind discipline is critical — open country means wind shifts reach deer quickly.",
+                "Access routes must use cover; skylining a ridge is especially costly here.",
+            ),
+            caution_adjustments=(
+                "Do NOT assume open-country daylight travel is common.",
+                "Do NOT project Midwest ag-interior logic onto Plains hunts — the geometry is different.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize creek-bottom, shelterbelt, and CRP corridor setups.",
+                "Call out the outsized importance of wind and cover-line access.",
+            ),
+        ),
+        "mountain_west": RegionalModifier(
+            region_id="mountain_west",
+            name="Mountain West",
+            behavior_adjustments=(
+                "Terrain drives movement — drainages, benches, saddles, and aspect (north vs south faces) matter more than ag or edge logic.",
+                "Whitetails often occupy river bottoms, riparian corridors, and ag-in-drainage pockets rather than full mountain terrain.",
+                "Elevation + weather (early snow, cold fronts) shifts movement dramatically.",
+            ),
+            tactical_adjustments=(
+                "Favor bench/saddle/drainage setups and riparian travel corridors.",
+                "Thermals matter as much as weather winds — morning thermals run downslope, evening thermals run upslope.",
+                "Season openers run earlier in some western states; early-season tactics can apply in late August.",
+            ),
+            caution_adjustments=(
+                "Do NOT project Midwest ag logic into mountain terrain.",
+                "Do NOT ignore thermal drift when evaluating wind_risk.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize terrain- and aspect-driven setups, riparian travel, and thermal wind discipline.",
+                "Acknowledge early opener timing in some western units.",
+            ),
+            season_adjustments={
+                # Early season opens earlier in many western states.
+                "early_season": {"months": (8, 9)},
+            },
+        ),
     },
 )

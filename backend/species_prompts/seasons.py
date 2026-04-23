@@ -18,11 +18,12 @@ future concern (see `memory/species_prompt_packs_notes.md`).
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from datetime import date, datetime
 from typing import Any, Mapping, Optional
 
-from .pack import SeasonalModifier, SpeciesPromptPack
+from .pack import RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 
 # ----------------------------- input parsing -----------------------------
@@ -132,12 +133,21 @@ def _matches(modifier: SeasonalModifier, month: Optional[int], temp_f: Optional[
 def resolve_seasonal_modifier(
     species_pack: SpeciesPromptPack,
     conditions: Optional[Mapping[str, Any]] = None,
+    regional_modifier: Optional["RegionalModifier"] = None,
 ) -> Optional[SeasonalModifier]:
     """Return the seasonal modifier whose trigger rules match, or None.
 
     Deterministic tie-breaking: the first declared modifier wins,
     so pack authors should order `seasonal_modifiers` from most
     specific to most general.
+
+    If `regional_modifier` is provided, its `season_adjustments` map
+    overrides individual fields of the matching phase's trigger_rules
+    (typically shifting `months` or `min_temp_f`). This is the
+    mechanism by which e.g. a southern whitetail rut phase can span
+    November-December instead of the default Northern-Hemisphere
+    November. A region can only adjust existing phases — it cannot
+    introduce new phase_ids.
     """
     if not species_pack or not species_pack.seasonal_modifiers:
         return None
@@ -153,7 +163,27 @@ def resolve_seasonal_modifier(
     if month is None and temp_f is None:
         return None
 
+    adjustments: Mapping[str, Mapping[str, Any]] = (
+        regional_modifier.season_adjustments if regional_modifier else {}
+    )
+
     for mod in species_pack.seasonal_modifiers.values():
-        if _matches(mod, month, temp_f):
-            return mod
+        effective = _apply_region_season_adjustments(mod, adjustments.get(mod.phase_id))
+        if _matches(effective, month, temp_f):
+            return effective
     return None
+
+
+def _apply_region_season_adjustments(
+    mod: SeasonalModifier,
+    overrides: Optional[Mapping[str, Any]],
+) -> SeasonalModifier:
+    """Return a copy of `mod` whose trigger_rules have been patched
+    with the regional overrides. Leaves `mod` unchanged when no
+    overrides apply."""
+    if not overrides:
+        return mod
+    merged = dict(mod.trigger_rules)
+    for k, v in overrides.items():
+        merged[k] = v
+    return dataclasses.replace(mod, trigger_rules=merged)

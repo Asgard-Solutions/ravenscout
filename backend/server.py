@@ -546,6 +546,14 @@ class HuntConditions(BaseModel):
     precipitation: Optional[str] = None
     property_type: Optional[str] = "public"
     region: Optional[str] = None
+    # Optional GPS context — when provided we use it to auto-resolve
+    # the canonical hunting region that drives regional prompt
+    # modifiers. `region` above is still accepted as a freeform
+    # manual override (and wins when set / normalizable).
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    map_centroid_lat: Optional[float] = None
+    map_centroid_lon: Optional[float] = None
 
 class AnalyzeRequest(BaseModel):
     conditions: HuntConditions
@@ -577,6 +585,10 @@ class AnalyzeResponse(BaseModel):
     result: Optional[AnalysisResult] = None
     error: Optional[str] = None
     usage: Optional[dict] = None
+    # Canonical hunting region resolved server-side for this analysis.
+    # Persisted by the client alongside the hunt so overlays/reloads
+    # carry the same regional lock as the LLM reasoning.
+    region_resolution: Optional[dict] = None
 
 
 # ============================================================
@@ -646,13 +658,32 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
     actual_image_count = len(images_to_send)
     conditions_dict = conditions.model_dump()
 
-    # Build prompts using modular builder
+    # Resolve the effective hunting region once, then reuse the
+    # resolution for BOTH the prompt builder and the response payload.
+    # Precedence: manual override (freeform `region`) > GPS > map centroid > default.
+    from species_prompts import resolve_effective_region
+    map_centroid = None
+    if conditions.map_centroid_lat is not None and conditions.map_centroid_lon is not None:
+        map_centroid = (conditions.map_centroid_lat, conditions.map_centroid_lon)
+    region_resolution = resolve_effective_region(
+        gps_lat=conditions.latitude,
+        gps_lon=conditions.longitude,
+        map_centroid=map_centroid,
+        manual_override=conditions.region,
+    )
+    logger.info(
+        f"Region resolved: id={region_resolution.region_id} "
+        f"source={region_resolution.source} label='{region_resolution.region_label}'"
+    )
+
+    # Build prompts using modular builder (region-aware)
     system_prompt = assemble_system_prompt(
         animal=conditions.animal,
         conditions=conditions_dict,
         species_data=SPECIES_DATA,
         image_count=actual_image_count,
         tier=tier,
+        region_resolution=region_resolution,
     )
     user_prompt_text = assemble_user_prompt(
         species_name=species["name"],
@@ -709,6 +740,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
             "schema_version": "v2",
             "v2": normalized,
             "v1": v1_compat,
+            "region_resolution": region_resolution.as_dict(),
         }
     else:
         # Old-style v1 response — wrap it
@@ -717,6 +749,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
             "schema_version": "v1",
             "v2": None,
             "v1": parsed,
+            "region_resolution": region_resolution.as_dict(),
         }
 
 
@@ -799,6 +832,7 @@ async def analyze_hunt(request: Request):
             "success": True,
             "result": result,
             "usage": updated_usage,
+            "region_resolution": raw_result.get("region_resolution"),
         })
     except json.JSONDecodeError:
         return JSONResponse({"success": False, "error": "Failed to parse AI response. Please try again.", "usage": None})
