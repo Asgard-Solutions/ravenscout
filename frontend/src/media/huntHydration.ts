@@ -883,6 +883,83 @@ export async function finalizeProvisionalHunt(
     ? Math.max(0, mediaRefs.indexOf(analysis.primaryMediaRef))
     : 0;
 
+  // ------------------------------------------------------------------
+  // PLATFORM-AWARE FINALIZE
+  // ------------------------------------------------------------------
+  // Mobile Chrome / web preview: the full saveHunt pipeline (which
+  // goes through MediaStore → expo-file-system + compressImage passes)
+  // cannot run on web — expo-file-system/legacy is native-only AND
+  // the extra ImageManipulator bitmap decode on an already-compressed
+  // base64 payload reliably OOMs the tab on devices with <2GB free
+  // RAM. Observed: /results flashes for 1-3s then the browser kills
+  // the page and navigates back to /setup.
+  //
+  // Solution: on web, skip the heavy MediaStore write entirely and
+  // just persist the analysis record (no base64, no bitmap decode,
+  // tiny AsyncStorage footprint). The provisional hot-cache keeps
+  // images around for the current session; a re-analysis from a
+  // native EAS build will get full S3 + local-file persistence.
+  // ------------------------------------------------------------------
+  if (Platform.OS === 'web') {
+    logClientEvent({
+      event: 'finalize_provisional_started',
+      data: {
+        hunt_id: huntId,
+        tier: tier ?? null,
+        image_count: base64Images.length,
+        primary_index: primaryIdx,
+        mode: 'web_metadata_only',
+      },
+    });
+    try {
+      // Save the analysis record (base64-stripped). This is what
+      // powers the history list. Safe: <10KB write.
+      const persisted = await saveAnalysis(analysis);
+      logClientEvent({
+        event: 'finalize_provisional_completed',
+        data: {
+          hunt_id: huntId,
+          analysis_persisted: persisted,
+          media_persisted: 0,
+          mode: 'web_metadata_only',
+          warning: persisted ? null : 'analysis_save_failed',
+        },
+      });
+      // We intentionally keep the provisional hot-cache in place on
+      // web so /results can still resolve base64 images for the
+      // rest of the session. It's auto-rotated when the next hunt
+      // is seated.
+      const hydrated = await hydrateRuntimeHuntFromAnalysis(
+        analysis,
+        provisional.displayUris,
+        persisted ? null : 'Session-only: could not save hunt metadata.',
+      );
+      return {
+        ok: true,
+        outcome: {
+          hunt: hydrated,
+          analysisPersisted: persisted,
+          mediaPersisted: 0,
+          warningMessage: hydrated.warning,
+        },
+      };
+    } catch (err: any) {
+      logClientEvent({
+        event: 'finalize_provisional_failed',
+        data: {
+          hunt_id: huntId,
+          mode: 'web_metadata_only',
+          error: err?.message || String(err),
+        },
+      });
+      return { ok: false, reason: 'web_save_analysis_threw', error: err?.message || String(err) };
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // NATIVE PATH — iOS/Android via EAS builds. Full pipeline:
+  //   MediaStore (FileSystem or Cloud+S3) → AnalysisStore
+  // ------------------------------------------------------------------
   logClientEvent({
     event: 'finalize_provisional_started',
     data: {
@@ -890,6 +967,7 @@ export async function finalizeProvisionalHunt(
       tier: tier ?? null,
       image_count: base64Images.length,
       primary_index: primaryIdx,
+      mode: 'native_full',
     },
   });
 
