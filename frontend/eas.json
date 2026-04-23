@@ -1,0 +1,49 @@
+{
+  "cli": {
+    "version": ">= 12.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://panorama-memory-fix.preview.emergentagent.com"
+      },
+      "channel": "preview"
+    },
+    "preview-railway": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://REPLACE_WITH_RAILWAY_URL.up.railway.app"
+      },
+      "channel": "preview-railway"
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://REPLACE_WITH_RAILWAY_URL.up.railway.app"
+      },
+      "channel": "production"
+    },
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "channel": "development"
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
