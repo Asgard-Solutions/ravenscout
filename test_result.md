@@ -768,6 +768,39 @@ agent_communication:
          The deferral ensures the DOM paints and the setup.tsx
          bitmap memory is freed before the background persistence
          allocates its own copies.
+
+  - agent: "main"
+    message: |
+      Feb 2026 — Root-cause OOM fix via blob-URL swap.
+
+      Troubleshoot agent diagnosed: mobile Chrome OOM-kills the /results
+      tab when React Native Web's <Image source={{uri: base64}}> decodes
+      the ~2MB base64 data URI into a bitmap on first paint, BEFORE
+      the deferred finalize timer can fire. No JS error is thrown
+      because browser-level OOM bypasses React error boundaries.
+
+      Changes this round:
+      1. setup.tsx: router.push → router.replace — unmounts /setup
+         synchronously so its ~2MB base64 + bitmap are released
+         before /results begins rendering.
+      2. ImageOverlayCanvas.tsx: On web, convert the base64 data URI
+         into a Blob URL via URL.createObjectURL() in a useEffect.
+         First render shows a placeholder rect; once the blob exists
+         (~1 React tick later) the <Image> swaps to the blob URL.
+         The browser streams binary from the blob without forcing a
+         synchronous JS-heap decode. Base64 string can now be GC'd.
+         Added onLoad/onError diagnostics + overlay_image_blob_created
+         event for visibility. Fixed pre-existing COLORS.void TS error.
+      3. Native iOS/Android paths unchanged — they use the data URI
+         directly (native bitmap decoder doesn't compete with the
+         mobile-web tab heap).
+
+      Expected effect: /results will stop bouncing back to /setup on
+      mobile Chrome. User should see `overlay_image_loaded` event
+      with via='blob_url' in backend logs after analyze completes.
+
+      All 137 unit tests pass. TypeScript clean (0 errors).
+
       4. clientLog.ts: Widened ClientEvent union to cover all
          existing and new event names (pre-existing TS errors from
          unrecognized events are now resolved).

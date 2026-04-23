@@ -512,7 +512,12 @@ export default function SetupScreen() {
         // lazily from /results or deferred to a background step
         // once /results is confirmed visible.
         if (refreshUser) refreshUser();
-        router.push({ pathname: '/results', params: { huntId: enrichedResult.id } });
+        // REPLACE (not push) so /setup unmounts IMMEDIATELY and its
+        // ~2MB base64 payload + bitmap allocations are released
+        // BEFORE /results begins decoding its own primary image.
+        // Mobile Chrome OOM-kills the tab otherwise when both
+        // screens are in memory during the brief overlap window.
+        router.replace({ pathname: '/results', params: { huntId: enrichedResult.id } });
       } else {
         const msg = data.error || data.message || 'Analysis failed. Please try again.';
         const isLimitError = msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('upgrade');

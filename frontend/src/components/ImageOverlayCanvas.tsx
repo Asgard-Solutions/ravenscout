@@ -28,8 +28,8 @@
 //
 // Coordinate contract: see src/utils/imageFit.ts.
 
-import React, { useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import React, { useImperativeHandle, forwardRef, useCallback, useMemo, useEffect, useState } from 'react';
+import { Image, Platform, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedStyle,
@@ -40,6 +40,43 @@ import Animated, {
 
 import { COLORS } from '../constants/theme';
 import { computeFittedImageRect } from '../utils/imageFit';
+import { logClientEvent } from '../utils/clientLog';
+
+/**
+ * Convert a base64 data URI to a blob URL. On web, this lets the
+ * browser hold the image as a separate binary blob instead of
+ * retaining a ~2MB string on the JS heap. The caller is responsible
+ * for revoking the blob URL when the component unmounts.
+ *
+ * Returns `null` when the input isn't a data URI we can parse, so
+ * the caller can fall back to using the original string.
+ *
+ * Safe on native (returns null — `URL.createObjectURL` /
+ * `atob` aren't available in Hermes/JSC without polyfills). Native
+ * builds keep using the data URI directly, which works fine there
+ * because iOS/Android bitmap decoders don't compete with a small
+ * browser tab heap.
+ */
+function dataUriToBlobUrl(dataUri: string): string | null {
+  if (typeof URL === 'undefined' || typeof (URL as any).createObjectURL !== 'function') {
+    return null;
+  }
+  if (typeof atob !== 'function') return null;
+  const m = /^data:([^;]+);base64,(.+)$/.exec(dataUri);
+  if (!m) return null;
+  try {
+    const mime = m[1];
+    const b64 = m[2];
+    const binary = atob(b64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mime });
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
 
 export interface ImageOverlayCanvasProps {
   imageUri: string | null;
@@ -131,6 +168,57 @@ export const ImageOverlayCanvas = forwardRef<
   }, [scale, savedScale, translateX, translateY, savedTranslateX, savedTranslateY]);
 
   useImperativeHandle(ref, () => ({ resetTransform }), [resetTransform]);
+
+  // On web: convert the base64 data URI into a blob URL so the
+  // browser doesn't have to keep re-parsing a ~2MB string every
+  // render. A single conversion up-front + URL.createObjectURL lets
+  // the underlying base64 be GC'd, and the <img> element can stream
+  // the binary blob directly without the synchronous decode spike
+  // that was OOM-killing mobile Chrome on /results.
+  //
+  // On native (iOS/Android) the browser globals aren't available
+  // and the data URI works fine — bitmap decoding there doesn't
+  // fight for the same tiny JS heap. dataUriToBlobUrl returns
+  // null on native so we fall through to the original uri.
+  const [webBlobUri, setWebBlobUri] = useState<string | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !imageUri) {
+      setWebBlobUri(null);
+      return;
+    }
+    // Pass-through for already-blob / http URIs.
+    if (!imageUri.startsWith('data:')) {
+      setWebBlobUri(null);
+      return;
+    }
+    const url = dataUriToBlobUrl(imageUri);
+    if (url) {
+      setWebBlobUri(url);
+      logClientEvent({
+        event: 'overlay_image_blob_created',
+        data: { bytes: imageUri.length },
+      });
+    } else {
+      setWebBlobUri(null);
+    }
+    return () => {
+      if (url && typeof URL !== 'undefined' && typeof (URL as any).revokeObjectURL === 'function') {
+        try { URL.revokeObjectURL(url); } catch {}
+      }
+    };
+  }, [imageUri]);
+
+  // On web: NEVER pass the raw base64 data URI to <Image>. React
+  // Native Web synchronously decodes the whole bitmap on first paint
+  // and that's what's been OOM-killing mobile Chrome. Instead we
+  // render a placeholder rect until `webBlobUri` is ready (one React
+  // tick after mount), then swap to the blob URL which the browser
+  // can stream without a blocking decode.
+  //
+  // On native (iOS/Android), the original data URI is fine — the
+  // native bitmap decoder runs off the JS heap and competes with a
+  // much larger address space, not a tiny mobile-web tab.
+  const effectiveUri = Platform.OS === 'web' ? webBlobUri : imageUri;
 
   // Clamp transforms so the image can't be panned completely out of view.
   const clampTranslate = (tx: number, ty: number, s: number) => {
@@ -269,17 +357,50 @@ export const ImageOverlayCanvas = forwardRef<
               }}
               pointerEvents="box-none"
             >
-              <Image
-                source={{ uri: imageUri }}
-                style={{ width: fitted.width, height: fitted.height }}
-                // `contain` would add its OWN internal letterbox if
-                // the aspect drifted — but because the inner rect is
-                // already sized to the image's aspect, any resizeMode
-                // paints edge-to-edge. 'cover' is explicitly chosen
-                // here so a 1-pixel rounding mismatch never leaves a
-                // visible gap line at the rect edge.
-                resizeMode="cover"
-              />
+              {effectiveUri ? (
+                <Image
+                  source={{ uri: effectiveUri }}
+                  style={{ width: fitted.width, height: fitted.height }}
+                  // `contain` would add its OWN internal letterbox if
+                  // the aspect drifted — but because the inner rect is
+                  // already sized to the image's aspect, any resizeMode
+                  // paints edge-to-edge. 'cover' is explicitly chosen
+                  // here so a 1-pixel rounding mismatch never leaves a
+                  // visible gap line at the rect edge.
+                  resizeMode="cover"
+                  onLoad={() =>
+                    logClientEvent({
+                      event: 'overlay_image_loaded',
+                      data: {
+                        via: Platform.OS === 'web' && webBlobUri ? 'blob_url' : 'data_uri',
+                        width: fitted.width,
+                        height: fitted.height,
+                      },
+                    })
+                  }
+                  onError={(e: any) =>
+                    logClientEvent({
+                      event: 'overlay_image_error',
+                      data: {
+                        via: Platform.OS === 'web' && webBlobUri ? 'blob_url' : 'data_uri',
+                        error: e?.nativeEvent?.error || String(e),
+                      },
+                    })
+                  }
+                />
+              ) : (
+                // Brief placeholder while blob URL is being minted on
+                // web. Avoids passing a null URI to Image (undefined
+                // behavior on some RN Web versions).
+                <View
+                  testID="overlay-image-placeholder"
+                  style={{
+                    width: fitted.width,
+                    height: fitted.height,
+                    backgroundColor: COLORS.primary,
+                  }}
+                />
+              )}
               {/* Overlay markers — parent is the fitted rect, so
                   `x_percent/y_percent` mapping is naturally correct. */}
               {children}
