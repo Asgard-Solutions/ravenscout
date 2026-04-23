@@ -346,49 +346,71 @@ export default function SetupScreen() {
         // with the GPS that was active at analyze time, into the
         // AnalysisContext so overlays never drift on reload even if
         // the user later shuffles the image list or edits the hunt.
+        //
+        // HARD TIMEOUT: Image.getSize can silently hang on web with
+        // data URIs (no callback ever fires). Never let this block
+        // the post-analyze save + navigation — fall back to 0/0 dims
+        // after 2s. The UI falls back to measured on-screen dims
+        // in that case; the analysis context still correctly locks
+        // the imageId + GPS, which is the critical invariant.
         const primaryBase64 = mapImages[primaryMapIndex];
-        const primaryDims = await new Promise<{ width: number; height: number }>(resolve => {
-          try {
-            Image.getSize(
-              primaryBase64,
-              (w, h) => resolve({ width: w, height: h }),
-              () => resolve({ width: 0, height: 0 }),
-            );
-          } catch {
-            resolve({ width: 0, height: 0 });
-          }
-        });
+        const primaryDims: { width: number; height: number } = await Promise.race([
+          new Promise<{ width: number; height: number }>(resolve => {
+            try {
+              Image.getSize(
+                primaryBase64,
+                (w, h) => resolve({ width: w, height: h }),
+                () => resolve({ width: 0, height: 0 }),
+              );
+            } catch {
+              resolve({ width: 0, height: 0 });
+            }
+          }),
+          new Promise<{ width: number; height: number }>(resolve =>
+            setTimeout(() => resolve({ width: 0, height: 0 }), 2000),
+          ),
+        ]);
 
         // Persist via the tier-aware media + persistence layer. This
         // ingests images into the right backend (FileSystem / IndexedDB
         // / cloud-stub), strips base64 from the record, applies the
         // storage budget, and updates the in-memory session store.
-        await saveHunt({
-          tier: (user as any)?.tier,
-          analysisResult: enrichedResult,
-          species: selectedSpecies,
-          speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
-          date: huntDate,
-          timeWindow,
-          windDirection,
-          temperature,
-          propertyType,
-          region,
-          weatherData,
-          locationCoords,
-          base64Images: mapImages,
-          primaryMediaIndex: primaryMapIndex,
-          // Frozen analysis basis — see src/utils/analysisContext.ts.
-          analysisContext: {
-            imageNaturalWidth: primaryDims.width,
-            imageNaturalHeight: primaryDims.height,
-            // Explicit GPS for the analyzed image. Defaults to the
-            // hunt's locationCoords (they're the same at analyze time)
-            // but this field is then frozen — later edits to any hunt
-            // default GPS would NOT retroactively change overlays.
-            gps: locationCoords,
-          },
-        });
+        //
+        // DEFENSIVE: if persistence fails for any reason, we still
+        // navigate to /results. The analyze API already returned a
+        // usable result and the user should see it — losing a save
+        // is strictly worse than blocking the happy path.
+        try {
+          await saveHunt({
+            tier: (user as any)?.tier,
+            analysisResult: enrichedResult,
+            species: selectedSpecies,
+            speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
+            date: huntDate,
+            timeWindow,
+            windDirection,
+            temperature,
+            propertyType,
+            region,
+            weatherData,
+            locationCoords,
+            base64Images: mapImages,
+            primaryMediaIndex: primaryMapIndex,
+            // Frozen analysis basis — see src/utils/analysisContext.ts.
+            analysisContext: {
+              imageNaturalWidth: primaryDims.width,
+              imageNaturalHeight: primaryDims.height,
+              // Explicit GPS for the analyzed image. Defaults to the
+              // hunt's locationCoords (they're the same at analyze time)
+              // but this field is then frozen — later edits to any hunt
+              // default GPS would NOT retroactively change overlays.
+              gps: locationCoords,
+            },
+          });
+        } catch (persistErr: any) {
+          // eslint-disable-next-line no-console
+          console.warn('[setup] saveHunt failed, continuing to /results:', persistErr?.message || persistErr);
+        }
 
         if (refreshUser) refreshUser();
         router.push({ pathname: '/results', params: { huntId: data.result.id } });
