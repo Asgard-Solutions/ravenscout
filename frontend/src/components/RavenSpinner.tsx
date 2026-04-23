@@ -53,8 +53,9 @@ export interface RavenSpinnerProps {
   /** Width & height in px. Default 120 — matches the large
    * ActivityIndicator footprint the old spinner occupied. */
   size?: number;
-  /** ms per frame. Default 120 — gives a calm, deliberate circling
-   * feel. Lower (80ms) = faster pulse. */
+  /** ms per frame. Default 100 — with 8 frames that gives a full
+   * orbit every 800ms (spec-recommended). Lower (80ms) = faster
+   * pulse; higher (120ms) = more contemplative. */
   frameDuration?: number;
   /** Pass false to freeze on the current frame. Useful if you
    * eventually want to fade in/out without stopping the loop. */
@@ -67,7 +68,7 @@ export interface RavenSpinnerProps {
 
 export function RavenSpinner({
   size = 120,
-  frameDuration = 120,
+  frameDuration = 100,
   playing = true,
   accessibilityLabel = 'Loading',
   style,
