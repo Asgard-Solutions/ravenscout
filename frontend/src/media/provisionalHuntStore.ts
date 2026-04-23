@@ -200,6 +200,14 @@ export async function clearProvisionalHunt(matchingHuntId?: string): Promise<voi
   }
 }
 
+/** Adapt a provisional entry into a RuntimeHunt for hydration use. */
+export function provisionalToRuntime(entry: ProvisionalHuntEntry): RuntimeHunt {
+  return {
+    ...entry.analysis,
+    displayUris: entry.displayUris,
+  };
+}
+
 /**
  * Fast provisional seat used by the analyze-hunt flow — runs AFTER
  * the LLM response and BEFORE navigation to /results. Guarantees

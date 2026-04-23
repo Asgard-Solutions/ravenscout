@@ -438,52 +438,104 @@ export default function SetupScreen() {
           ),
         ]);
 
-        // Persist via the tier-aware media + persistence layer. This
-        // ingests images into the right backend (FileSystem / IndexedDB
-        // / cloud-stub), strips base64 from the record, applies the
-        // storage budget, and updates the in-memory session store.
+        // ─────────────────────────────────────────────────────────
+        // CRITICAL PATH — seat the provisional entry BEFORE navigating
+        // and BEFORE the heavier saveHunt pipeline. On mobile Chrome
+        // the setup.tsx runtime can be torn down during the long LLM
+        // wait; the full saveHunt pipeline has been observed to
+        // hang / stall on device after `save_hunt_started` fires.
+        // This minimal write (analysis + base64 displayUris) is all
+        // /results needs to hydrate. If it fails we still navigate
+        // so the user at least sees a clear error state.
         //
-        // DEFENSIVE: if persistence fails for any reason, we still
-        // navigate to /results. The analyze API already returned a
-        // usable result and the user should see it — losing a save
-        // is strictly worse than blocking the happy path.
+        // seatProvisionalFromAnalyze is synchronous up to the
+        // AsyncStorage write (~10-50ms on web) and returns even
+        // when the write fails (ok=false, mode='lite').
+        // ─────────────────────────────────────────────────────────
         try {
-          await saveHunt({
-            tier: (user as any)?.tier,
+          const seatResult = await seatProvisionalFromAnalyze({
+            huntId: enrichedResult.id,
             analysisResult: enrichedResult,
-            species: selectedSpecies,
-            speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
-            date: huntDate,
-            timeWindow,
-            windDirection,
-            temperature,
-            propertyType,
-            region,
-            // Canonical hunt-style id — persisted so re-opening the
-            // hunt keeps the same method lock as the LLM analysis.
-            huntStyle,
-            weatherData,
-            locationCoords,
+            metadata: {
+              species: selectedSpecies,
+              speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
+              date: huntDate,
+              timeWindow,
+              windDirection,
+              temperature,
+              propertyType,
+              region,
+              huntStyle,
+              weatherData,
+              locationCoords,
+            },
             base64Images: mapImages,
             primaryMediaIndex: primaryMapIndex,
-            // Frozen analysis basis — see src/utils/analysisContext.ts.
+            tier: (user as any)?.tier,
             analysisContext: {
               imageNaturalWidth: primaryDims.width,
               imageNaturalHeight: primaryDims.height,
-              // Explicit GPS for the analyzed image. Defaults to the
-              // hunt's locationCoords (they're the same at analyze time)
-              // but this field is then frozen — later edits to any hunt
-              // default GPS would NOT retroactively change overlays.
               gps: locationCoords,
             },
+            locationCoords,
           });
-        } catch (persistErr: any) {
-          // eslint-disable-next-line no-console
-          console.warn('[setup] saveHunt failed, continuing to /results:', persistErr?.message || persistErr);
+          logClientEvent({
+            event: 'analyze_provisional_seated',
+            data: {
+              hunt_id: enrichedResult.id,
+              ok: seatResult.ok,
+              mode: seatResult.mode,
+              bytes: seatResult.bytes,
+              error: seatResult.error ?? null,
+            },
+          });
+        } catch (seatErr: any) {
+          logClientEvent({
+            event: 'analyze_provisional_seated',
+            data: {
+              hunt_id: enrichedResult.id,
+              ok: false,
+              threw: true,
+              error: seatErr?.message || String(seatErr),
+            },
+          });
         }
 
+        // Navigate IMMEDIATELY after the critical-path seat. We do
+        // NOT await the full saveHunt pipeline — it runs in the
+        // background, upgrades the provisional entry to the real
+        // analysisStore record, and clears the provisional on
+        // success.
         if (refreshUser) refreshUser();
-        router.push({ pathname: '/results', params: { huntId: data.result.id } });
+        router.push({ pathname: '/results', params: { huntId: enrichedResult.id } });
+
+        // Full persistence — fire-and-forget. If this fails, the
+        // provisional entry seated above is the durable fallback.
+        saveHunt({
+          tier: (user as any)?.tier,
+          analysisResult: enrichedResult,
+          species: selectedSpecies,
+          speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
+          date: huntDate,
+          timeWindow,
+          windDirection,
+          temperature,
+          propertyType,
+          region,
+          huntStyle,
+          weatherData,
+          locationCoords,
+          base64Images: mapImages,
+          primaryMediaIndex: primaryMapIndex,
+          analysisContext: {
+            imageNaturalWidth: primaryDims.width,
+            imageNaturalHeight: primaryDims.height,
+            gps: locationCoords,
+          },
+        }).catch((err: any) => {
+          // eslint-disable-next-line no-console
+          console.warn('[setup] background saveHunt failed:', err?.message || err);
+        });
       } else {
         const msg = data.error || data.message || 'Analysis failed. Please try again.';
         const isLimitError = msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('upgrade');
