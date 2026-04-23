@@ -198,6 +198,24 @@ export default function ResultsScreen() {
     }
   }, [focusState.tick]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Mount / unmount + render-error diagnostics. We've seen the
+  // screen hydrate successfully then disappear on mobile Chrome —
+  // this tells us whether it's a render throw, a navigation event,
+  // or a memory-pressure reload.
+  useEffect(() => {
+    logClientEvent({
+      event: 'results_screen_mounted',
+      data: { hunt_id: params.huntId as string | undefined ?? null },
+    });
+    return () => {
+      logClientEvent({
+        event: 'results_screen_unmounted',
+        data: { hunt_id: params.huntId as string | undefined ?? null },
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
