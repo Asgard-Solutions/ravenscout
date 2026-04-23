@@ -305,7 +305,7 @@ const styles = StyleSheet.create({
   viewport: {
     overflow: 'hidden',
     borderRadius: 8,
-    backgroundColor: COLORS.void,
+    backgroundColor: COLORS.primary,
   },
   transformed: {
     position: 'relative',
