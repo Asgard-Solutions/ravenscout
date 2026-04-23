@@ -1,17 +1,26 @@
 """Species prompt pack — data classes and block rendering.
 
-This module defines two data classes:
+This module defines four data classes:
 
     - SpeciesPromptPack:    one species worth of base prompt content.
     - SeasonalModifier:     an *additive* overlay applied on top of a
                             species pack when the hunt conditions
                             match the modifier's trigger rules.
+    - RegionalModifier:     an *additive* overlay keyed to a broad
+                            hunting region (resolved from GPS or an
+                            explicit override).
+    - HuntStyleModifier:    an *additive* overlay keyed to the user's
+                            chosen hunting method (archery, rifle,
+                            blind, saddle, public land, spot-and-stalk).
 
-Seasonal modifiers never replace the species pack — they append a
-separate SEASONAL CONTEXT block to the system prompt after the species
-block. When no modifier can be confidently selected (missing data,
-out-of-season date, unsupported species), a conservative neutral
-notice is emitted instead.
+Modifiers never replace the species pack — they append separate
+blocks to the system prompt in a stable order:
+
+    species pack -> regional -> seasonal -> hunt-style -> conditions
+
+When a modifier can't be confidently selected (missing data,
+out-of-range trigger, unsupported species), a conservative neutral
+notice is emitted instead so the prompt shape stays stable.
 """
 
 from dataclasses import dataclass, field
@@ -115,6 +124,40 @@ class RegionalModifier:
 
 
 # -------------------------------------------------------------------
+# HuntStyleModifier
+# -------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HuntStyleModifier:
+    """Additive overlay keyed to an explicit hunting method / style.
+
+    Fields parallel `SpeciesPromptPack` so the LLM receives familiar
+    headings. Everything is *additive* — the base species, regional,
+    and seasonal guidance still apply. Hunt-style adjusts *how* a
+    setup is recommended (effective shot range, concealment, mobility,
+    pressure profile) rather than *what* animal or *when*.
+
+    `style_id` is the canonical id — only values listed in
+    `hunt_styles.CANONICAL_HUNT_STYLES` should ever reach this layer.
+    Freeform display text MUST be normalized upstream.
+    """
+
+    style_id: str
+    name: str
+
+    behavior_adjustments: Tuple[str, ...] = ()
+    tactical_adjustments: Tuple[str, ...] = ()
+    caution_adjustments: Tuple[str, ...] = ()
+    species_tips_adjustments: Tuple[str, ...] = ()
+
+    confidence_note: str = (
+        "Hunt-style guidance tunes setup framing to the method chosen. "
+        "It does NOT override species behavior, region, or seasonal context."
+    )
+
+
+# -------------------------------------------------------------------
 # SpeciesPromptPack
 # -------------------------------------------------------------------
 
@@ -144,8 +187,13 @@ class SpeciesPromptPack:
     # seasonal phase boundaries via its `season_adjustments` map.
     regional_modifiers: Dict[str, "RegionalModifier"] = field(default_factory=dict)
 
-    # Placeholder kept as string tuple for future expansion layer.
-    hunt_style_modifiers: Tuple[str, ...] = field(default_factory=tuple)
+    # Hunt-style modifiers keyed by canonical style id (see
+    # species_prompts.hunt_styles). Resolved from an explicit
+    # `hunt_style` field on HuntConditions — e.g. archery / rifle /
+    # blind / saddle / public_land / spot_and_stalk. Shapes *how* the
+    # LLM recommends setups, while species/regional/seasonal shape
+    # *what/where/when*.
+    hunt_style_modifiers: Dict[str, "HuntStyleModifier"] = field(default_factory=dict)
 
     is_fallback: bool = False
     fallback_reason: OverlayFallbackReason | None = None
@@ -163,10 +211,9 @@ def _bullets(items: Tuple[str, ...]) -> str:
 def render_species_prompt_block(pack: SpeciesPromptPack) -> str:
     """Render a SpeciesPromptPack into the base species prompt fragment.
 
-    Seasonal modifiers are NOT rendered here — they're resolved
-    dynamically and appended as a separate block after the species
-    pack. See `render_seasonal_modifier_block` and
-    `render_no_seasonal_context_note`.
+    Seasonal, regional, and hunt-style modifiers are NOT rendered
+    here — they're resolved dynamically and appended as separate
+    blocks after the species pack.
     """
     lines = [
         "",
@@ -182,10 +229,6 @@ def render_species_prompt_block(pack: SpeciesPromptPack) -> str:
         "SPECIES TIPS GUIDANCE (use these themes when populating the species_tips[] output):",
         _bullets(pack.species_tips_guidance),
     ]
-
-    if pack.hunt_style_modifiers:
-        lines.append("HUNT STYLE MODIFIERS:")
-        lines.append(_bullets(pack.hunt_style_modifiers))
 
     if pack.is_fallback:
         lines.append("")
@@ -301,4 +344,56 @@ def render_no_regional_context_note(
         "back to the base species pack's tactical reasoning. Do NOT "
         "invent regional specifics; lower confidence for claims that "
         "would depend on local geography."
+    )
+
+
+
+def render_hunt_style_modifier_block(
+    modifier: HuntStyleModifier,
+    style_id: str,
+    source: str = "user_selected",
+) -> str:
+    """Render a resolved hunt-style modifier as an additive prompt block.
+
+    Sits between the seasonal block and the hunt-conditions block in
+    the assembled prompt. Adjustments are framed as *additions* to
+    the species / regional / seasonal guidance — none of those are
+    replaced.
+
+    `source` is recorded so the LLM (and downstream review) can tell
+    whether the style was explicitly chosen by the user vs. inferred.
+    Valid values: ``"user_selected"``.
+    """
+    lines = [
+        "",
+        f"HUNT STYLE CONTEXT: {modifier.name} (style_id={style_id}, source={source})",
+        f"NOTE: {modifier.confidence_note}",
+        "",
+        "HUNT STYLE BEHAVIOR ADJUSTMENTS (apply in addition to the base species rules):",
+        _bullets(modifier.behavior_adjustments),
+        "HUNT STYLE TACTICAL ADJUSTMENTS:",
+        _bullets(modifier.tactical_adjustments),
+        "HUNT STYLE CAUTION ADJUSTMENTS (do not over-tune the method beyond what imagery supports):",
+        _bullets(modifier.caution_adjustments),
+        "HUNT STYLE SPECIES TIPS ADJUSTMENTS (layer these on top of base species_tips guidance):",
+        _bullets(modifier.species_tips_adjustments),
+    ]
+    return "\n".join(lines)
+
+
+def render_no_hunt_style_context_note() -> str:
+    """Emitted when no hunt-style modifier is selected/available.
+
+    Keeps the prompt shape consistent — the hunt-style slot always
+    exists — and explicitly tells the LLM NOT to assume a specific
+    method.
+    """
+    return (
+        "\nHUNT STYLE CONTEXT: unspecified\n"
+        "NOTE: No hunting method was selected by the user. Recommend "
+        "setups in method-neutral language — do not assume archery "
+        "range, rifle range, blind-based concealment, saddle mobility, "
+        "spot-and-stalk freedom, or public-land pressure profile. If "
+        "a recommendation naturally implies a method, flag the "
+        "assumption in key_assumptions."
     )

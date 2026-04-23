@@ -13,11 +13,15 @@ from typing import Optional, Tuple
 from species_prompts import (
     RegionResolution,
     SpeciesPromptPack,
+    normalize_hunt_style,
+    render_hunt_style_modifier_block,
+    render_no_hunt_style_context_note,
     render_no_regional_context_note,
     render_no_seasonal_context_note,
     render_regional_modifier_block,
     render_seasonal_modifier_block,
     resolve_effective_region,
+    resolve_hunt_style_modifier,
     resolve_regional_modifier,
     resolve_seasonal_modifier,
     resolve_species_pack,
@@ -256,6 +260,7 @@ def assemble_system_prompt(
     map_centroid: Optional[Tuple[float, float]] = None,
     manual_region_override: Optional[str] = None,
     region_resolution: Optional[RegionResolution] = None,
+    hunt_style: Optional[str] = None,
 ) -> str:
     """Assemble the complete system prompt from modular parts.
 
@@ -264,6 +269,7 @@ def assemble_system_prompt(
         -> species pack
         -> regional modifier (or neutral 'generic' notice)
         -> seasonal modifier (region-aware, or neutral 'unavailable' notice)
+        -> hunt-style modifier (or neutral 'unspecified' notice)
         -> hunt conditions
         -> image/tier context
         -> output schema
@@ -277,6 +283,12 @@ def assemble_system_prompt(
     The regional modifier can additionally shift seasonal phase
     boundaries via its `season_adjustments` field — the seasonal
     selector consults it before matching a phase.
+
+    `hunt_style` may be passed explicitly or read from
+    `conditions['hunt_style']`. Values are normalized to the
+    canonical hunt-style id set (archery / rifle / blind / saddle /
+    public_land / spot_and_stalk); anything unrecognized falls back
+    to the neutral 'unspecified' notice.
     """
     _ = species_data  # legacy — ignored
     pack = resolve_species_pack(animal)
@@ -300,6 +312,11 @@ def assemble_system_prompt(
         pack, conditions, regional_modifier=regional_mod,
     )
 
+    # 4) Hunt-style modifier — canonical id only at this layer.
+    raw_style = hunt_style if hunt_style is not None else conditions.get("hunt_style")
+    canonical_style = normalize_hunt_style(raw_style) if raw_style else None
+    hunt_style_mod = resolve_hunt_style_modifier(pack, canonical_style)
+
     regional_block = (
         render_regional_modifier_block(
             regional_mod,
@@ -319,12 +336,22 @@ def assemble_system_prompt(
         if seasonal_mod is not None
         else render_no_seasonal_context_note()
     )
+    hunt_style_block = (
+        render_hunt_style_modifier_block(
+            hunt_style_mod,
+            style_id=canonical_style,
+            source="user_selected",
+        )
+        if hunt_style_mod is not None and canonical_style
+        else render_no_hunt_style_context_note()
+    )
 
     parts = [
         build_base_system_prompt(),
         build_species_prompt_pack_block(pack),
         regional_block,
         seasonal_block,
+        hunt_style_block,
         build_hunt_conditions_block(conditions),
         build_image_context_block(image_count, tier),
         build_output_schema_block(),

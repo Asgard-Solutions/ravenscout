@@ -222,16 +222,41 @@ def resolve_effective_region(
 ) -> RegionResolution:
     """Resolve the region actually used by the prompt builder.
 
-    Precedence: manual override > GPS > map centroid > generic_default.
+    PRECEDENCE (safety-critical — read before editing):
 
-    - `manual_override` is a freeform string; if it normalizes cleanly
-      we record `source='manual_override'` and the GPS/centroid are
-      passed through (nullable) for persistence.
-    - `gps_lat/lon` take precedence over the centroid because the
-      point-of-hunt is more authoritative than a map frame.
-    - Failures at any level transparently fall through.
+        1. `manual_override`     — EXPLICIT override flow only
+        2. `gps_lat` / `gps_lon` — PRIMARY / default auto-resolution
+        3. `map_centroid`        — fallback when no GPS
+        4. `generic_default`
+
+    Design intent:
+        * `manual_override` is reserved for INTENTIONAL override flows
+          (admin tools, debug screens, a "my region is actually X"
+          correction UI, test fixtures). It is NOT meant to carry a
+          user's freeform "where I'm hunting" note — that kind of
+          casual text should live on its own display-only field and
+          MUST NOT be wired into this argument, because a stray
+          alias match (e.g. "Midwest" in a note) would silently
+          override the user's actual GPS fix. The caller is
+          responsible for making sure only explicit-override input
+          reaches this parameter.
+        * `gps_lat`/`gps_lon` is the normal, default path. If the
+          caller has GPS and no explicit override, resolution is
+          GPS-driven end-to-end.
+        * `map_centroid` fills in only when both of the above are
+          absent — useful when a user pans the map but GPS is off.
+
+    Failure handling:
+        * An unrecognized override string transparently falls through
+          to the GPS path (it never blocks a valid GPS resolution).
+        * Unclassifiable coordinates fall through to the next layer.
+        * Everything missing → `generic_default`.
+
+    Returns:
+        RegionResolution with a fully-populated `.source` field:
+        `"manual_override"` | `"gps"` | `"map_centroid"` | `"default"`.
     """
-    # 1) manual override
+    # 1) manual override — EXPLICIT flow only.
     if manual_override:
         overridden = normalize_region_override(manual_override)
         if overridden:
@@ -243,7 +268,7 @@ def resolve_effective_region(
                 longitude=gps_lon,
             )
 
-    # 2) GPS
+    # 2) GPS — normal / default path.
     if gps_lat is not None and gps_lon is not None:
         rid = resolve_region_from_coordinates(gps_lat, gps_lon)
         if rid != GENERIC_DEFAULT:
@@ -255,7 +280,7 @@ def resolve_effective_region(
                 longitude=gps_lon,
             )
 
-    # 3) map centroid
+    # 3) map centroid — fallback when GPS is off.
     if map_centroid is not None:
         try:
             c_lat, c_lon = float(map_centroid[0]), float(map_centroid[1])

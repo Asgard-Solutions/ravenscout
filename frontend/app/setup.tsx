@@ -20,6 +20,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, SPECIES, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
+import { HUNT_STYLES, type HuntStyleId, getHuntStyleLabel } from '../src/constants/huntStyles';
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
 import TacticalMapView from '../src/map/TacticalMapView';
@@ -75,6 +76,10 @@ export default function SetupScreen() {
   const [cloudCover, setCloudCover] = useState('');
   const [propertyType, setPropertyType] = useState('public');
   const [region, setRegion] = useState('');
+  // Canonical hunt-style id (archery/rifle/blind/saddle/public_land/
+  // spot_and_stalk) or null when unselected. ONLY canonical ids leave
+  // this screen — see src/constants/huntStyles.ts.
+  const [huntStyle, setHuntStyle] = useState<HuntStyleId | null>(null);
 
   // Weather auto-fill
   const [locationCoords, setLocationCoords] = useState<{lat: number; lon: number} | null>(null);
@@ -312,6 +317,8 @@ export default function SetupScreen() {
             precipitation: precipitation !== 'none' ? precipitation : null,
             property_type: propertyType,
             region: region || null,
+            // Canonical id only — never display text.
+            hunt_style: huntStyle,
           },
           map_image_base64: mapImages[primaryMapIndex],
           additional_images: isPaidTier && user?.tier === 'pro'
@@ -392,6 +399,9 @@ export default function SetupScreen() {
             temperature,
             propertyType,
             region,
+            // Canonical hunt-style id — persisted so re-opening the
+            // hunt keeps the same method lock as the LLM analysis.
+            huntStyle,
             weatherData,
             locationCoords,
             base64Images: mapImages,
@@ -881,6 +891,50 @@ export default function SetupScreen() {
 
               <Text style={styles.fieldLabel}>REGION / STATE (OPTIONAL)</Text>
               <TextInput testID="region-input" style={styles.textInput} placeholder="e.g., East Texas, Southern Ohio" placeholderTextColor={COLORS.fogGray} value={region} onChangeText={setRegion} />
+
+              {/* Hunt Style — optional, canonical-only. Unselected by default. */}
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>HUNT STYLE (OPTIONAL)</Text>
+                {huntStyle && (
+                  <TouchableOpacity
+                    testID="hunt-style-clear"
+                    onPress={() => setHuntStyle(null)}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.huntStyleClear}>Clear</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <View style={styles.huntStyleGrid}>
+                {HUNT_STYLES.map((opt) => {
+                  const active = huntStyle === opt.id;
+                  return (
+                    <TouchableOpacity
+                      key={opt.id}
+                      testID={`hunt-style-${opt.id}`}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      style={[styles.huntStyleChip, active && styles.huntStyleChipActive]}
+                      onPress={() => setHuntStyle(active ? null : opt.id)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name={opt.icon as any}
+                        size={18}
+                        color={active ? COLORS.accent : COLORS.fogGray}
+                      />
+                      <Text style={[styles.huntStyleText, active && styles.huntStyleTextActive]} numberOfLines={1}>
+                        {opt.shortLabel}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {huntStyle && (
+                <Text testID="hunt-style-hint" style={styles.huntStyleHint}>
+                  {HUNT_STYLES.find(s => s.id === huntStyle)?.hint}
+                </Text>
+              )}
             </View>
           )}
 
@@ -899,6 +953,7 @@ export default function SetupScreen() {
                 {cloudCover ? <ReviewRow label="Cloud" value={cloudCover} /> : null}
                 <ReviewRow label="Property" value={propertyType.charAt(0).toUpperCase() + propertyType.slice(1)} />
                 {region ? <ReviewRow label="Region" value={region} /> : null}
+                {huntStyle ? <ReviewRow label="Hunt Style" value={getHuntStyleLabel(huntStyle) || huntStyle} /> : null}
                 <ReviewRow label="Maps" value={`${mapImages.length} uploaded`} />
                 {weatherData && <ReviewRow label="Weather" value={`${weatherData.condition} (Live)`} />}
               </View>
@@ -1072,6 +1127,33 @@ const styles = StyleSheet.create({
   propChipActive: { borderColor: COLORS.accent, backgroundColor: 'rgba(200, 155, 60, 0.08)' },
   propText: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '700' },
   propTextActive: { color: COLORS.accent },
+  // Hunt Style (optional) — 3-col grid mirroring wind/precip chip aesthetics.
+  huntStyleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  huntStyleChip: {
+    width: (width - 72) / 3, // 3 per row with ~16 page padding + 10 gap
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(58, 74, 82, 0.4)',
+    borderWidth: 2,
+    borderColor: 'transparent',
+    minHeight: 48,
+  },
+  huntStyleChipActive: { borderColor: COLORS.accent, backgroundColor: 'rgba(200, 155, 60, 0.08)' },
+  huntStyleText: { color: COLORS.textPrimary, fontSize: 13, fontWeight: '700' },
+  huntStyleTextActive: { color: COLORS.accent },
+  huntStyleClear: { color: COLORS.fogGray, fontSize: 12, fontWeight: '700', letterSpacing: 0.4 },
+  huntStyleHint: {
+    color: COLORS.fogGray,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
   // Review
   reviewCard: { backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 14, padding: 20, borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)', marginBottom: 20 },
   reviewRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(154, 164, 169, 0.1)' },

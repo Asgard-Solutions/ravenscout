@@ -1,6 +1,6 @@
 """Wild Hog (feral swine) prompt pack."""
 
-from .pack import RegionalModifier, SeasonalModifier, SpeciesPromptPack
+from .pack import HuntStyleModifier, RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 # ----------------------------- Seasonal modifiers -----------------------------
 # Hog activity is driven more by temperature and water than by
@@ -154,6 +154,143 @@ HOG_PACK = SpeciesPromptPack(
         "drought_conditions": _HOG_DROUGHT,
         "hot_weather": _HOG_HOT_WEATHER,
         "cold_weather": _HOG_COLD_WEATHER,
+    },
+    hunt_style_modifiers={
+        "archery": HuntStyleModifier(
+            style_id="archery",
+            name="Archery (Hog)",
+            behavior_adjustments=(
+                "Effective shot window is roughly 15-30 yards AND requires penetration angles through a thick shoulder shield on mature boars — quartering-away is preferred, straight-on is typically a pass.",
+                "Sounders present multiple eyes, ears, and noses — draw windows compress to the moment when most of the group is head-down in rooting or feeding.",
+            ),
+            tactical_adjustments=(
+                "Favor stand setups directly on top of a water / wallow / feeder approach at 15-25 yards with thick back-cover, not broad sightline overlooks.",
+                "Bias elevated setups (treestand / tower) over ground — hog eyesight is weaker above the horizon line and draw movement is better hidden.",
+                "Prioritize evening/early-morning cold-front windows when daylight movement is most likely.",
+                "Plan for a slow, deliberate encounter — hogs commit to food but will vanish at the first un-shielded movement.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend marginal angles or frontal shots as high-confidence setups for archery hog.",
+                "Do NOT assume sounders are 'easy multiple targets' — alert levels scale with sounder size, not down.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize tight-range ambush on water / wallow / food with quartering-away shot geometry.",
+                "Flag shot-angle discipline explicitly — this matters more for hog than for deer.",
+            ),
+        ),
+        "rifle": HuntStyleModifier(
+            style_id="rifle",
+            name="Rifle (Hog)",
+            behavior_adjustments=(
+                "Effective shot window extends to the limit of visibility and shooter skill — setups can work longer ambushes over ag, sendero systems, pipeline right-of-ways, or open creek-bottom approaches.",
+                "Sounders can sometimes be taken in multiples if the first shot angle isolates one from the group — setups should consider second-shot geometry, not only the first shot.",
+            ),
+            tactical_adjustments=(
+                "Favor elevated or long-sightline setups: feeder lanes, ag-field corners, sendero intersections, creek-bottom crossings visible from 75-200 yards.",
+                "Bias downwind of the expected travel, with enough lateral cover that a missed first shot doesn't immediately burn the setup.",
+                "Night / low-light hunting where legal changes everything — flag any hunt_date/time_window implying night work as a distinct context, but never assume night-hunting legality.",
+                "Rifle excels in open-country hog setups (Plains, South Texas ranches) where archery would struggle.",
+            ),
+            caution_adjustments=(
+                "Do NOT assume night-hunting legality or thermal-optic access.",
+                "Do NOT neglect shot backstop — open-country rifle shots at sounders need a clean backdrop, not just a clean angle.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize elevated long-sightline ambush setups and second-shot geometry on sounders.",
+                "Flag night-legality explicitly as an assumption if the hunt context suggests it.",
+            ),
+        ),
+        "blind": HuntStyleModifier(
+            style_id="blind",
+            name="Ground Blind (Hog)",
+            behavior_adjustments=(
+                "Blinds hide movement extremely well from hogs — hog eyesight is the weakest of the three species, so a brushed-in blind is highly effective.",
+                "Scent containment matters more than for turkey — hogs have strong noses; wind discipline around the blind is still critical.",
+                "Tower blinds and elevated box blinds on feeders are the default southern-ranch setup and work well for multiple shot opportunities.",
+            ),
+            tactical_adjustments=(
+                "Favor blind placements at feeders, stock tanks, sendero intersections, and travel corridors with predictable arrival patterns.",
+                "Elevated / tower blinds beat ground blinds when terrain allows — they unlock long rifle shots AND keep scent above the hog's plane.",
+                "On hot-weather hunts, position blinds with shade and airflow — stationary daylight sits in hot conditions are the primary failure mode.",
+                "For archery from a blind, bias to feeder / water ambushes at 15-25 yards with window geometry locked to the expected approach.",
+            ),
+            caution_adjustments=(
+                "Do NOT assume a fresh blind is invisible on a well-hunted trail — hogs learn and avoid unfamiliar structures quickly.",
+                "Do NOT ignore wind — blinds reduce but don't eliminate scent spread.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize elevated / tower blind setups on feeders and water with wind discipline.",
+                "Call out that fresh blinds on pressured sounders degrade fast — acclimation matters.",
+            ),
+        ),
+        "saddle": HuntStyleModifier(
+            style_id="saddle",
+            name="Tree Saddle (Hog)",
+            behavior_adjustments=(
+                "Saddle setups for hog are a mobility tool: the hunter can relocate quickly when rooting sign, wallow use, or a known sounder moves.",
+                "Elevated angle reduces visual detection and helps with scent dispersion — both big wins for hog.",
+            ),
+            tactical_adjustments=(
+                "Use the saddle to cover creek-bottom crossings, thick bedding-edge ambush trees, and feeder trails that a fixed blind can't reach cleanly.",
+                "Plan multiple candidate trees per zone — as with whitetail, saddle strength is optionality rather than a single perfect spot.",
+                "Bias setups downwind of the expected travel; a saddle's mobility lets the hunter reset on a shifted wind during a sit.",
+                "For archery hog from a saddle, treat the narrow shot arc seriously — orient the trunk to protect the draw side.",
+            ),
+            caution_adjustments=(
+                "Do NOT assume a saddle fully hides motion — hogs will pick up draw/release movement if they happen to be looking up.",
+                "Do NOT over-commit to a single tree in thick bedding cover; pick 2-3 candidates.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize mobile, wind-adaptive saddle trees on creek bottoms and bedding edges.",
+                "Call out the draw-side orientation trick for archery saddle setups.",
+            ),
+        ),
+        "public_land": HuntStyleModifier(
+            style_id="public_land",
+            name="Public Land (Hog)",
+            behavior_adjustments=(
+                "Public-land hogs become strongly nocturnal and sounders push deeper into thick cover and further from access points faster than on managed ranches.",
+                "Pressure concentrates hogs in hard-to-reach drainages, swamp edges, and creek bottoms away from roads and ATV trails.",
+                "Spot-lighting / night hunting legality varies enormously by state and unit — never assume.",
+            ),
+            tactical_adjustments=(
+                "Bias setups into pressure-refuge cover — distance-from-parking and access difficulty again outperform closer-in premium spots.",
+                "Favor silent pre-dawn and post-dusk-legal-light windows in summer; favor midday cold-front sits in winter.",
+                "Use access routes that avoid crossing open ag or sandy trails where sounders can pick up fresh sign and avoid the area for days.",
+                "Assume feeders are illegal on public land unless confirmed; default recommendations to natural food + water + thick-cover ambush logic.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend bait / feeder setups as primary on public — flag as legality-dependent.",
+                "Do NOT assume night hunting is legal.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize pressure-refuge setups, natural food / water / cover ambush, and silent access.",
+                "Flag bait + night-hunt legality explicitly as assumptions.",
+            ),
+        ),
+        "spot_and_stalk": HuntStyleModifier(
+            style_id="spot_and_stalk",
+            name="Spot-and-Stalk (Hog)",
+            behavior_adjustments=(
+                "Spot-and-stalk works well on hogs in open-country settings (Plains, South Texas ranches, ag edges, river bottoms) where sounders are visible at distance.",
+                "Hog eyesight is weak but the sounder's ear and nose sensitivity make the final 50 yards the hardest — wind discipline decides outcomes more than glassing quality.",
+                "Sounders hold tight in rooting or wallowing long enough to approach; a lone boar in travel is often a harder stalk.",
+            ),
+            tactical_adjustments=(
+                "Favor terrain with glassing advantage (ridges over ag bottoms, elevated access above creek wallows, sendero glassing points) and dead ground for approach.",
+                "Use thermals aggressively — hog noses are excellent; bias approach direction with thermal drift, not against it.",
+                "For rifle spot-and-stalk, a stable shot position (sticks, bipod, prone) at 75-150 yards is often the high-percentage window.",
+                "For archery spot-and-stalk, treat it as low-confidence unless imagery shows a specific wallow / rooting zone where a committed sounder can be closed to 20 yards.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend spot-and-stalk hog in thick, cover-dense country where glassing fails and wind swirls.",
+                "Do NOT assume hogs will stay committed to a food / water source indefinitely — sounders move fast once alerted.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize glassing advantage, thermal-aware approach, and stable shot positions.",
+                "Call out the archery-vs-rifle confidence gap clearly for stalk setups.",
+            ),
+        ),
     },
     regional_modifiers={
         "south_texas": RegionalModifier(

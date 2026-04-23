@@ -368,6 +368,8 @@ export interface SaveHuntInput {
   temperature?: string | number | null;
   propertyType?: string;
   region?: string;
+  /** Canonical hunt-style id (see src/constants/huntStyles.ts) — NOT display text. */
+  huntStyle?: string | null;
   weatherData?: any;
   locationCoords?: { lat: number; lon: number } | null;
   /** Base64 inputs received from camera/map capture/picker. */
@@ -430,6 +432,7 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
     temperature: input.temperature,
     propertyType: input.propertyType,
     region: input.region,
+    huntStyle: input.huntStyle ?? null,
     weatherData: input.weatherData,
     locationCoords: input.locationCoords,
   });

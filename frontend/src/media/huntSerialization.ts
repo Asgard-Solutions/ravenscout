@@ -83,6 +83,7 @@ export function extractMetadata(input: {
   temperature?: string | number | null;
   propertyType?: string;
   region?: string;
+  huntStyle?: string | null;
   weatherData?: any;
   locationCoords?: { lat: number; lon: number } | null;
 }): HuntMetadata {
@@ -95,6 +96,7 @@ export function extractMetadata(input: {
     temperature: input.temperature ?? null,
     propertyType: input.propertyType,
     region: input.region,
+    huntStyle: input.huntStyle ?? null,
     weatherData: input.weatherData,
     locationCoords: input.locationCoords ?? null,
   };

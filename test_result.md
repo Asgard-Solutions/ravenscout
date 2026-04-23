@@ -111,6 +111,116 @@ user_problem_statement: |
   are absent or any step fails.
 
 backend:
+  - task: "Hunt-Style Modifier pipeline (archery / rifle / blind / saddle / public_land / spot_and_stalk)"
+    implemented: true
+    working: true
+    file: "/app/backend/species_prompts/pack.py, /app/backend/species_prompts/hunt_styles.py, /app/backend/species_prompts/whitetail.py, /app/backend/species_prompts/turkey.py, /app/backend/species_prompts/hog.py, /app/backend/species_prompts/__init__.py, /app/backend/prompt_builder.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Completed the Hunt-Style Modifier work left in-progress by the
+          previous agent.
+
+          Architecture (mirrors the Regional + Seasonal modifier pattern):
+            • `HuntStyleModifier` dataclass added to
+              /app/backend/species_prompts/pack.py (behavior / tactical /
+              caution / species-tips adjustments + confidence note).
+            • /app/backend/species_prompts/hunt_styles.py is the new
+              module: CANONICAL_HUNT_STYLES (6 ids), normalize_hunt_style
+              alias-tolerant resolver, resolve_hunt_style_modifier
+              (canonical-only by design), and get_hunt_style_label.
+            • Per-species content populated on whitetail, turkey, hog for
+              all 6 canonical styles. GENERIC_FALLBACK_PACK
+              intentionally has no hunt-style modifiers so unsupported
+              species degrade to the neutral "unspecified" notice.
+            • Prompt rendering helpers render_hunt_style_modifier_block
+              and render_no_hunt_style_context_note added to pack.py.
+              (Also removed a latent bug in render_species_prompt_block
+              that would have tried to _bullets(dict) if the pack had
+              hunt_style_modifiers.)
+            • prompt_builder.assemble_system_prompt now accepts an
+              optional `hunt_style` kwarg, normalizes to canonical,
+              resolves the species-scoped modifier, and inserts the
+              block between SEASONAL CONTEXT and HUNT CONDITIONS —
+              stable block order: species → regional → seasonal →
+              hunt-style → conditions.
+            • /api/analyze-hunt flow:
+              - HuntConditions.hunt_style (already present, optional).
+              - Server normalizes once, logs `Hunt style resolved:
+                id=... source=...`, threads canonical id into
+                assemble_system_prompt, and includes a
+                `hunt_style_resolution` object in the response
+                {styleId, styleLabel, source, rawInput} parallel to
+                region_resolution.
+              - AnalyzeResponse model gained an optional
+                hunt_style_resolution field.
+
+          Tests: /app/backend/tests/test_hunt_style_modifiers.py adds
+          92 new tests covering canonical inventory, alias
+          normalization, per-species coverage, resolver
+          canonical-only contract, prompt pipeline integration
+          (presence, absence, ordering, conditions-dict path,
+          explicit-kwarg precedence), style-isolation sanity
+          (archery → close-range language, public_land → pressure
+          language, saddle → mobility language, spot_and_stalk →
+          glassing/stalk/approach language), and block rendering
+          headings / neutral-note content.
+
+          Backend suite now: 312 passing, 3 skipped, 2 pre-existing
+          failures (live HTTP overlay-rendering tests unrelated to
+          this work).
+
+          Smoke-tested end-to-end: backend hot-reloaded cleanly and
+          an unsolicited analyze-hunt request already logged
+          "Hunt style resolved: id=None source=unspecified" with no
+          regressions.
+
+          Needs: backend retesting to validate analyze-hunt
+          response shape (hunt_style_resolution present + canonical)
+          for each of the 6 styles and the unspecified case.
+      - working: true
+        agent: "testing"
+        comment: |
+          hunt_style_resolution contract verified end-to-end against
+          the preview URL POST /api/analyze-hunt with Bearer
+          test_session_rs_001 (Pro). Harness: /app/hunt_style_test.py.
+          All 5 cases requested (A–E) returned 200 with exactly the
+          expected { styleId, styleLabel, source, rawInput } shape:
+
+            A) omitted         -> {null, null, "unspecified",   null}           PASS
+            B) "archery"       -> {"archery", "Archery", "user_selected", "archery"} PASS
+            C) "Public Land"   -> {"public_land", "Public Land", "user_selected", "Public Land"} PASS (canonical + display-label normalization)
+            D) "bow hunting"   -> {"archery", "Archery", "user_selected", "bow hunting"} PASS (alias normalization; rawInput preserved)
+            E) "banana"        -> {null, null, "unspecified", "banana"} PASS 200 (NOT 4xx; silent fallback as designed)
+
+          Regression F: region_resolution remains present and correct
+          on every response. With latitude=31.2956, longitude=-95.9778
+          supplied on conditions, all 5 responses carry
+            region_resolution = {
+              resolvedRegionId: "east_texas",
+              resolvedRegionLabel: "East Texas",
+              regionResolutionSource: "gps",
+              latitude: 31.2956, longitude: -95.9778
+            }
+          — zero interference between the two resolutions. The two
+          server-side log lines ("Region resolved: ..." and
+          "Hunt style resolved: ...") both fire on every call.
+
+          Substantive assertions: 40/40 PASS. (Harness also printed 5
+          lines tagged "FAIL region_resolution has recognizable keys" —
+          those are false positives from an overly strict key-name
+          whitelist in the test script; the actual region_resolution
+          dict is present, well-shaped, and semantically correct per
+          the preceding assertions. No backend issue.)
+
+          AnalyzeResponse.hunt_style_resolution is now populated
+          parallel to region_resolution as specified. No fixes applied
+          to source.
+
   - task: "POST /api/media/presign-upload endpoint (Pro tier)"
     implemented: true
     working: true
@@ -314,7 +424,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://asgard-tactical.preview.emergentagent.com/api). Test
+      URL (https://species-mapper-5.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -358,4 +468,108 @@ agent_communication:
       blank. No fixes applied to source — contract is correct as
       implemented. No stuck tasks. Main agent: please summarise and
       finish.
+
+  - agent: "main"
+    message: |
+      Implemented Hunt-Style Modifier pipeline (the last-working item
+      from the handoff). Please validate the /api/analyze-hunt
+      backend contract for the new hunt_style parameter. The Pro
+      session token (Bearer test_session_rs_001) is already wired in
+      test_credentials.md.
+
+      Validation requests — backend at the preview URL
+      (EXPO_PUBLIC_BACKEND_URL in /app/frontend/.env), each POST
+      /api/analyze-hunt needs map_image_base64 = a tiny valid JPEG
+      data URI (you can reuse one from prior test harnesses). Focus
+      on RESPONSE SHAPE ONLY — LLM quality is out of scope here.
+
+      The field you're validating lives under the top-level
+      "hunt_style_resolution" key of the 200 response (parallel to
+      the existing "region_resolution" key).
+
+      A) Baseline — hunt_style omitted (field not present on conditions)
+         EXPECTED: hunt_style_resolution = {
+           styleId: null, styleLabel: null,
+           source: "unspecified", rawInput: null
+  - agent: "testing"
+    message: |
+      hunt_style_resolution contract VERIFIED on POST /api/analyze-hunt
+      against the preview URL (EXPO_PUBLIC_BACKEND_URL) with Bearer
+      test_session_rs_001 (Pro). Harness: /app/hunt_style_test.py —
+      5 real analyze-hunt calls, 40/40 substantive assertions pass.
+
+      All five requested cases returned 200 with exactly the expected
+      { styleId, styleLabel, source, rawInput } shape parallel to
+      region_resolution:
+
+        A) omit hunt_style           -> {null, null, "unspecified", null}          ✅
+        B) hunt_style="archery"      -> {"archery","Archery","user_selected","archery"}        ✅
+        C) hunt_style="Public Land"  -> {"public_land","Public Land","user_selected","Public Land"} ✅  (display-label + canonical normalization)
+        D) hunt_style="bow hunting"  -> {"archery","Archery","user_selected","bow hunting"}    ✅  (alias normalization; rawInput preserved verbatim)
+        E) hunt_style="banana"       -> {null, null, "unspecified", "banana"}      ✅  (200, NOT 4xx — silent fallback as designed)
+
+      Regression F: region_resolution remains present and correct on
+      every one of the 5 responses. With the harness sending
+      latitude=31.2956 / longitude=-95.9778 on conditions, every
+      response carried:
+        region_resolution = {
+          resolvedRegionId:       "east_texas",
+          resolvedRegionLabel:    "East Texas",
+          regionResolutionSource: "gps",
+          latitude: 31.2956,
+          longitude: -95.9778
+        }
+      Zero interference between the two resolutions.
+
+      Server-side observability: both INFO log lines fire on every
+      call — "Region resolved: id=east_texas source=gps" and
+      "Hunt style resolved: id=<canonical|None> source=<user_selected|unspecified>"
+      — confirmed in /var/log/supervisor/backend.err.log. 200 OKs
+      for all 5 /api/analyze-hunt calls confirmed in backend.out.log.
+
+      Note on the harness: the test script printed 5 lines tagged
+      "FAIL region_resolution has recognizable keys" — those are
+      FALSE POSITIVES from an overly strict key-whitelist in the
+      script (expected region_id/regionId but the API uses
+      resolvedRegionId). The region_resolution dict is present,
+      well-shaped, and semantically correct per the preceding
+      passing assertions. No backend issue.
+
+      No source files modified. Main agent: please summarise and
+      finish — hunt_style_resolution is production-ready.
+         }
+
+      B) hunt_style = "archery"
+         EXPECTED: styleId="archery", styleLabel="Archery",
+           source="user_selected", rawInput="archery".
+
+      C) hunt_style = "Public Land" (display label with mixed case)
+         EXPECTED: styleId="public_land", styleLabel="Public Land",
+           source="user_selected", rawInput="Public Land".
+         This validates canonical normalization on the backend.
+
+      D) hunt_style = "bow hunting" (alias)
+         EXPECTED: styleId="archery", rawInput="bow hunting",
+           source="user_selected".
+
+      E) hunt_style = "banana" (garbage)
+         EXPECTED: styleId=null, source="unspecified",
+           rawInput="banana". Must NOT 4xx — we silently fall
+           through to the neutral block.
+
+      F) Regression smoke: region_resolution still present + correct
+         on all of the above (no interference between the two
+         resolutions).
+
+      Skip the 6-style matrix (archery/rifle/blind/saddle/
+      public_land/spot_and_stalk); only B and C are needed to prove
+      canonical + alias + label paths. D covers alias, E covers
+      garbage fallback, A covers the default.
+
+      Unit-test baseline already green in this environment:
+        • Backend pytest: 312 passed, 3 skipped, 2 pre-existing
+          live-HTTP failures (unrelated)
+        • Frontend node:test: 105 passed (was 94)
+
+      No stuck tasks on this feature. Test_credentials.md unchanged.
 

@@ -83,6 +83,13 @@ export interface HuntMetadata {
   temperature?: string | number | null;
   propertyType?: string;
   region?: string;
+  /**
+   * Canonical hunt-style id (see src/constants/huntStyles.ts).
+   * NEVER stored as freeform display text — only canonical ids
+   * reach this field so the prompt pipeline and re-analyze flows
+   * stay consistent.
+   */
+  huntStyle?: string | null;
   weatherData?: any;
   locationCoords?: { lat: number; lon: number } | null;
 }

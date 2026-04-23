@@ -1,6 +1,6 @@
 """Whitetail Deer prompt pack."""
 
-from .pack import RegionalModifier, SeasonalModifier, SpeciesPromptPack
+from .pack import HuntStyleModifier, RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 # ----------------------------- Seasonal modifiers -----------------------------
 # Trigger rules are conservative Northern Hemisphere US calendars.
@@ -191,6 +191,143 @@ WHITETAIL_PACK = SpeciesPromptPack(
         "post_rut": _WHITETAIL_POST_RUT,
         "late_season": _WHITETAIL_LATE_SEASON,
         "early_season": _WHITETAIL_EARLY_SEASON,
+    },
+    hunt_style_modifiers={
+        "archery": HuntStyleModifier(
+            style_id="archery",
+            name="Archery (Whitetail)",
+            behavior_adjustments=(
+                "Effective shot window is roughly 15-40 yards — setups must push deer inside that cone, not merely within sight.",
+                "Deer body language (tail flicks, head-on posture, alertness) matters more than for rifle — the encounter is long and close.",
+            ),
+            tactical_adjustments=(
+                "Favor tight pinch points (creek crossings, saddle throats, hinge-cut gaps, inside-corner field edges) that funnel travel to within ~30 yards.",
+                "Bias stand height and orientation to present a broadside or quartering-away shot, not a head-on gate.",
+                "Prioritize low-noise access and wind discipline — a buck at 25 yards is unforgiving of scent or gear bumps.",
+                "Sits can be longer and quieter than rifle sits; plan for 3-5 hour windows around pre-rut and rut funnels.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend long-range visibility setups (open field corners, exposed ridges) as archery stands — they look strong on a map but fail in-range.",
+                "Do NOT over-weight visibility at the cost of in-range shot lanes.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize short-range funnels, wind discipline, and shot-lane quality.",
+                "Call out that 'great sightlines' and 'great archery stand' are not the same thing.",
+            ),
+        ),
+        "rifle": HuntStyleModifier(
+            style_id="rifle",
+            name="Rifle (Whitetail)",
+            behavior_adjustments=(
+                "Effective shot window extends to the limit of visibility and shooter skill — setups can leverage open terrain, field corners, and ridge glassing.",
+                "Deer behavior in the final 50 yards matters less; what matters is whether a broadside shot is available anywhere in the covered ground.",
+            ),
+            tactical_adjustments=(
+                "Favor elevated or open-sighting setups: ridge benches, field-edge corners, clearcut seams, CRP/shelterbelt overlooks.",
+                "Staging areas between bedding and food that are visible across a field corner are high value even when deer don't enter bow range.",
+                "Wind still matters, but a marginal wind at 150 yards is recoverable — a marginal wind at 25 yards isn't.",
+                "Plan shot lanes for likely travel, not single points — rifle setups thrive on breadth of coverage.",
+            ),
+            caution_adjustments=(
+                "Do NOT collapse rifle setups onto archery-tight pinch points when broader terrain offers safer, longer shots.",
+                "Do NOT assume rifle legality — some properties / public units are archery-only. Flag as key_assumption.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize open-sight stands, ridge benches, and field-corner overlooks.",
+                "Call out that shot-lane breadth outweighs archery-tight funnel geometry here.",
+            ),
+        ),
+        "blind": HuntStyleModifier(
+            style_id="blind",
+            name="Ground Blind (Whitetail)",
+            behavior_adjustments=(
+                "Concealment and scent containment are high — deer tolerate movement inside the blind that would bust a treestand setup.",
+                "Deer acclimate to blinds over days, not minutes — a freshly placed blind in pressured country often blows a sit.",
+                "Blinds restrict shot arc to the window geometry — shot lanes are narrower than they look on a map.",
+            ),
+            tactical_adjustments=(
+                "Favor locations where a blind can sit INSIDE existing cover or against an edge — brushed-in blinds outperform exposed ones.",
+                "Bias to well-used food edges, feeder lanes, and predictable afternoon staging where deer expect to see the structure.",
+                "Ground-level shot geometry prefers broadside crossings at 20-40 yards — setups should engineer that, not hope for it.",
+                "Mornings are generally weaker than evenings for ground blinds unless the blind is well-established or set well before first light with low-impact access.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend last-minute blind placements in heavily pressured setups without calling out the acclimation risk.",
+                "Do NOT assume blinds compensate for bad wind — they slow scent but don't hide it.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize established blinds, brushed-in placement, and evening food-edge plays.",
+                "Flag acclimation risk for fresh blinds.",
+            ),
+        ),
+        "saddle": HuntStyleModifier(
+            style_id="saddle",
+            name="Tree Saddle (Whitetail)",
+            behavior_adjustments=(
+                "Mobility is the defining trait — the hunter can reset on wind or sign the same morning and hunt exact, small trees other methods can't.",
+                "Shot window is narrow but adjustable around the tree — setups benefit from a ~270° usable arc with the trunk to the strong side.",
+            ),
+            tactical_adjustments=(
+                "Favor mobile, cover-bound trees directly on travel (inside-edge, creek-bend trees, blowdown pockets) rather than established stand hubs.",
+                "Pick access routes that let the hunter hang silently before light and pull out without crossing a food edge.",
+                "Saddle hunters can exploit marginal wind setups that a permanent stand couldn't — the location can move with a shift.",
+                "Plan multiple candidate trees per sit so the tactical call moves with the wind, not the calendar.",
+            ),
+            caution_adjustments=(
+                "Do NOT over-commit to a single 'best' tree — saddle strength is tree optionality, not tree specificity.",
+                "Do NOT assume a saddle hides the hunter as well as a blind — silhouette and motion are still exposed.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize mobility, wind-adaptive tree selection, and silent access.",
+                "Call out that a saddle's advantage is optionality — suggest 2-3 candidate trees per zone.",
+            ),
+        ),
+        "public_land": HuntStyleModifier(
+            style_id="public_land",
+            name="Public Land (Whitetail)",
+            behavior_adjustments=(
+                "Hunting pressure is the dominant variable — deer shift to thicker cover, move more nocturnally, and avoid predictable access routes.",
+                "Bedding cover tightens and gets deeper; travel corridors move off obvious roads and trails into secondary cover.",
+                "Mature bucks especially favor pressure-refuge pockets (blocks bordered by private, hard-to-reach timber, ridges a mile from parking).",
+            ),
+            tactical_adjustments=(
+                "Bias setups INTO pressure-refuge pockets — distance from parking and hard access often outperforms terrain quality close to the truck.",
+                "Favor early-dark access, low-impact trails, and wind-aware routes that don't cross other hunters' likely paths.",
+                "Assume other hunters push deer toward you — set on likely escape corridors and pressure boundary edges.",
+                "Mornings can beat evenings on public because pressure pushes afternoon movement later and after legal light.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend high-visibility, near-parking setups without flagging the pressure cost.",
+                "Do NOT assume private-land movement patterns hold on public; reduce confidence on daylight travel claims.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize pressure-refuge pockets, hard access, and escape-corridor setups.",
+                "Call out the morning > evening flip that pressure often forces.",
+            ),
+        ),
+        "spot_and_stalk": HuntStyleModifier(
+            style_id="spot_and_stalk",
+            name="Spot-and-Stalk (Whitetail)",
+            behavior_adjustments=(
+                "Spot-and-stalk on whitetail is a demanding minority tactic — works best in open country (Plains, Mountain West river breaks, early-season ag edges) where glassing is viable.",
+                "Deer eyesight and ear detection at close range are extreme — the final 80 yards is where most stalks fail.",
+                "Wind, thermals, and light direction dominate outcome more than initial glassing quality.",
+            ),
+            tactical_adjustments=(
+                "Favor terrain that enables glassing ingress with dead ground for approach — ridges above a draw, coulee systems, shelterbelt gaps.",
+                "Bias approach plans to use thermals (morning downslope, evening upslope) and broken cover — not straight-line attempts.",
+                "Select glassing points that overlook likely bedding / feeding transitions at first and last light, then stalk from there.",
+                "Accept that most days end with observation, not a shot — the overlay logic should reflect that breadth of coverage matters.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend spot-and-stalk in timbered, cover-dense country where glassing fails — it is not a universal tactic.",
+                "Do NOT promise stalk success; this method's confidence ceiling is lower than stand-based methods.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize glassing-point selection and thermal-aware approach.",
+                "Call out that whitetail spot-and-stalk is terrain-gated — confidence should drop hard in timbered settings.",
+            ),
+        ),
     },
     regional_modifiers={
         "south_texas": RegionalModifier(

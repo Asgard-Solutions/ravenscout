@@ -545,15 +545,34 @@ class HuntConditions(BaseModel):
     temperature: Optional[str] = None
     precipitation: Optional[str] = None
     property_type: Optional[str] = "public"
+
+    # Freeform region NOTE displayed back in analysis output — NEVER
+    # drives region resolution. Think of this as a text annotation
+    # (e.g. the user jotting "private lease in Leon County") rather
+    # than an authoritative override. Automatic region inference is
+    # strictly GPS-driven for safety; to override, use the dedicated
+    # `manual_region_override` field below.
     region: Optional[str] = None
-    # Optional GPS context — when provided we use it to auto-resolve
-    # the canonical hunting region that drives regional prompt
-    # modifiers. `region` above is still accepted as a freeform
-    # manual override (and wins when set / normalizable).
+
+    # Optional GPS context — PRIMARY driver of automatic region
+    # resolution. Coordinates win over `map_centroid_*`; both feed
+    # into `resolve_effective_region`.
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     map_centroid_lat: Optional[float] = None
     map_centroid_lon: Optional[float] = None
+
+    # EXPLICIT override for the region classifier. Only set from an
+    # intentional admin / debug / boundary-case flow — e.g. an admin
+    # UI, a "my region is actually X" correction button, or a test
+    # fixture. The presence of a non-null, normalizable value here is
+    # what flips `regionResolutionSource` to "manual_override".
+    # Normal hunts should leave this null.
+    manual_region_override: Optional[str] = None
+
+    # Optional hunt style — archery / rifle / blind / saddle /
+    # public_land / spot_and_stalk. See species_prompts.hunt_styles.
+    hunt_style: Optional[str] = None
 
 class AnalyzeRequest(BaseModel):
     conditions: HuntConditions
@@ -589,6 +608,9 @@ class AnalyzeResponse(BaseModel):
     # Persisted by the client alongside the hunt so overlays/reloads
     # carry the same regional lock as the LLM reasoning.
     region_resolution: Optional[dict] = None
+    # Canonical hunt-style resolved server-side from the user's
+    # explicit selection. Persisted by the client alongside the hunt.
+    hunt_style_resolution: Optional[dict] = None
 
 
 # ============================================================
@@ -660,8 +682,22 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
 
     # Resolve the effective hunting region once, then reuse the
     # resolution for BOTH the prompt builder and the response payload.
-    # Precedence: manual override (freeform `region`) > GPS > map centroid > default.
-    from species_prompts import resolve_effective_region
+    #
+    # Precedence (SAFETY-CRITICAL — see species_prompts.regions):
+    #   1. explicit `manual_region_override` — intentional override flow
+    #   2. GPS latitude/longitude — PRIMARY auto-resolution path
+    #   3. map centroid — fallback when no GPS
+    #   4. generic_default
+    #
+    # The freeform `region` field on HuntConditions is a user-facing
+    # note ONLY and deliberately does NOT participate in resolution.
+    # That prevents a casual "Midwest" annotation from silently
+    # overriding the user's actual East Texas GPS fix.
+    from species_prompts import (
+        get_hunt_style_label,
+        normalize_hunt_style,
+        resolve_effective_region,
+    )
     map_centroid = None
     if conditions.map_centroid_lat is not None and conditions.map_centroid_lon is not None:
         map_centroid = (conditions.map_centroid_lat, conditions.map_centroid_lon)
@@ -669,14 +705,29 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         gps_lat=conditions.latitude,
         gps_lon=conditions.longitude,
         map_centroid=map_centroid,
-        manual_override=conditions.region,
+        manual_override=conditions.manual_region_override,
     )
     logger.info(
         f"Region resolved: id={region_resolution.region_id} "
         f"source={region_resolution.source} label='{region_resolution.region_label}'"
     )
 
-    # Build prompts using modular builder (region-aware)
+    # Hunt-style resolution — canonical id only; freeform input is
+    # normalized here so the prompt pipeline + response + client all
+    # persist the same canonical value.
+    canonical_hunt_style = normalize_hunt_style(conditions.hunt_style)
+    hunt_style_resolution = {
+        "styleId": canonical_hunt_style,
+        "styleLabel": get_hunt_style_label(canonical_hunt_style),
+        "source": "user_selected" if canonical_hunt_style else "unspecified",
+        "rawInput": conditions.hunt_style,
+    }
+    logger.info(
+        f"Hunt style resolved: id={canonical_hunt_style} "
+        f"source={hunt_style_resolution['source']}"
+    )
+
+    # Build prompts using modular builder (region-aware, style-aware)
     system_prompt = assemble_system_prompt(
         animal=conditions.animal,
         conditions=conditions_dict,
@@ -684,6 +735,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         image_count=actual_image_count,
         tier=tier,
         region_resolution=region_resolution,
+        hunt_style=canonical_hunt_style,
     )
     user_prompt_text = assemble_user_prompt(
         species_name=species["name"],
@@ -741,6 +793,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
             "v2": normalized,
             "v1": v1_compat,
             "region_resolution": region_resolution.as_dict(),
+            "hunt_style_resolution": hunt_style_resolution,
         }
     else:
         # Old-style v1 response — wrap it
@@ -750,6 +803,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
             "v2": None,
             "v1": parsed,
             "region_resolution": region_resolution.as_dict(),
+            "hunt_style_resolution": hunt_style_resolution,
         }
 
 
@@ -833,6 +887,7 @@ async def analyze_hunt(request: Request):
             "result": result,
             "usage": updated_usage,
             "region_resolution": raw_result.get("region_resolution"),
+            "hunt_style_resolution": raw_result.get("hunt_style_resolution"),
         })
     except json.JSONDecodeError:
         return JSONResponse({"success": False, "error": "Failed to parse AI response. Please try again.", "usage": None})
