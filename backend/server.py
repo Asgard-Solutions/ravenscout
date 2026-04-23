@@ -17,9 +17,17 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+# Accept either MONGO_URL (legacy / platform default) or MONGODB_URI
+# (common Atlas connection-string name) so user-provided .env files
+# with either variable name work without editing.
+mongo_url = os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI')
+if not mongo_url:
+    raise RuntimeError(
+        "Missing Mongo connection string. Set MONGO_URL or MONGODB_URI in backend/.env."
+    )
+db_name = os.environ.get('DB_NAME') or 'raven_scout'
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[db_name]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
