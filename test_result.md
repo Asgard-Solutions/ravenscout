@@ -501,6 +501,239 @@ frontend:
           Will be validated end-to-end on a real Pro device once AWS env
           vars are provided. No frontend testing requested by user.
 
+  - task: "Hunts CRUD backend + cloud sync + mobile-only web blocker"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py, /app/frontend/src/api/huntsApi.ts, /app/frontend/src/components/WebBlocker.tsx, /app/frontend/app/_layout.tsx, /app/frontend/src/media/huntHydration.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Feb 2026 — Two features landed together.
+
+          A) Mobile-only web blocker
+          Product is native-only. Added a root-level gate:
+          - /app/frontend/src/components/WebBlocker.tsx — renders an
+            "install on your phone" card + App Store / Play Store
+            buttons when Platform.OS === 'web'.
+          - /app/frontend/app/_layout.tsx — when useWebBlocked() is
+            true, the entire router tree is replaced with the
+            blocker (prevents any SSR/preview attempt to render
+            /results with a base64 payload).
+          - Dev bypass: URL param ?dev=1 OR localStorage
+            `raven_dev_web_bypass=1` skips the blocker so E2E /
+            screenshot tests still work.
+          - app.json left unchanged (web is still bundled so preview
+            works for dev agents; runtime gate handles UX).
+
+          B) /api/hunts CRUD (MongoDB-backed, server-authoritative)
+          New collection: `hunts`. Indices: (user_id, created_at DESC)
+          for history list, (user_id, hunt_id) unique for idempotent
+          upsert. Scoped strictly per-user — cross-user access is
+          impossible by design.
+          - POST /api/hunts — create or replace (upsert).
+          - GET /api/hunts?limit=50&skip=0 — paginated list, newest
+            first, current user only.
+          - GET /api/hunts/{hunt_id} — single fetch.
+          - PUT /api/hunts/{hunt_id} — partial patch (overlay edits,
+            re-analysis).
+          - DELETE /api/hunts/{hunt_id} — idempotent.
+
+          Frontend client: /app/frontend/src/api/huntsApi.ts
+            Non-throwing, reads session token from AsyncStorage.
+            upsertHunt / listHuntsFromCloud / getHuntFromCloud /
+            patchHunt / deleteHuntFromCloud.
+
+          Wired into huntHydration.finalizeProvisionalHunt — after
+          local AnalysisStore write succeeds (web path) OR after the
+          full saveHunt pipeline returns (native path), we POST
+          /api/hunts to cloud-sync. Fire-and-forget semantics: if
+          cloud sync fails (auth expired, offline) the local record
+          is the source of truth and we retry opportunistically.
+
+          TESTED:
+          - 137/137 frontend unit tests pass.
+          - TypeScript: 0 errors.
+          - Smoke-tested all 5 CRUD routes via curl with seeded
+            test user (test-user-001, test_session_rs_001):
+              * POST → 200, hunt returned with timestamps
+              * GET list → total=1, includes new hunt
+              * GET single → 200 with full payload
+              * PUT patch → analysis replaced, created_at stable,
+                updated_at bumped
+              * DELETE → 200 {deleted:1}
+              * GET deleted → 404
+              * POST without auth (valid body) → 401
+              * GET other-user hunt with bogus token → 401
+
+          NEEDS RETESTING: Run deep_testing_backend_v2 to exercise
+          the new /api/hunts routes under realistic tier/auth
+          scenarios and regression-check the existing endpoints.
+
+          Known limits (by design for this patch):
+          - S3 image upload still unreachable on web (needs native
+            EAS build OR a web-direct PUT path; scoped separately).
+          - Frontend history screen (if any) not yet wired to
+            GET /api/hunts — only the cloud write is live this round.
+      - working: true
+        agent: "testing"
+        comment: |
+          Full /api/hunts CRUD contract verified end-to-end against
+          the preview URL (EXPO_PUBLIC_BACKEND_URL =
+          https://panorama-memory-fix.preview.emergentagent.com).
+          Harness: /app/hunts_crud_test.py — 66/66 substantive
+          assertions PASS.
+
+          Seeded a second Pro test user directly in Mongo for the
+          cross-user scenarios (matches /app/memory/test_credentials.md
+          intent): test-user-002 / email=test2@ravenscout.app /
+          tier=pro / session_token=test_session_rs_002 (expires
+          +30 days). test-user-001 / test_session_rs_001 already
+          present.
+
+          AUTH / OWNERSHIP (critical)
+          ✅ POST /api/hunts no-auth → 401 "Not authenticated"
+          ✅ POST /api/hunts invalid token → 401 "Invalid session"
+          ✅ GET /api/hunts no-auth → 401
+          ✅ GET /api/hunts/{id} no-auth → 401
+          ✅ PUT /api/hunts/{id} no-auth → 401
+          ✅ DELETE /api/hunts/{id} no-auth → 401
+          ✅ Cross-user GET another user's hunt → 404 (NOT 403, so
+             existence is not leaked — matches spec)
+          ✅ Cross-user PUT another user's hunt → 404
+          ✅ Cross-user DELETE another user's hunt → 404 + owner's
+             doc still intact (verified via GET after attempt)
+
+          POST /api/hunts  (example request)
+            Headers: Authorization: Bearer test_session_rs_001,
+                     Content-Type: application/json
+            Body   : {
+              "hunt_id": "rs-test-98146fb8fa",
+              "metadata": {"species":"deer","speciesName":"Whitetail Deer",
+                           "date":"2026-02-15","timeWindow":"morning",
+                           "windDirection":"NW","temperature":"38F",
+                           "propertyType":"private","region":"East Texas",
+                           "huntStyle":"archery",
+                           "weatherData":{"wind_speed_mph":6,"condition":"Clear"},
+                           "locationCoords":{"latitude":31.2956,"longitude":-95.9778}},
+              "analysis": {"summary":"...", "overlays":[...], "top_setups":[...]},
+              "analysis_context": {"prompt_version":"v2","modelUsed":"gpt-5.2"},
+              "media_refs": ["mem://local/hunt/img1.jpg"],
+              "primary_media_ref": "mem://local/hunt/img1.jpg",
+              "image_s3_keys": [],
+              "storage_strategy": "local-first",
+              "extra": {"clientBuild":"ios-1.2.0"}
+            }
+            → 200 {
+              "ok": true,
+              "hunt": {
+                "user_id": "test-user-001",
+                "hunt_id": "rs-test-98146fb8fa",
+                "created_at": "2026-04-23T19:59:25.178000",
+                "updated_at": "2026-04-23T19:59:25.178000",
+                "metadata": {...}, "analysis": {...},
+                "analysis_context": {...}, "media_refs":[...],
+                "primary_media_ref": "...", "image_s3_keys":[],
+                "storage_strategy":"local-first", "extra":{...}
+              }
+            }
+          ✅ ok=true / hunt.user_id echoes caller / hunt_id echoed
+          ✅ created_at and updated_at are ISO strings
+          ✅ metadata + analysis + nested overlays preserved
+
+          Idempotent upsert (same hunt_id + user)
+          ✅ Re-POSTing same hunt_id replaces $set fields
+          ✅ created_at stable across upsert (via $setOnInsert)
+          ✅ updated_at is bumped to now()
+
+          Body validation (HuntUpsertBody)
+          ✅ hunt_id shorter than 4 chars → 422 string_too_short
+          ✅ hunt_id longer than 64 chars → 422 string_too_long
+          ✅ metadata missing → 422 field required
+
+          GET /api/hunts (list)
+            GET /api/hunts?limit=50&skip=0 →
+              200 {"ok":true,"total":1,"limit":50,"skip":0,
+                   "hunts":[{...newest first}]}
+          ✅ Default limit=50, skip=0 applied when absent
+          ✅ Newest-first sort honored
+          ✅ limit=9999 clamps to 200 (NOT 400)
+          ✅ skip=-5 clamps to 0 (NOT 400)
+          ✅ limit=0 clamps to 1 (NOT 400)
+
+          GET /api/hunts/{hunt_id}
+          ✅ Owner → 200 {"ok":true,"hunt":{...}}
+          ✅ Missing id → 404 {"detail":"Hunt not found"}
+          ✅ Another user's hunt → 404 (not 403)
+
+          PUT /api/hunts/{hunt_id}
+            Body: {"analysis":{"summary":"Patched only analysis",
+                               "overlays":[{"label":"Edited"}]}}
+          ✅ Partial patch applied; other fields (metadata) untouched
+          ✅ created_at stable; updated_at bumped
+          ✅ Nonexistent id → 404
+          ✅ Cross-user → 404 (target doc never mutated)
+
+          DELETE /api/hunts/{hunt_id}
+          ✅ Owner → 200 {"ok":true,"deleted":1}
+          ✅ Second DELETE (already deleted) → 404
+          ✅ Cross-user DELETE → 404 AND owner's doc still readable
+
+          Per-user uniqueness (compound index)
+          ✅ User1 and User2 can both POST hunt_id="shared-<uuid>"
+             with independent payloads — both return 200 and each
+             user GETs back only their own document (User1 sees
+             speciesName="User1 deer", User2 sees "User2 turkey").
+             Compound index (user_id, hunt_id) enforces per-user
+             uniqueness as designed.
+
+          REGRESSION (existing endpoints — all 200)
+          ✅ GET /api/auth/me (Bearer test_session_rs_001) →
+             {user_id:"test-user-001", tier:"pro", usage:{...}}
+          ✅ GET /api/subscription/tiers (public) →
+             {tiers: {trial,core,pro}}
+          ✅ GET /api/subscription/status (auth'd) → tier=pro
+          ✅ POST /api/analyze-hunt with a 256x256 PNG + minimal
+             body → 200 {success:true, result:{id, overlays:[...5],
+             v2,...}, region_resolution:{resolvedRegionId:"east_texas",
+             source:"gps"}, hunt_style_resolution:{styleId:null,
+             source:"unspecified"}}.
+             NOTE: initial run used a 10x10 PNG that OpenAI rejected
+             ("unsupported image") — that was a test-image issue,
+             not a backend regression. The endpoint's own error
+             translation is working correctly (HTTP 200 with
+             success=false + user-facing error, no 500). Re-ran
+             with a valid 256x256 PNG; full success path including
+             region_resolution and hunt_style_resolution confirmed
+             intact.
+
+          Routing sanity
+          ✅ All five new routes are wired under /api prefix only —
+             no /api/hunts/hunts or duplicate mount. Verified via
+             supervisor access logs: POST/GET/PUT/DELETE /api/hunts
+             and /api/hunts/{id}. No 404s on the prefixed paths,
+             no accidental exposure under a nested path.
+
+          Security summary
+          ✅ No 500s observed on any route under any scenario.
+          ✅ No auth bypass: all 5 routes 401 without bearer / with
+             bogus bearer.
+          ✅ No cross-user data leak: cross-user GET/PUT/DELETE
+             return 404 (existence hidden) AND the target doc is
+             never mutated.
+
+          No source files modified by the testing agent. The second
+          Pro test user (test-user-002 / test_session_rs_002) and
+          matching session were seeded via direct Mongo insert per
+          the review request and are suitable for re-use on
+          subsequent runs.
+
+          Main agent: please summarise and finish — /api/hunts CRUD
+          is production-ready.
+
 metadata:
   created_by: "main_agent"
   version: "3.2"
@@ -508,7 +741,8 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Hunts CRUD backend + cloud sync + mobile-only web blocker"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -809,3 +1043,67 @@ agent_communication:
       pending human verification (P1 crash fix) after which S3
       uploads should appear for new analyses and records should
       show up in MongoDB.
+
+  - agent: "testing"
+    message: |
+      /api/hunts CRUD VERIFIED end-to-end against the preview URL
+      (EXPO_PUBLIC_BACKEND_URL). Harness: /app/hunts_crud_test.py —
+      66/66 assertions PASS. Seeded a second Pro test user
+      directly in Mongo (test-user-002 / test_session_rs_002,
+      tier=pro, expires 2026-05-23) to exercise cross-user
+      scenarios per the review request.
+
+      Auth / ownership (all critical)
+        ✅ All 5 routes (POST, GET list, GET one, PUT, DELETE) 401
+           without bearer or with bogus bearer
+        ✅ Cross-user GET/PUT/DELETE → 404 (not 403) so existence
+           is not leaked, and target document is never mutated
+        ✅ POST idempotency: re-POST same hunt_id keeps created_at,
+           bumps updated_at ($setOnInsert + $set)
+        ✅ Per-user uniqueness: two different users can each have
+           hunt_id="shared-<uuid>" as independent docs (compound
+           unique index on (user_id, hunt_id))
+
+      Endpoint behavior
+        ✅ POST /api/hunts → 200 {ok:true, hunt:{...,created_at,
+           updated_at as ISO strings}}; metadata + analysis +
+           nested overlays preserved
+        ✅ GET /api/hunts?limit=50&skip=0 → default limit=50/skip=0
+           applied, newest-first sort; limit=9999 clamps to 200,
+           skip=-5 clamps to 0, limit=0 clamps to 1 (all 200, not 400)
+        ✅ GET /api/hunts/{id} → 200 owner / 404 missing / 404
+           cross-user
+        ✅ PUT /api/hunts/{id} → partial patch (only supplied fields
+           applied, metadata untouched when absent); created_at
+           stable, updated_at bumped; 404 missing / 404 cross-user
+        ✅ DELETE /api/hunts/{id} → 200 {ok:true,deleted:1} owner /
+           404 already-deleted / 404 cross-user + owner's doc intact
+        ✅ POST body validation: hunt_id<4 → 422, hunt_id>64 → 422,
+           missing metadata → 422
+
+      Regression (existing endpoints — no regressions)
+        ✅ GET /api/auth/me (Bearer test_session_rs_001) → 200
+           tier=pro
+        ✅ GET /api/subscription/tiers → 200 {trial,core,pro}
+        ✅ GET /api/subscription/status (auth'd) → 200 tier=pro
+        ✅ POST /api/analyze-hunt with a real 256x256 PNG →
+           success=true, overlays rendered, region_resolution +
+           hunt_style_resolution both present. (Note: first run
+           used a 10x10 PNG which OpenAI rejects as "unsupported
+           image" — the endpoint handled it cleanly with HTTP 200 +
+           success=false + translated error text, no 500. Larger
+           image re-run confirmed main product API is unaffected.)
+
+      Routing sanity
+        ✅ All five new routes wired under /api prefix only — no
+           accidental /api/hunts/hunts nesting. Verified via the
+           live supervisor access logs during the run.
+
+      Security posture
+        ✅ Zero 500s across all scenarios
+        ✅ Zero auth bypass
+        ✅ Zero cross-user data leak (existence hidden; docs never
+           mutated by non-owners)
+
+      No source files modified. No stuck tasks. Main agent: please
+      summarise and finish — Hunts CRUD is production-ready.

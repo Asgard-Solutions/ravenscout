@@ -53,6 +53,7 @@ import { resolveStorageStrategy, type Tier } from './storageStrategy';
 import { Platform } from 'react-native';
 import { logClientEvent } from '../utils/clientLog';
 import { buildInitialAnalysisContext } from '../utils/analysisContext';
+import { upsertHunt } from '../api/huntsApi';
 
 // ------------------------------ Hydration ------------------------------
 
@@ -915,6 +916,25 @@ export async function finalizeProvisionalHunt(
       // Save the analysis record (base64-stripped). This is what
       // powers the history list. Safe: <10KB write.
       const persisted = await saveAnalysis(analysis);
+
+      // Cloud sync — fire-and-forget upsert to MongoDB via
+      // /api/hunts. Non-blocking for the UI: if it fails (auth
+      // expired, offline), the local AnalysisStore record remains
+      // the source of truth and we'll retry opportunistically from
+      // history sync. Intentionally awaited here (not detached) so
+      // we can surface the outcome in telemetry for this first
+      // release — can be fire-and-forget later.
+      const cloud = await upsertHunt({
+        huntId,
+        metadata: analysis.metadata,
+        analysis: analysis.analysis,
+        analysisContext: analysis.analysisContext || {},
+        mediaRefs: analysis.mediaRefs || [],
+        primaryMediaRef: analysis.primaryMediaRef ?? null,
+        imageS3Keys: [],
+        storageStrategy: 'web_metadata_only',
+      });
+
       logClientEvent({
         event: 'finalize_provisional_completed',
         data: {
@@ -922,6 +942,8 @@ export async function finalizeProvisionalHunt(
           analysis_persisted: persisted,
           media_persisted: 0,
           mode: 'web_metadata_only',
+          cloud_ok: cloud.ok,
+          cloud_reason: cloud.ok ? null : (cloud as any).reason,
           warning: persisted ? null : 'analysis_save_failed',
         },
       });
@@ -997,12 +1019,35 @@ export async function finalizeProvisionalHunt(
           }
         : undefined,
     });
+
+    // Cloud sync — MongoDB /api/hunts. On native we also include
+    // the S3 object keys returned by saveHunt so the server has a
+    // pointer to the uploaded images. Fire-and-forget: if the
+    // cloud is unreachable the local AnalysisStore remains
+    // authoritative.
+    const imageS3Keys = (outcome.hunt?.media || [])
+      .map((m: any) => m?.storageKey)
+      .filter((k: any): k is string => typeof k === 'string' && k.length > 0);
+    const cloud = await upsertHunt({
+      huntId,
+      metadata: analysis.metadata,
+      analysis: analysis.analysis,
+      analysisContext: analysis.analysisContext || {},
+      mediaRefs: analysis.mediaRefs || [],
+      primaryMediaRef: analysis.primaryMediaRef ?? null,
+      imageS3Keys,
+      storageStrategy: 'native_full',
+    });
+
     logClientEvent({
       event: 'finalize_provisional_completed',
       data: {
         hunt_id: huntId,
         analysis_persisted: outcome.analysisPersisted,
         media_persisted: outcome.mediaPersisted,
+        cloud_ok: cloud.ok,
+        cloud_reason: cloud.ok ? null : (cloud as any).reason,
+        image_s3_keys_count: imageS3Keys.length,
         warning: outcome.warningMessage ?? null,
       },
     });

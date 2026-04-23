@@ -1094,6 +1094,219 @@ async def log_client_event(body: ClientEventBody):
 
 
 # ============================================================
+# HUNTS CRUD — Server-side hunt persistence + cross-device sync
+# ============================================================
+#
+# Collection: `hunts`
+# Indices (created lazily on startup below):
+#   user_id + created_at desc — list current user's history
+#   hunt_id unique per user   — upsert-friendly client-originated ids
+#
+# Auth: every route below requires a valid session (get_current_user).
+# Ownership: hunts are scoped per user_id — a user can NEVER read or
+# mutate another user's hunt even by guessing hunt_id.
+#
+# Schema is intentionally permissive on nested fields (metadata /
+# analysis_result / analysis_context / media_refs) to stay in sync
+# with the frontend's PersistedHuntAnalysis without requiring a
+# migration each time the analysis shape evolves.
+
+class HuntUpsertBody(BaseModel):
+    """Client payload for POST /api/hunts and PUT /api/hunts/{id}."""
+    hunt_id: str = Field(..., min_length=4, max_length=64)
+    # Canonical metadata — the server validates known keys but passes
+    # the rest through to Mongo so new frontend fields don't 400.
+    metadata: dict
+    analysis: Optional[dict] = None
+    analysis_context: Optional[dict] = None
+    media_refs: Optional[List[str]] = None
+    primary_media_ref: Optional[str] = None
+    image_s3_keys: Optional[List[str]] = None
+    storage_strategy: Optional[str] = None
+    # Free-form pass-through for forward compatibility.
+    extra: Optional[dict] = None
+
+
+def _scrub_hunt(doc: dict) -> dict:
+    """Strip _id, return a JSON-safe copy of a hunt Mongo document."""
+    if not doc:
+        return doc
+    out = {k: v for k, v in doc.items() if k != "_id"}
+    # Convert datetimes to ISO strings for the frontend.
+    for k in ("created_at", "updated_at"):
+        v = out.get(k)
+        if isinstance(v, datetime):
+            out[k] = v.isoformat()
+    return out
+
+
+async def _ensure_hunts_indexes() -> None:
+    """Idempotent index setup — safe to call repeatedly."""
+    try:
+        await db.hunts.create_index([("user_id", 1), ("created_at", -1)])
+        await db.hunts.create_index(
+            [("user_id", 1), ("hunt_id", 1)],
+            unique=True,
+            name="user_hunt_unique",
+        )
+    except Exception as e:
+        logger.warning(f"hunts index setup failed (non-fatal): {e}")
+
+
+@app.on_event("startup")
+async def _startup_hunts_indexes():
+    await _ensure_hunts_indexes()
+
+
+@api_router.post("/hunts")
+async def upsert_hunt(body: HuntUpsertBody, request: Request):
+    """Create or replace a hunt. Idempotent on (user_id, hunt_id).
+
+    Frontend calls this from `finalizeProvisionalHunt` after a fresh
+    analysis, and from the overlay editor after saved edits. Sending
+    the same hunt_id again updates the existing doc and bumps
+    updated_at.
+    """
+    user = await get_current_user(request)
+    uid = user["user_id"]
+    now = datetime.now(timezone.utc)
+
+    # Build the document. `$setOnInsert` keeps created_at stable across
+    # re-upserts; `$set` refreshes everything else.
+    update_doc = {
+        "$setOnInsert": {
+            "user_id": uid,
+            "hunt_id": body.hunt_id,
+            "created_at": now,
+        },
+        "$set": {
+            "updated_at": now,
+            "metadata": body.metadata or {},
+            "analysis": body.analysis or {},
+            "analysis_context": body.analysis_context or {},
+            "media_refs": body.media_refs or [],
+            "primary_media_ref": body.primary_media_ref,
+            "image_s3_keys": body.image_s3_keys or [],
+            "storage_strategy": body.storage_strategy,
+            "extra": body.extra or {},
+        },
+    }
+
+    try:
+        await db.hunts.update_one(
+            {"user_id": uid, "hunt_id": body.hunt_id},
+            update_doc,
+            upsert=True,
+        )
+    except Exception as e:
+        logger.error(f"hunts upsert failed for user={uid} hunt={body.hunt_id}: {e}")
+        raise HTTPException(status_code=500, detail="Could not save hunt")
+
+    saved = await db.hunts.find_one(
+        {"user_id": uid, "hunt_id": body.hunt_id},
+        {"_id": 0},
+    )
+    return {"ok": True, "hunt": _scrub_hunt(saved or {})}
+
+
+@api_router.get("/hunts")
+async def list_hunts(request: Request, limit: int = 50, skip: int = 0):
+    """List the current user's hunts, newest first. Paginated."""
+    user = await get_current_user(request)
+    uid = user["user_id"]
+
+    # Clamp pagination to sane bounds.
+    limit = max(1, min(limit, 200))
+    skip = max(0, skip)
+
+    cursor = (
+        db.hunts.find({"user_id": uid}, {"_id": 0})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
+    )
+    hunts = [_scrub_hunt(h) async for h in cursor]
+    total = await db.hunts.count_documents({"user_id": uid})
+    return {"ok": True, "total": total, "limit": limit, "skip": skip, "hunts": hunts}
+
+
+@api_router.get("/hunts/{hunt_id}")
+async def get_hunt(hunt_id: str, request: Request):
+    """Fetch a single hunt scoped to the current user."""
+    user = await get_current_user(request)
+    uid = user["user_id"]
+    doc = await db.hunts.find_one({"user_id": uid, "hunt_id": hunt_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Hunt not found")
+    return {"ok": True, "hunt": _scrub_hunt(doc)}
+
+
+class HuntPatchBody(BaseModel):
+    """Partial update — only fields supplied are written."""
+    metadata: Optional[dict] = None
+    analysis: Optional[dict] = None
+    analysis_context: Optional[dict] = None
+    media_refs: Optional[List[str]] = None
+    primary_media_ref: Optional[str] = None
+    image_s3_keys: Optional[List[str]] = None
+    storage_strategy: Optional[str] = None
+    extra: Optional[dict] = None
+
+
+@api_router.put("/hunts/{hunt_id}")
+async def update_hunt(hunt_id: str, body: HuntPatchBody, request: Request):
+    """Partial update (e.g. overlay edits saved from the results screen)."""
+    user = await get_current_user(request)
+    uid = user["user_id"]
+    now = datetime.now(timezone.utc)
+
+    update_fields = {"updated_at": now}
+    for key in (
+        "metadata",
+        "analysis",
+        "analysis_context",
+        "media_refs",
+        "primary_media_ref",
+        "image_s3_keys",
+        "storage_strategy",
+        "extra",
+    ):
+        val = getattr(body, key, None)
+        if val is not None:
+            update_fields[key] = val
+
+    result = await db.hunts.update_one(
+        {"user_id": uid, "hunt_id": hunt_id},
+        {"$set": update_fields},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Hunt not found")
+
+    saved = await db.hunts.find_one(
+        {"user_id": uid, "hunt_id": hunt_id},
+        {"_id": 0},
+    )
+    return {"ok": True, "hunt": _scrub_hunt(saved or {})}
+
+
+@api_router.delete("/hunts/{hunt_id}")
+async def delete_hunt(hunt_id: str, request: Request):
+    """Delete a hunt. Idempotent: 404 if it didn't exist."""
+    user = await get_current_user(request)
+    uid = user["user_id"]
+
+    # TODO (future): also schedule deletion of any associated S3
+    # assets in image_s3_keys. For now the frontend is expected to
+    # fire separate /api/media/delete requests in parallel — matches
+    # the existing contract used elsewhere in the app.
+    result = await db.hunts.delete_one({"user_id": uid, "hunt_id": hunt_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Hunt not found")
+    return {"ok": True, "deleted": 1}
+
+
+
+# ============================================================
 # APP SETUP
 # ============================================================
 app.include_router(api_router)
