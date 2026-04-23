@@ -27,6 +27,7 @@ import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { saveHunt } from '../src/media/huntPersistence';
+import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
 
 const { width } = Dimensions.get('window');
 const STEPS = ['Species', 'Maps', 'Conditions', 'Review'];
