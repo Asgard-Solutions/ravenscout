@@ -17,6 +17,8 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { compressImage, profileForTier } from '../src/media/imageProcessor';
+import { logClientEvent } from '../src/utils/clientLog';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, SPECIES, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
@@ -108,6 +110,61 @@ export default function SetupScreen() {
     }
   };
 
+  const [isCompressing, setIsCompressing] = useState(false);
+
+  /**
+   * Compress + resize an image before it enters the state that
+   * downstream depends on (LLM upload, AsyncStorage provisional
+   * cache, analysisStore). On mobile Chrome the raw gallery
+   * picker can hand back 5-15MB base64 blobs that blow past
+   * localStorage quota and JS heap limits. A one-pass resize
+   * through expo-image-manipulator drops a typical 1.8MB upload
+   * to ~300-700KB without noticeable quality loss (PROFILE_PRO =
+   * 2048px max-dim @ 0.85 JPEG; PROFILE_CORE = 1280px @ 0.70).
+   *
+   * Logs a `image_compressed` event so we can see before/after
+   * byte sizes in backend logs and catch quota regressions early.
+   */
+  const compressForPipeline = async (input: string, source: 'upload' | 'capture'): Promise<string> => {
+    const before = (input || '').length;
+    const profile = profileForTier(user?.tier || 'trial');
+    try {
+      setIsCompressing(true);
+      const out = await compressImage(input, profile);
+      logClientEvent({
+        event: 'image_compressed',
+        data: {
+          source,
+          tier: user?.tier ?? null,
+          before_bytes: before,
+          after_bytes: out.bytes,
+          after_width: out.width,
+          after_height: out.height,
+          compressed: out.compressed,
+          failed: out.failed,
+          profile_max_dim: profile.maxDim,
+          profile_quality: profile.quality,
+        },
+      });
+      if (out.failed) return input;
+      return out.dataUri;
+    } catch (err: any) {
+      logClientEvent({
+        event: 'image_compressed',
+        data: {
+          source,
+          tier: user?.tier ?? null,
+          before_bytes: before,
+          failed: true,
+          error: err?.message || String(err),
+        },
+      });
+      return input;
+    } finally {
+      setIsCompressing(false);
+    }
+  };
+
   const pickImage = async () => {
     if (mapImages.length >= MAX_MAPS) {
       Alert.alert('Limit Reached', `Maximum ${MAX_MAPS} maps per hunt.`);
@@ -125,7 +182,9 @@ export default function SetupScreen() {
       allowsEditing: false,
     });
     if (!result.canceled && result.assets[0]?.base64) {
-      setMapImages(prev => [...prev, `data:image/jpeg;base64,${result.assets[0].base64}`]);
+      const raw = `data:image/jpeg;base64,${result.assets[0].base64}`;
+      const compressed = await compressForPipeline(raw, 'upload');
+      setMapImages(prev => [...prev, compressed]);
     }
   };
 
@@ -155,9 +214,10 @@ export default function SetupScreen() {
     setCaptureCount(prev => prev + 1);
   };
 
-  const handleMapCapture = useCallback((base64: string) => {
+  const handleMapCapture = useCallback(async (base64: string) => {
     if (mapImages.length >= MAX_MAPS) return;
-    setMapImages(prev => [...prev, base64]);
+    const compressed = await compressForPipeline(base64, 'capture');
+    setMapImages(prev => [...prev, compressed]);
     Alert.alert('Captured!', 'Map view saved. You can capture more or continue.');
   }, [mapImages.length]);
 
