@@ -241,6 +241,10 @@ export default function ResultsScreen() {
   const loadHuntAsync = async (): Promise<{ hunt: HuntRecord; warning: string | null } | null> => {
     const huntId = params.huntId as string | undefined;
     if (!huntId) return null;
+    logClientEvent({
+      event: 'results_load_started',
+      data: { hunt_id: huntId, tier: (user as any)?.tier ?? null },
+    });
 
     const res = await loadHuntFromStore(huntId, (user as any)?.tier);
     if (!res) return null;

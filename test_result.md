@@ -335,6 +335,88 @@ backend:
           expected through the HTTP layer.
 
 frontend:
+  - task: "Mobile results hydration — durable provisional (AsyncStorage) hot-cache for just-analyzed hunts"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/media/provisionalHuntStore.ts, /app/frontend/src/media/huntHydration.ts, /app/frontend/app/results.tsx, /app/frontend/src/media/__tests__/provisionalHuntStore.test.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          User reported on-device validation failing: after a map
+          capture + analyze, /results showed "RESULTS NOT FOUND —
+          Hunt data could not be loaded." The earlier web-preview
+          `expo-file-system: no writable directory` issue had been
+          patched with an in-memory session seat in saveHunt, but
+          the symptom persisted on mobile Chrome.
+
+          SMOKING GUN (in backend logs, ISO timestamps):
+            14:45:19.995 - AI response received len=11919
+            14:45:20.210 - hunt_not_found reason=missing_from_all_sources  (+217ms!)
+            14:45:25.242 - hunt_not_found reason=timeout
+
+          Only 217ms between the API reply and the /results miss —
+          too fast for saveHunt to have even started. Earlier hunts
+          showed `persist_degraded` events BEFORE the miss; this one
+          showed ZERO persist events at all. On mobile Chrome using
+          expo-router's static-SSR web output, each route transition
+          can spin up a fresh JS runtime, wiping the in-memory
+          module singleton. The previous in-memory-only fix was
+          useless in that environment.
+
+          FIX — durable provisional hot-cache tier:
+          1) /app/frontend/src/media/provisionalHuntStore.ts (new)
+             Single-entry AsyncStorage bucket keyed by
+             `raven_provisional_hunt_v1`. Holds the FULL analysis
+             record + base64 displayUris for the most-recent hunt.
+             Survives tab reshuffle, bfcache, and route-transition
+             runtime resets. Rotated to exactly one entry so it
+             can never grow.
+          2) saveHunt — Step 0 now seats the provisional record
+             in BOTH the in-memory singleton AND AsyncStorage. The
+             Step 2 path clears the AsyncStorage entry only after
+             the real analysisStore write succeeds. If the real
+             path fails, the provisional record stays in place
+             as the durable fallback.
+          3) hydrateHuntResult — adds tier 1.5 between in-memory
+             and analysisStore: reads the provisional cache and
+             hydrates directly from it. Emits `hunt_hydrate` events
+             per tier so we can see exactly which tier served any
+             given load.
+          4) Diagnostic logs: `save_hunt_started` (with image byte
+             sizes + large-payload flag), `save_hunt_provisional_seated`
+             (with bytes + quota_warning), `save_hunt_completed`,
+             `results_load_started`, `hunt_hydrate` (tier_hit).
+             So future regressions show BOTH what was saved AND
+             which tier served /results, instead of the previous
+             opaque `hunt_not_found`.
+          5) 11 new tests in
+             src/media/__tests__/provisionalHuntStore.test.ts
+             covering: round-trip, survive-runtime-restart
+             (re-import), single-entry huntId isolation, clear
+             semantics, provisionalToRuntime adapter, malformed
+             data + wrong schema tolerance, and size reporting.
+
+          Full frontend unit suite: 134/134 passing (was 123).
+          Metro bundles clean: web 1379 mods, android 1675 mods.
+
+          Why this is robust across mobile Chrome / Expo Go / web:
+          AsyncStorage maps to localStorage on web and to native
+          AsyncStorage on iOS/Android. On web it ALSO uses the
+          `expo-file-system` fallback for very large items — but
+          the provisional entry is one single key, and the store
+          logs its approximate size so we can see quota pressure
+          (>4MB warning threshold chosen below the typical ~5MB
+          localStorage-per-origin cap).
+
+          Needs: user re-run on phone to confirm /results now
+          hydrates immediately after analyze, and to see the new
+          diagnostic events in backend logs (save_hunt_started,
+          save_hunt_provisional_seated, hunt_hydrate).
+
   - task: "Image-overlay fitted-rect coordinate contract (results overlay alignment fix)"
     implemented: true
     working: "NA"

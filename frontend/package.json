@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:unit": "node --test --import tsx src/utils/__tests__/mapFocusMatching.test.ts src/utils/__tests__/analysisContext.test.ts src/utils/__tests__/imageFit.test.ts src/media/__tests__/huntPersistence.test.ts src/media/__tests__/imageProcessor.test.ts src/media/__tests__/imageProbe.test.ts src/media/__tests__/cloudMedia.test.ts src/__tests__/huntStyles.test.ts"
+    "test:unit": "node --test --import tsx src/utils/__tests__/mapFocusMatching.test.ts src/utils/__tests__/analysisContext.test.ts src/utils/__tests__/imageFit.test.ts src/media/__tests__/huntPersistence.test.ts src/media/__tests__/imageProcessor.test.ts src/media/__tests__/imageProbe.test.ts src/media/__tests__/cloudMedia.test.ts src/media/__tests__/provisionalHuntStore.test.ts src/__tests__/huntStyles.test.ts"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",

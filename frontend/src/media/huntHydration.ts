@@ -43,6 +43,12 @@ import {
   getCurrentHuntEntry,
   setCurrentHunt,
 } from '../store/currentHuntStore';
+import {
+  clearProvisionalHunt,
+  provisionalToRuntime,
+  readProvisionalHunt,
+  writeProvisionalHunt,
+} from './provisionalHuntStore';
 import { resolveStorageStrategy, type Tier } from './storageStrategy';
 import { Platform } from 'react-native';
 import { logClientEvent } from '../utils/clientLog';
@@ -298,6 +304,10 @@ export async function hydrateHuntResult(
   if (mem) {
     const rec = mem.record as RuntimeHunt | PersistedHuntAnalysis | any;
     if (rec && rec.schema === 'hunt.analysis.v1') {
+      logClientEvent({
+        event: 'hunt_hydrate',
+        data: { hunt_id: huntId, tier_hit: 'memory' },
+      });
       return hydrateRuntimeHuntFromAnalysis(
         rec,
         (rec as RuntimeHunt).displayUris,
@@ -308,9 +318,49 @@ export async function hydrateHuntResult(
     }
   }
 
+  // 1.5) provisional AsyncStorage hot-cache (survives tab reload,
+  // bfcache, mobile memory pressure, and expo-router static SSR
+  // route transitions — unlike the in-memory singleton above).
+  //
+  // This is the tier that makes post-analyze navigation reliable
+  // on mobile Chrome / WebView where each route transition can be
+  // a fresh JS runtime and the in-memory store is wiped.
+  try {
+    const provisional = await readProvisionalHunt(huntId);
+    if (provisional) {
+      logClientEvent({
+        event: 'hunt_hydrate',
+        data: {
+          hunt_id: huntId,
+          tier_hit: 'provisional',
+          provisional_bytes: provisional.approxBytes,
+        },
+      });
+      const runtime = provisionalToRuntime(provisional);
+      return hydrateRuntimeHuntFromAnalysis(
+        runtime,
+        runtime.displayUris,
+        null,
+      );
+    }
+  } catch (err: any) {
+    logClientEvent({
+      event: 'hunt_hydrate_error',
+      data: {
+        hunt_id: huntId,
+        tier: 'provisional',
+        error: err?.message || String(err),
+      },
+    });
+  }
+
   // 2) analysisStore
   const analysis = await loadAnalysis(huntId);
   if (analysis) {
+    logClientEvent({
+      event: 'hunt_hydrate',
+      data: { hunt_id: huntId, tier_hit: 'analysis_store' },
+    });
     return hydrateRuntimeHuntFromAnalysis(analysis);
   }
 
@@ -414,17 +464,39 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
   });
   const huntId = input.analysisResult?.id as string;
 
+  // --- size diagnostics (logged before any I/O so we always see
+  // them even when a later step fails silently). base64 images
+  // often dominate payload — we flag >4MB aggregates since mobile
+  // Chrome's localStorage cap is ~5MB per origin and the rest of
+  // the app needs room to breathe.
+  const imageBytesPer = (input.base64Images || []).map(b => (b ? b.length : 0));
+  const totalImageBytes = imageBytesPer.reduce((a, b) => a + b, 0);
+  logClientEvent({
+    event: 'save_hunt_started',
+    data: {
+      hunt_id: huntId,
+      tier: input.tier ?? null,
+      platform: Platform.OS,
+      strategy: strategy.strategy,
+      image_count: imageBytesPer.length,
+      image_bytes_total: totalImageBytes,
+      image_bytes_max: Math.max(0, ...imageBytesPer),
+      large_payload: totalImageBytes > 4 * 1024 * 1024,
+    },
+  });
+
   // ------------------------------------------------------------------
-  // STEP 0 — Seat an in-memory session entry FIRST, before touching
-  // disk/cloud. This is the only tier that survives web-preview
-  // persistence failures (expo-file-system has no writable directory
-  // in the browser). /results reads the session store before falling
-  // back to AsyncStorage + legacy stores, so seating it here means
-  // even a fully-failed save never blocks the user from seeing their
-  // just-analyzed hunt.
+  // STEP 0 — Seat a provisional record in TWO places before any
+  // disk/cloud I/O so /results can ALWAYS find this hunt:
   //
-  // We later OVERWRITE this entry with the real persisted record if
-  // the rest of the pipeline succeeds.
+  //   a) in-memory singleton (fast path; session-scoped)
+  //   b) AsyncStorage provisional hot-cache (durable; survives
+  //      tab reshuffle, bfcache, mobile memory pressure, and
+  //      expo-router static-SSR route transitions — the
+  //      in-memory singleton alone was unreliable on mobile).
+  //
+  // We later OVERWRITE the in-memory entry and CLEAR the
+  // AsyncStorage provisional entry if the full pipeline succeeds.
   // ------------------------------------------------------------------
   const provisionalMetadata = extractMetadata({
     species: input.species,
@@ -440,10 +512,6 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
     locationCoords: input.locationCoords,
   });
 
-  // Use raw base64 strings as the provisional displayUris. We key
-  // them by synthetic provisional ids so a later real persisted
-  // record (which re-keys to MediaStore asset ids) can cleanly
-  // replace this entry via setCurrentHunt().
   const provisionalMediaRefs: string[] = input.base64Images.map(
     (_b, i) => `provisional-${huntId}-${i}`,
   );
@@ -476,6 +544,23 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
   setCurrentHunt(huntId, provisionalRuntime, {
     persistFailed: true,
     persistError: 'provisional (pre-persist)',
+  });
+
+  // Durable provisional cache — critical for mobile Chrome.
+  const provisionalWrite = await writeProvisionalHunt(
+    huntId,
+    provisionalAnalysis,
+    provisionalSessionUris,
+  );
+  logClientEvent({
+    event: 'save_hunt_provisional_seated',
+    data: {
+      hunt_id: huntId,
+      ok: provisionalWrite.ok,
+      bytes: provisionalWrite.bytes,
+      error: provisionalWrite.error ?? null,
+      quota_warning: provisionalWrite.bytes > 4 * 1024 * 1024,
+    },
   });
 
   // ------------------------------------------------------------------
@@ -565,6 +650,23 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
   setCurrentHunt(huntId, runtime, {
     persistFailed: !analysisPersisted,
     persistError: analysisPersisted ? null : 'analysisStore write failed',
+  });
+
+  // Cleanup provisional hot-cache once the real record has landed.
+  // On failure, keep it in place so /results still has a fallback.
+  if (analysisPersisted) {
+    await clearProvisionalHunt(huntId);
+  }
+
+  logClientEvent({
+    event: 'save_hunt_completed',
+    data: {
+      hunt_id: huntId,
+      analysis_persisted: analysisPersisted,
+      media_assets_persisted: assets.length,
+      media_assets_expected: input.base64Images.length,
+      provisional_retained: !analysisPersisted,
+    },
   });
 
   // 4) Diagnostics.
