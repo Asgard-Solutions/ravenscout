@@ -503,40 +503,16 @@ export default function SetupScreen() {
         }
 
         // Navigate IMMEDIATELY after the critical-path seat. We do
-        // NOT await the full saveHunt pipeline — it runs in the
-        // background, upgrades the provisional entry to the real
-        // analysisStore record, and clears the provisional on
-        // success.
+        // NOT fire the full saveHunt pipeline here — on mobile
+        // Chrome it's been observed to OOM the tab by allocating
+        // a second ~1.3MB base64 copy alongside the provisional
+        // entry + React state + Image element. The provisional
+        // hot-cache is sufficient for /results to render; deeper
+        // persistence (S3 upload, analysisStore write) can be run
+        // lazily from /results or deferred to a background step
+        // once /results is confirmed visible.
         if (refreshUser) refreshUser();
         router.push({ pathname: '/results', params: { huntId: enrichedResult.id } });
-
-        // Full persistence — fire-and-forget. If this fails, the
-        // provisional entry seated above is the durable fallback.
-        saveHunt({
-          tier: (user as any)?.tier,
-          analysisResult: enrichedResult,
-          species: selectedSpecies,
-          speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
-          date: huntDate,
-          timeWindow,
-          windDirection,
-          temperature,
-          propertyType,
-          region,
-          huntStyle,
-          weatherData,
-          locationCoords,
-          base64Images: mapImages,
-          primaryMediaIndex: primaryMapIndex,
-          analysisContext: {
-            imageNaturalWidth: primaryDims.width,
-            imageNaturalHeight: primaryDims.height,
-            gps: locationCoords,
-          },
-        }).catch((err: any) => {
-          // eslint-disable-next-line no-console
-          console.warn('[setup] background saveHunt failed:', err?.message || err);
-        });
       } else {
         const msg = data.error || data.message || 'Analysis failed. Please try again.';
         const isLimitError = msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('upgrade');
