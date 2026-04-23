@@ -17,7 +17,8 @@ safe to call with any string without taking down a request.
 from typing import Dict, List, Optional, Tuple
 
 from .hog import HOG_PACK
-from .pack import OverlayFallbackReason, SpeciesPromptPack
+from .pack import OverlayFallbackReason, SeasonalModifier, SpeciesPromptPack
+from .seasons import resolve_seasonal_modifier
 from .turkey import TURKEY_PACK
 from .whitetail import WHITETAIL_PACK
 

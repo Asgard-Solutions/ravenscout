@@ -150,11 +150,140 @@ string → regional, hunt-style metadata → style).
   with the legacy `species_data=SPECIES_DATA` kwarg, which is now
   accepted and ignored).
 
-## Next steps (recommended)
+## Seasonal Modifiers — Implemented (v3.1+)
 
-1. **Seasonal modifiers** first — rut phase for whitetails and
-   breeding season for turkeys give the biggest tactical lift.
-2. Tune content through an LLM-output review cycle on real analyses
-   for each species before adding more species.
-3. Optional: `regional_modifiers` sourced from a simple state/region
-   map, driven by the existing `region` field in `HuntConditions`.
+Seasonal modifiers are an **additive overlay** on top of a species
+pack. They shape reasoning for a specific calendar window or
+temperature regime without replacing the base species rules.
+
+### Structure
+
+```python
+@dataclass(frozen=True)
+class SeasonalModifier:
+    phase_id: str                   # stable key, e.g. "rut", "hot_weather"
+    name: str                       # LLM-facing label, e.g. "Peak Rut"
+    trigger_rules: dict             # see below
+    behavior_adjustments: tuple[str, ...]
+    tactical_adjustments: tuple[str, ...]
+    caution_adjustments: tuple[str, ...]
+    species_tips_adjustments: tuple[str, ...]
+    confidence_note: str            # nudges the LLM toward lower confidence
+```
+
+`SpeciesPromptPack.seasonal_modifiers` is now a `dict[phase_id -> SeasonalModifier]`.
+
+### Trigger rules
+
+Consumed by `species_prompts.seasons.resolve_seasonal_modifier`:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `months` | tuple[int, ...] | Calendar months (1..12) |
+| `min_temp_f` | number | Inclusive lower temp bound (F) |
+| `max_temp_f` | number | Inclusive upper temp bound (F) |
+| `logic` | `month`/`temp`/`either`/`both` | how month + temp combine (default `month`) |
+
+Selector order: `seasonal_modifiers.values()` in declaration order,
+first match wins. Pack authors should list specific windows first.
+
+When neither `hunt_date` nor `temperature` can be parsed from
+conditions, the selector returns `None` — a conservative "don't
+guess" design.
+
+### Supported phases
+
+| Species | Phases |
+|---|---|
+| Whitetail Deer | `early_season` (Sep), `pre_rut` (Oct), `rut` (Nov), `post_rut` (Dec), `late_season` (Jan-Feb) |
+| Wild Turkey | `early_season` (Mar), `peak_breeding` (Apr), `late_season` (May) |
+| Wild Hog | `drought_conditions` (Jul-Sep AND temp ≥ 90F), `hot_weather` (May-Sep OR temp ≥ 75F), `cold_weather` (Dec-Feb OR temp ≤ 40F) |
+
+Calendars are Northern-Hemisphere US baselines. Out-of-season dates
+or ambiguous conditions return None → the prompt emits a neutral
+"SEASONAL CONTEXT: unavailable — do not assume a phase" note.
+
+### Prompt pipeline (updated)
+
+```
+base
+→ species pack           (species_prompts registry)
+→ seasonal modifier      ← NEW: first-match from species pack's dict
+   or "unavailable" note  (when selector returns None)
+→ hunt conditions
+→ image/tier context
+→ output schema (unchanged v2)
+→ constraints
+→ user prompt
+```
+
+### Example rendered seasonal block
+
+See `tests/test_seasonal_modifiers.py::TestSeasonalPromptIntegration`
+for end-to-end assertions. Quick sample for `("deer", 2026-11-12)`:
+
+```
+SEASONAL CONTEXT: Peak Rut (phase_id=rut)
+NOTE: Peak-rut timing varies by region and latitude by up to two weeks.
+If location is unknown, treat phase as coarse and lower confidence for
+rut-dependent recommendations.
+
+SEASONAL BEHAVIOR ADJUSTMENTS (apply in addition to the base species rules):
+  - Mature bucks are cruising for estrus does and move more during daylight...
+  - Wind discipline relaxes — bucks will cross open ground or travel downwind...
+  - Travel through funnels between doe bedding areas increases sharply.
+  ...
+
+SEASONAL TACTICAL ADJUSTMENTS:
+  - Favor all-day stand sits on funnels between known / likely doe-bedding areas.
+  - Mid-day setups become viable — do not dismiss 10:00-14:00 windows.
+  ...
+
+SEASONAL CAUTION ADJUSTMENTS (do not over-assume phase specifics):
+  - Do NOT claim a specific rut phase sub-stage (seeking, chasing, lockdown)...
+  ...
+
+SEASONAL SPECIES TIPS ADJUSTMENTS (layer these on top of base species_tips guidance):
+  - Emphasize mid-day stand sits and funnel / pinch-point setups.
+  ...
+```
+
+### Adding a new seasonal phase
+
+1. Declare a `SeasonalModifier` in the species' module.
+2. Insert into that pack's `seasonal_modifiers` dict, ordered
+   most-specific first (selector returns first match).
+3. Add tests for:
+   - month / temperature selection cases that should fire
+   - cases that should NOT fire (out-of-season, missing inputs)
+   - cross-species isolation (no cue leakage)
+
+### Known limitations
+
+- Calendars are coarse US-NH baselines — they will over-fire for
+  southern rut dates and under-fire for northern rut dates.
+- Drought inference is intentionally weak: requires a high summer
+  temperature AND a summer month. Do not treat it as a verified
+  drought claim — it's a water-ambush bias with lower confidence.
+- No regional calendar layer yet. Next layer to add is
+  `regional_modifiers` so southern turkey peak breeding fires
+  earlier than April.
+- No hunt-style layer yet (bow vs rifle, public vs private, blind
+  vs spot-and-stalk). Placeholders exist on the pack.
+
+### Files added / changed for seasonal support
+
+- `backend/species_prompts/pack.py` — `SeasonalModifier`, dict-valued
+  `seasonal_modifiers`, `render_seasonal_modifier_block`,
+  `render_no_seasonal_context_note`.
+- `backend/species_prompts/seasons.py` — NEW selector +
+  date/temperature parsers.
+- `backend/species_prompts/whitetail.py` / `turkey.py` / `hog.py` —
+  populated `seasonal_modifiers` dicts.
+- `backend/species_prompts/__init__.py` — exports updated.
+- `backend/species_prompts/registry.py` — re-exports
+  `resolve_seasonal_modifier`.
+- `backend/prompt_builder.py` — inserts seasonal block between
+  species pack and hunt conditions.
+- `backend/tests/test_seasonal_modifiers.py` — NEW, 59 tests.
+

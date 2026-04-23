@@ -12,6 +12,9 @@ from typing import Optional
 
 from species_prompts import (
     SpeciesPromptPack,
+    render_no_seasonal_context_note,
+    render_seasonal_modifier_block,
+    resolve_seasonal_modifier,
     resolve_species_pack,
 )
 from species_prompts.pack import render_species_prompt_block
@@ -246,15 +249,34 @@ def assemble_system_prompt(
 ) -> str:
     """Assemble the complete system prompt from modular parts.
 
+    Pipeline:
+        base
+        -> species pack
+        -> seasonal modifier (or neutral 'unavailable' notice)
+        -> hunt conditions
+        -> image/tier context
+        -> output schema
+        -> constraints
+
     Species behavior comes from the species_prompts registry; the
     legacy `species_data` arg is accepted only for backward compat
-    and is not used.
+    and is not used. Seasonal resolution is opportunistic — if the
+    incoming `conditions` dict doesn't give us enough to infer a
+    phase we emit a neutral "unavailable, do not assume" note
+    instead of guessing.
     """
     _ = species_data  # legacy — ignored
     pack = resolve_species_pack(animal)
+    modifier = resolve_seasonal_modifier(pack, conditions)
+    seasonal_block = (
+        render_seasonal_modifier_block(modifier)
+        if modifier is not None
+        else render_no_seasonal_context_note()
+    )
     parts = [
         build_base_system_prompt(),
         build_species_prompt_pack_block(pack),
+        seasonal_block,
         build_hunt_conditions_block(conditions),
         build_image_context_block(image_count, tier),
         build_output_schema_block(),

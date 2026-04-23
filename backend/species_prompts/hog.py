@@ -1,6 +1,101 @@
 """Wild Hog (feral swine) prompt pack."""
 
-from .pack import SpeciesPromptPack
+from .pack import SeasonalModifier, SpeciesPromptPack
+
+# ----------------------------- Seasonal modifiers -----------------------------
+# Hog activity is driven more by temperature and water than by
+# calendar. Triggers use temperature first, with summer months as a
+# backup when temperature is missing. Cold-weather modifier does the
+# reverse. Drought modifier is extra-conservative because we can't
+# reliably detect drought from a single hunt's metadata — it only
+# triggers at high temperatures near the peak of summer.
+
+_HOG_DROUGHT = SeasonalModifier(
+    phase_id="drought_conditions",
+    name="Drought Conditions (inferred)",
+    trigger_rules={
+        "min_temp_f": 90,
+        "months": (7, 8, 9),
+        "logic": "both",
+    },
+    behavior_adjustments=(
+        "Hogs concentrate heavily around any remaining water — creeks, ponds, seeps, wet drainages, stock tanks.",
+        "Rooting near water intensifies as uplands dry out.",
+        "Daytime activity retreats even further into shaded wet bottoms and thick cover; movement is dominantly nocturnal.",
+    ),
+    tactical_adjustments=(
+        "Ambush near the last reliable water sources feeding a sounder's travel cover is the single highest-value setup.",
+        "Stand downwind of trails leading INTO water, not away from it.",
+        "Assume shooting windows compress to early morning, late evening, and first legal light; plan access accordingly.",
+    ),
+    caution_adjustments=(
+        "Do NOT claim drought from hunt_date alone. Only treat as drought if temperature is confidently high AND the date falls in mid-to-late summer.",
+        "Lower confidence for any daylight recommendation.",
+    ),
+    species_tips_adjustments=(
+        "Emphasize water-ambush setups with cover-line approach.",
+        "Call out the strong nocturnal bias explicitly.",
+    ),
+    confidence_note=(
+        "True drought cannot be inferred from a single day's weather. Treat this modifier as a water-ambush bias, not a verified drought claim, and lower confidence accordingly."
+    ),
+)
+
+_HOG_HOT_WEATHER = SeasonalModifier(
+    phase_id="hot_weather",
+    name="Hot Weather",
+    trigger_rules={
+        "min_temp_f": 75,
+        "months": (5, 6, 7, 8, 9),
+        "logic": "either",
+    },
+    behavior_adjustments=(
+        "Water and wallow dependence intensifies; sounders stay close to wet bottoms, shaded creek draws, and thick cover.",
+        "Daytime activity drops sharply; most movement is crepuscular or nocturnal.",
+        "Rooting concentrates near moist soil (wet bottoms, shaded stream banks).",
+    ),
+    tactical_adjustments=(
+        "Ambush trails leading to / from water and wallows. Approach from downwind with silent cover-line access.",
+        "Bias setups to last legal light of evening and first light of morning.",
+        "Shaded thickets adjacent to water are the primary daytime holding pattern — don't bust them on access.",
+    ),
+    caution_adjustments=(
+        "Do NOT recommend long daylight sits as high value.",
+        "Lower confidence on any ambitious mid-day setup.",
+    ),
+    species_tips_adjustments=(
+        "Emphasize water/wallow ambush plays at the edges of the day.",
+        "Call out silent low-impact access — heat-stressed sounders bust easily.",
+    ),
+)
+
+_HOG_COLD_WEATHER = SeasonalModifier(
+    phase_id="cold_weather",
+    name="Cold Weather",
+    trigger_rules={
+        "max_temp_f": 40,
+        "months": (12, 1, 2),
+        "logic": "either",
+    },
+    behavior_adjustments=(
+        "Daytime activity INCREASES as hogs feed more to maintain body temperature.",
+        "Water dependence relaxes — hogs range wider for food when temperatures drop.",
+        "Sounders favor south-facing thickets and sunny thermal cover mid-day, then move to food in the afternoon.",
+    ),
+    tactical_adjustments=(
+        "Afternoon and evening food-source setups (ag edges, feeders, mast concentrations, rooting fields) are prime.",
+        "Mid-day sits become viable near thermal cover edges and south-facing thickets.",
+        "Cold-front evenings are especially high value.",
+    ),
+    caution_adjustments=(
+        "Do NOT assume cold-weather daylight movement without an actual cold signal (temperature or clear winter months).",
+        "Still avoid deer-style funnel logic as the primary frame.",
+    ),
+    species_tips_adjustments=(
+        "Emphasize afternoon/evening food-source setups.",
+        "Call out that cold fronts amplify daylight movement.",
+    ),
+)
 
 HOG_PACK = SpeciesPromptPack(
     canonical_id="hog",
@@ -54,4 +149,10 @@ HOG_PACK = SpeciesPromptPack(
         "Note that hog activity can fall outside classic dawn/dusk and that nocturnal behavior is common under pressure or heat.",
         "Acknowledge uncertainty about wallows, feeders, and bedding that aren't visibly supported in imagery.",
     ),
+    # Drought first (most specific), then hot, then cold.
+    seasonal_modifiers={
+        "drought_conditions": _HOG_DROUGHT,
+        "hot_weather": _HOG_HOT_WEATHER,
+        "cold_weather": _HOG_COLD_WEATHER,
+    },
 )

@@ -12,10 +12,7 @@ prompt pipeline (`prompt_builder.py`). Each species pack contains:
     - caution_rules      -> "do not over-assume" guidance
     - species_tips_guidance -> guidance the LLM uses when populating
                              the shared `species_tips` output array
-
-Future extension fields (seasonal, regional, hunt-style modifiers)
-exist as reserved tuples so they can be populated without changing
-the pack shape.
+    - seasonal_modifiers -> Dict[phase_id, SeasonalModifier]
 
 Adding a new species:
     1. Create `species_prompts/<name>.py` with one `SpeciesPromptPack`
@@ -23,21 +20,41 @@ Adding a new species:
     2. Register it in `registry.py::_PACKS`.
     3. Done — the shared output schema is unchanged.
 
+Adding a new seasonal phase to an existing species:
+    1. Declare a `SeasonalModifier` in that species' module.
+    2. Add it to the species pack's `seasonal_modifiers` dict,
+       ordered most-specific first (selector returns first match).
+
 The registry is the single source of truth for species content; no
 species-specific strings live in other modules.
 """
 
-from .pack import OverlayFallbackReason, SpeciesPromptPack
+from .pack import (
+    OverlayFallbackReason,
+    SeasonalModifier,
+    SpeciesPromptPack,
+    render_no_seasonal_context_note,
+    render_seasonal_modifier_block,
+    render_species_prompt_block,
+)
 from .registry import (
     GENERIC_FALLBACK_PACK,
     get_all_canonical_species,
+    is_supported_species,
     resolve_species_pack,
 )
+from .seasons import resolve_seasonal_modifier
 
 __all__ = [
     "SpeciesPromptPack",
+    "SeasonalModifier",
     "OverlayFallbackReason",
     "resolve_species_pack",
+    "resolve_seasonal_modifier",
     "get_all_canonical_species",
+    "is_supported_species",
     "GENERIC_FALLBACK_PACK",
+    "render_species_prompt_block",
+    "render_seasonal_modifier_block",
+    "render_no_seasonal_context_note",
 ]
