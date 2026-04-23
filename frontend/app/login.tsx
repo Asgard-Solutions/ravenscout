@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
+import { RavenSpinner } from '../src/components/RavenSpinner';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -60,7 +61,7 @@ export default function LoginScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.accent} />
+          <RavenSpinner size={120} />
         </View>
       </SafeAreaView>
     );

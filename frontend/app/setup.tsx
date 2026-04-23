@@ -25,6 +25,7 @@ import { COLORS, SPECIES, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../
 import { HUNT_STYLES, type HuntStyleId, getHuntStyleLabel } from '../src/constants/huntStyles';
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
+import { RavenSpinner } from '../src/components/RavenSpinner';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
@@ -540,8 +541,7 @@ export default function SetupScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.accent} />
-          <Ionicons name="navigate" size={48} color={COLORS.accent} style={{ marginTop: 24 }} />
+          <RavenSpinner size={140} />
           <Text style={styles.loadingTitle}>ANALYZING TERRAIN</Text>
           <Text style={styles.loadingSubtitle}>
             AI is evaluating your map for{'\n'}

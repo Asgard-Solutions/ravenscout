@@ -26,6 +26,7 @@ import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/ana
 import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
 import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
 import { loadHunt as loadHuntFromStore, finalizeProvisionalHunt } from '../src/media/huntPersistence';
+import { RavenSpinner } from '../src/components/RavenSpinner';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 import { ImageOverlayCanvas } from '../src/components/ImageOverlayCanvas';
@@ -596,7 +597,7 @@ export default function ResultsScreen() {
             </>
           ) : (
             <>
-              <ActivityIndicator size="large" color={COLORS.accent} />
+              <RavenSpinner size={120} />
               <Text style={[styles.emptyText, { marginTop: 12 }]}>Loading results...</Text>
             </>
           )}

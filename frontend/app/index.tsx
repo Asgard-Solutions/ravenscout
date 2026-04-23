@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
+import { RavenSpinner } from '../src/components/RavenSpinner';
 
 const { width } = Dimensions.get('window');
 
@@ -28,7 +29,7 @@ export default function HomeScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.accent} />
+          <RavenSpinner size={120} />
         </View>
       </SafeAreaView>
     );
