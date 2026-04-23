@@ -893,7 +893,34 @@ async def analyze_hunt(request: Request):
         return JSONResponse({"success": False, "error": "Failed to parse AI response. Please try again.", "usage": None})
     except Exception as e:
         logger.error(f"Analysis error: {e}")
-        return JSONResponse({"success": False, "error": str(e), "usage": None})
+        raw_msg = str(e)
+        low = raw_msg.lower()
+        # Translate noisy LiteLLM / OpenAI upstream errors into
+        # actionable user-facing text so the client alert is not just
+        # a stack-trace fragment.
+        if "budget has been exceeded" in low or "max budget" in low:
+            user_msg = (
+                "AI analysis budget exceeded for this account. "
+                "Please top up your Emergent Universal Key in your profile, "
+                "then try again."
+            )
+        elif "badgatewayerror" in low or "error code: 502" in low or "bad gateway" in low:
+            user_msg = (
+                "The AI service is temporarily unavailable (502 Bad Gateway). "
+                "This is an upstream issue — please retry in a minute."
+            )
+        elif "rate limit" in low or "too many requests" in low:
+            user_msg = (
+                "AI rate limit hit. Wait 10-20 seconds before retrying."
+            )
+        elif "timeout" in low or "timed out" in low:
+            user_msg = (
+                "AI analysis timed out. Try again with a smaller map image "
+                "or a stronger connection."
+            )
+        else:
+            user_msg = raw_msg
+        return JSONResponse({"success": False, "error": user_msg, "usage": None})
 
 
 # ============================================================

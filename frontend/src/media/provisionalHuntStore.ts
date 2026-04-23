@@ -200,10 +200,63 @@ export async function clearProvisionalHunt(matchingHuntId?: string): Promise<voi
   }
 }
 
-/** Adapt a provisional entry into a RuntimeHunt for hydration use. */
-export function provisionalToRuntime(entry: ProvisionalHuntEntry): RuntimeHunt {
-  return {
-    ...entry.analysis,
-    displayUris: entry.displayUris,
-  };
+/**
+ * Fast provisional seat used by the analyze-hunt flow — runs AFTER
+ * the LLM response and BEFORE navigation to /results. Guarantees
+ * that even if the setup.tsx component is torn down during later
+ * work (mobile Chrome backgrounding, route remount, SSR hydration
+ * churn), /results can still find and render the hunt.
+ *
+ * This is a deliberately minimal write: analysis + primary image
+ * displayUri only. The full persistence pipeline (saveHunt) is run
+ * separately and asynchronously — if it succeeds, it clears this
+ * entry; if it fails, the entry stays in place as the fallback.
+ */
+export async function seatProvisionalFromAnalyze(args: {
+  huntId: string;
+  analysisResult: any;
+  metadata: Parameters<typeof import('./huntSerialization').extractMetadata>[0];
+  base64Images: string[];
+  primaryMediaIndex: number;
+  tier: 'trial' | 'core' | 'pro' | null | undefined;
+  analysisContext: any;
+  locationCoords?: { lat: number; lon: number } | null;
+}): Promise<{ ok: boolean; bytes: number; mode: 'full' | 'lite'; error?: string }> {
+  const {
+    buildPersistedAnalysis,
+    extractMetadata,
+  } = await import('./huntSerialization');
+  const { buildInitialAnalysisContext } = await import('../utils/analysisContext');
+  const { resolveStorageStrategy } = await import('./storageStrategy');
+
+  const strategy = resolveStorageStrategy({
+    tier: args.tier ?? null,
+    platform: 'web', // seat is platform-agnostic; strategy is a hint on the record
+  });
+  const metadata = extractMetadata(args.metadata);
+  const mediaRefs = args.base64Images.map((_b, i) => `provisional-${args.huntId}-${i}`);
+  const sessionUris: Record<string, string> = {};
+  args.base64Images.forEach((b64, i) => {
+    if (b64) sessionUris[mediaRefs[i]] = b64;
+  });
+  const primaryIdx = Math.max(
+    0,
+    Math.min(mediaRefs.length - 1, args.primaryMediaIndex || 0),
+  );
+  const primaryRef = mediaRefs[primaryIdx] ?? null;
+  const analysis = buildPersistedAnalysis({
+    id: args.huntId,
+    metadata,
+    analysis: args.analysisResult,
+    mediaRefs,
+    primaryMediaRef: primaryRef,
+    storageStrategy: strategy.strategy,
+    analysisContext: buildInitialAnalysisContext({
+      primaryMediaRef: primaryRef,
+      ctxInput: args.analysisContext,
+      fallbackGps: args.locationCoords ?? null,
+    }),
+  });
+  return await writeProvisionalHunt(args.huntId, analysis, sessionUris);
 }
+

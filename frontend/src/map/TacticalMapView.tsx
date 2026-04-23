@@ -14,8 +14,8 @@ interface TacticalMapViewProps {
 }
 
 const STYLES: { id: MapStyle; label: string; icon: string }[] = [
-  { id: 'outdoor', label: 'TOPO', icon: 'trail-sign' },
   { id: 'satellite', label: 'SAT', icon: 'earth' },
+  { id: 'outdoor', label: 'TOPO', icon: 'trail-sign' },
   { id: 'streets', label: 'MAP', icon: 'map-outline' },
 ];
 
@@ -27,7 +27,11 @@ export default function TacticalMapView({
   captureRequested = 0,
   onCapture,
 }: TacticalMapViewProps) {
-  const [mapStyle, setMapStyle] = useState<MapStyle>('outdoor');
+  // Default to satellite — most hunters read terrain best on
+  // aerial imagery and the LLM prompts also perform strongest
+  // against satellite/aerial inputs. Outdoor/streets are
+  // available via the style switcher above the map.
+  const [mapStyle, setMapStyle] = useState<MapStyle>('satellite');
   const useMaptiler = hasMaptilerKey();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const webviewRef = useRef<any>(null);

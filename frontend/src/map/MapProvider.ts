@@ -62,7 +62,9 @@ const FALLBACK_STYLE = {
 
 export function getMapStyles(): MapStyleConfig[] {
   if (!MAPTILER_KEY) return [];
-  return [MAPTILER_STYLES.outdoor, MAPTILER_STYLES.satellite, MAPTILER_STYLES.streets];
+  // Satellite first — it is the default in TacticalMapView and the
+  // primary imagery hunters use for terrain reading.
+  return [MAPTILER_STYLES.satellite, MAPTILER_STYLES.outdoor, MAPTILER_STYLES.streets];
 }
 
 export function getStyleUrl(style: MapStyle): string {
