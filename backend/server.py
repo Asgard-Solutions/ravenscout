@@ -926,7 +926,18 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
             return c.choices[0].message.content or ""
     else:
         # ------------- LEGACY PATH: emergentintegrations -------------
-        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+        # This package is Emergent-internal and NOT on public PyPI.
+        # Wrapped in try/except so a Railway / public deploy that
+        # doesn't have the package installed simply errors out here
+        # (instead of at import-time, which would crash module load).
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+        except ImportError as e:
+            raise ValueError(
+                "OPENAI_API_KEY not set and emergentintegrations is not "
+                "installed (expected on Railway/external hosts). Set "
+                "OPENAI_API_KEY in your environment."
+            ) from e
         image_contents = []
         for idx, img in enumerate(images_to_send):
             clean = img.split(",", 1)[1] if "," in img else img

@@ -18,7 +18,11 @@ distro==1.9.0
 dnspython==2.8.0
 ecdsa==0.19.2
 email-validator==2.3.0
-emergentintegrations==0.1.0
+# emergentintegrations is an Emergent-internal package not on public
+# PyPI — safe to omit for Railway / external hosts. The code path
+# that would import it is already gated on EMERGENT_LLM_KEY being
+# set, so non-Emergent deploys never hit it.
+# emergentintegrations==0.1.0
 fastapi==0.110.1
 fastuuid==0.14.0
 filelock==3.25.2
