@@ -16,7 +16,9 @@ import {
 
 test('profileForTier — pro returns full-resolution profile', () => {
   const p = profileForTier('pro');
-  assert.equal(p.maxDim, 2048);
+  // Lowered from 2048 → 1600 in Feb 2026 to cap mobile-Chrome bitmap
+  // memory on tall panoramic screenshots. See imageProfiles.ts.
+  assert.equal(p.maxDim, 1600);
   assert.equal(p.quality, 0.85);
   assert.deepEqual(p, PROFILE_PRO);
 });

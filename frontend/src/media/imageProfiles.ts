@@ -10,7 +10,10 @@ export interface CompressProfile {
   quality: number;
 }
 
-export const PROFILE_PRO: CompressProfile = { maxDim: 2048, quality: 0.85 };
+// maxDim was dropped from 2048 → 1600 to prevent mobile-Chrome OOM crashes
+// when tall panoramic screenshots (e.g. 2048×4437) decoded to ~36MB bitmaps
+// and unmounted the /results route.
+export const PROFILE_PRO: CompressProfile = { maxDim: 1600, quality: 0.85 };
 export const PROFILE_CORE: CompressProfile = { maxDim: 1280, quality: 0.70 };
 export const PROFILE_THUMBNAIL: CompressProfile = { maxDim: 160, quality: 0.50 };
 

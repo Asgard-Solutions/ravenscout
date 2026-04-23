@@ -52,6 +52,13 @@ function ensureDataUri(b64OrDataUri: string, mime: string): string {
  * the profile's max-dim and reasonable byte budget, we return the
  * input untouched. This avoids double-compression artifacts and saves
  * processing time.
+ *
+ * RESIZE CONTRACT: `maxDim` applies to the LONGER dimension. A very
+ * tall portrait (e.g. 2048×4437) decodes to ~36MB of bitmap memory
+ * when rendered on low-end devices and will crash mobile Chrome tabs.
+ * We always pass BOTH width and height to ImageManipulator so the
+ * manipulator picks the correct scaling axis and the shorter
+ * dimension scales proportionally.
  */
 export async function compressImage(
   input: string,
@@ -59,26 +66,34 @@ export async function compressImage(
 ): Promise<CompressedImage> {
   const mime = 'image/jpeg';
 
-  // 1) Cheap header probe → maybe skip work entirely.
+  // 1) Cheap header probe → maybe skip work entirely. We only skip
+  // when BOTH axes are within maxDim; otherwise a portrait
+  // screenshot could sneak through (width OK, height blown).
   const skip = shouldSkipCompression(input, { maxDim: profile.maxDim });
-  if (skip.skip && skip.probe) {
+  const bothAxesOk =
+    skip.probe &&
+    skip.probe.width <= profile.maxDim &&
+    skip.probe.height <= profile.maxDim;
+  if (skip.skip && bothAxesOk) {
     const dataUri = ensureDataUri(input, mime);
     return {
       dataUri,
-      width: skip.probe.width,
-      height: skip.probe.height,
-      bytes: skip.probe.bytes,
+      width: skip.probe!.width,
+      height: skip.probe!.height,
+      bytes: skip.probe!.bytes,
       mime,
       compressed: false,
       failed: false,
     };
   }
 
-  // 2) Otherwise: full compression pass.
+  // 2) Otherwise: full compression pass. Pass both axes as caps so
+  // the manipulator fits-inside the box rather than stretching one
+  // dimension.
   try {
     const result = await ImageManipulator.manipulateAsync(
       input,
-      [{ resize: { width: profile.maxDim } }],
+      [{ resize: { width: profile.maxDim, height: profile.maxDim } }],
       {
         compress: profile.quality,
         format: ImageManipulator.SaveFormat.JPEG,

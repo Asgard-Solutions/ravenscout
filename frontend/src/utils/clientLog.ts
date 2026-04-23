@@ -13,7 +13,29 @@ export type ClientEvent =
   | 'hunt_loaded_from_memory_fallback'
   | 'hunt_not_found'
   | 'persist_degraded'
-  | 'legacy_hunt_migrated';
+  | 'legacy_hunt_migrated'
+  | 'hunt_hydrate'
+  | 'hunt_hydrate_error'
+  | 'save_hunt_started'
+  | 'save_hunt_provisional_seated'
+  | 'save_hunt_completed'
+  | 'image_compressed'
+  | 'analyze_provisional_seated'
+  | 'results_screen_mounted'
+  | 'results_screen_unmounted'
+  | 'results_load_started'
+  | 'overlay_out_of_bounds'
+  | 'finalize_provisional_check_failed'
+  | 'finalize_provisional_skipped'
+  | 'finalize_provisional_started'
+  | 'finalize_provisional_completed'
+  | 'finalize_provisional_failed'
+  | 'finalize_provisional_ui'
+  | 'finalize_provisional_ui_threw'
+  // Allow free-form events without breaking the type contract —
+  // callers can still get autocomplete from the known literals
+  // above but new call-sites won't require a source edit here.
+  | (string & {});
 
 export interface ClientEventPayload {
   event: ClientEvent;

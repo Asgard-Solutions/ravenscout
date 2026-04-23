@@ -52,6 +52,7 @@ import {
 import { resolveStorageStrategy, type Tier } from './storageStrategy';
 import { Platform } from 'react-native';
 import { logClientEvent } from '../utils/clientLog';
+import { buildInitialAnalysisContext } from '../utils/analysisContext';
 
 // ------------------------------ Hydration ------------------------------
 
@@ -780,7 +781,7 @@ export async function deleteHuntById(id: string): Promise<void> {
 // The pure builder lives in `/src/utils/analysisContext.ts` so tests
 // can import it without dragging in AsyncStorage. We re-export for
 // callers that already import from huntHydration.
-export { buildInitialAnalysisContext } from '../utils/analysisContext';
+export { buildInitialAnalysisContext };
 
 /**
  * Mark a hunt's overlays as stale. Called when the user changes the
@@ -799,4 +800,140 @@ export async function markOverlayStale(huntId: string): Promise<boolean> {
     },
   };
   return saveAnalysis(updated);
+}
+
+
+// ------------------------------ Provisional finalization ------------------------------
+
+/**
+ * Run the full `saveHunt` pipeline (MediaStore → AnalysisStore →
+ * S3/Mongo via backend) for a hunt that currently only exists in
+ * the provisional hot-cache.
+ *
+ * This is the "deferred persistence" entry point used by /results
+ * after the provisional hydration succeeds. Separating the critical
+ * path (setup.tsx → provisional seat → /results render) from the
+ * heavier persistence work keeps mobile Chrome from OOM'ing during
+ * the route transition while still guaranteeing S3/Mongo writes
+ * happen reliably.
+ *
+ * Idempotent:
+ *   - No-op if `loadAnalysis(huntId)` already returns a record
+ *     (means saveHunt already ran, probably from a previous
+ *     /results mount in the same session).
+ *   - No-op if the provisional entry is missing or for a
+ *     different hunt.
+ *
+ * Never throws — logs and returns `{ ok: false, reason }` so
+ * callers can choose to surface a UI warning.
+ */
+export async function finalizeProvisionalHunt(
+  huntId: string,
+  tier: Tier | null | undefined,
+): Promise<
+  | { ok: true; outcome: SaveHuntOutcome }
+  | { ok: false; reason: string; error?: string }
+> {
+  if (!huntId) return { ok: false, reason: 'missing_hunt_id' };
+
+  // Already persisted — nothing to do.
+  try {
+    const existing = await loadAnalysis(huntId);
+    if (existing) {
+      return { ok: false, reason: 'already_persisted' };
+    }
+  } catch (err: any) {
+    // loadAnalysis failed — still try to persist; worst case we
+    // double-write, which saveAnalysis handles idempotently.
+    logClientEvent({
+      event: 'finalize_provisional_check_failed',
+      data: { hunt_id: huntId, error: err?.message || String(err) },
+    });
+  }
+
+  // Pull the provisional hot-cache entry for this hunt.
+  const provisional = await readProvisionalHunt(huntId);
+  if (!provisional) {
+    return { ok: false, reason: 'no_provisional_entry' };
+  }
+
+  // Reconstruct base64 images in the SAME order the mediaRefs were
+  // seated in. If any image is missing (lite mode), we skip
+  // finalization — the user can still view /results but the images
+  // aren't recoverable from the hot-cache alone.
+  const analysis = provisional.analysis;
+  const mediaRefs = analysis.mediaRefs || [];
+  const base64Images: string[] = mediaRefs.map(ref => provisional.displayUris[ref] || '');
+  const hasAllImages = base64Images.every(b => b && b.length > 0);
+  if (!hasAllImages) {
+    logClientEvent({
+      event: 'finalize_provisional_skipped',
+      data: {
+        hunt_id: huntId,
+        reason: 'lite_mode_no_base64',
+        mode: provisional.mode,
+        refs: mediaRefs.length,
+        with_bytes: base64Images.filter(b => b && b.length > 0).length,
+      },
+    });
+    return { ok: false, reason: 'lite_mode_no_base64' };
+  }
+
+  const primaryIdx = analysis.primaryMediaRef
+    ? Math.max(0, mediaRefs.indexOf(analysis.primaryMediaRef))
+    : 0;
+
+  logClientEvent({
+    event: 'finalize_provisional_started',
+    data: {
+      hunt_id: huntId,
+      tier: tier ?? null,
+      image_count: base64Images.length,
+      primary_index: primaryIdx,
+    },
+  });
+
+  try {
+    const outcome = await saveHunt({
+      tier,
+      analysisResult: analysis.analysis,
+      species: analysis.metadata.species,
+      speciesName: analysis.metadata.speciesName,
+      date: analysis.metadata.date,
+      timeWindow: analysis.metadata.timeWindow,
+      windDirection: analysis.metadata.windDirection,
+      temperature: analysis.metadata.temperature ?? null,
+      propertyType: analysis.metadata.propertyType,
+      region: analysis.metadata.region,
+      huntStyle: analysis.metadata.huntStyle ?? null,
+      weatherData: analysis.metadata.weatherData,
+      locationCoords: analysis.metadata.locationCoords ?? null,
+      base64Images,
+      primaryMediaIndex: primaryIdx,
+      analysisContext: analysis.analysisContext
+        ? {
+            imageNaturalWidth: analysis.analysisContext.imageNaturalWidth,
+            imageNaturalHeight: analysis.analysisContext.imageNaturalHeight,
+            gps: analysis.analysisContext.gps ?? analysis.metadata.locationCoords ?? null,
+            overlayCalibration: analysis.analysisContext.overlayCalibration ?? null,
+          }
+        : undefined,
+    });
+    logClientEvent({
+      event: 'finalize_provisional_completed',
+      data: {
+        hunt_id: huntId,
+        analysis_persisted: outcome.analysisPersisted,
+        media_persisted: outcome.mediaPersisted,
+        warning: outcome.warningMessage ?? null,
+      },
+    });
+    return { ok: true, outcome };
+  } catch (err: any) {
+    logClientEvent({
+      event: 'finalize_provisional_failed',
+      data: { hunt_id: huntId, error: err?.message || String(err) },
+    });
+    return { ok: false, reason: 'save_hunt_threw', error: err?.message || String(err) };
+  }
 }

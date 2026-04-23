@@ -25,7 +25,7 @@ import TacticalMapView from '../src/map/TacticalMapView';
 import { buildAnalysisViewModel, type AnalysisViewModel } from '../src/utils/analysisAdapter';
 import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservationsSection, AssumptionsCard, SpeciesTipsCard } from '../src/components/AnalysisSections';
 import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
-import { loadHunt as loadHuntFromStore } from '../src/media/huntPersistence';
+import { loadHunt as loadHuntFromStore, finalizeProvisionalHunt } from '../src/media/huntPersistence';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 import { ImageOverlayCanvas } from '../src/components/ImageOverlayCanvas';
@@ -255,6 +255,61 @@ export default function ResultsScreen() {
   }, [params.huntId]);
 
   const { user } = useAuth();
+
+  // --- Deferred provisional finalization ---
+  // After /results successfully hydrates a hunt (typically from the
+  // provisional hot-cache on first view post-analysis), run the full
+  // saveHunt pipeline in the background. This is where:
+  //   - Image bytes are uploaded to S3 via presigned URLs
+  //   - The analysis record is written to AnalysisStore / MongoDB
+  //   - The provisional hot-cache entry is cleared on success
+  //
+  // We intentionally defer this past the first paint on /results so
+  // mobile Chrome doesn't double-allocate 1-3MB base64 payloads
+  // during the route transition from /setup (which previously OOM'd
+  // the tab). A single 600ms settle lets the DOM paint, releases the
+  // bitmap decode memory, and THEN we kick off persistence.
+  //
+  // Idempotent — bails out immediately if analysisStore already has
+  // the record (second mount / return-visit to /results).
+  const finalizeRanRef = useRef(false);
+  useEffect(() => {
+    if (!hunt || finalizeRanRef.current) return;
+    finalizeRanRef.current = true;
+    const huntId = hunt.id;
+    const tier = (user as any)?.tier ?? null;
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          const result = await finalizeProvisionalHunt(huntId, tier);
+          logClientEvent({
+            event: 'finalize_provisional_ui',
+            data: {
+              hunt_id: huntId,
+              ok: (result as any).ok ?? false,
+              reason: (result as any).reason ?? null,
+              analysis_persisted: (result as any).outcome?.analysisPersisted ?? null,
+              media_persisted: (result as any).outcome?.mediaPersisted ?? null,
+              warning: (result as any).outcome?.warningMessage ?? null,
+            },
+          });
+          // Surface storage-full warnings if the save succeeded but
+          // returned a warning. Ignore "already_persisted" / "no_provisional_entry"
+          // — those are expected idle paths.
+          if ((result as any).ok && (result as any).outcome?.warningMessage) {
+            setPersistWarning(prev => prev || (result as any).outcome.warningMessage);
+          }
+        } catch (err: any) {
+          logClientEvent({
+            event: 'finalize_provisional_ui_threw',
+            data: { hunt_id: huntId, error: err?.message || String(err) },
+          });
+        }
+      })();
+    }, 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hunt?.id, user?.tier]);
 
   const loadHuntAsync = async (): Promise<{ hunt: HuntRecord; warning: string | null } | null> => {
     const huntId = params.huntId as string | undefined;

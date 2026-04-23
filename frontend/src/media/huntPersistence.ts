@@ -17,6 +17,7 @@ export {
   deleteHuntById,
   buildInitialAnalysisContext,
   markOverlayStale,
+  finalizeProvisionalHunt,
   type SaveHuntInput,
   type SaveHuntOutcome,
   type HistoryEntryLite,

@@ -568,7 +568,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://species-mapper-5.preview.emergentagent.com/api). Test
+      URL (https://panorama-memory-fix.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -745,3 +745,34 @@ agent_communication:
       region_resolution dict is well-shaped per the preceding
       assertions. No backend issue. No fixes applied. No stuck tasks.
 
+
+
+  - agent: "main"
+    message: |
+      Feb 2026 — OOM crash fix + deferred saveHunt pipeline.
+
+      Changes:
+      1. imageProfiles.ts: PROFILE_PRO.maxDim lowered 2048 → 1600 to
+         prevent mobile-Chrome OOM on tall panoramic screenshots
+         (previously 2048×4437 decoded to ~36MB bitmap and killed
+         /results route). Test expectation updated in imageProcessor.test.ts.
+      2. huntHydration.ts: Added finalizeProvisionalHunt(huntId, tier)
+         helper. Runs the full saveHunt pipeline (MediaStore, AnalysisStore,
+         S3 upload via /api/media/presign-upload) for hunts that are
+         currently only in the provisional hot-cache. Idempotent; safe
+         to call repeatedly. Never throws.
+      3. results.tsx: After successful hydration, fires
+         finalizeProvisionalHunt on a 600ms deferred timer. This
+         restores S3 upload + Mongo persistence that was temporarily
+         removed from setup.tsx while isolating the memory crash.
+         The deferral ensures the DOM paints and the setup.tsx
+         bitmap memory is freed before the background persistence
+         allocates its own copies.
+      4. clientLog.ts: Widened ClientEvent union to cover all
+         existing and new event names (pre-existing TS errors from
+         unrecognized events are now resolved).
+
+      No backend changes required for this patch. Mobile web is
+      pending human verification (P1 crash fix) after which S3
+      uploads should appear for new analyses and records should
+      show up in MongoDB.
