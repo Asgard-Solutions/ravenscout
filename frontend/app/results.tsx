@@ -28,6 +28,11 @@ import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus'
 import { loadHunt as loadHuntFromStore } from '../src/media/huntPersistence';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
+import { ImageOverlayCanvas } from '../src/components/ImageOverlayCanvas';
+import {
+  resolveAnalysisBasis,
+  type ResolvedAnalysisBasis,
+} from '../src/utils/analysisContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_WIDTH = SCREEN_WIDTH - 32;
@@ -139,6 +144,10 @@ export default function ResultsScreen() {
   const rootScrollRef = useRef<ScrollView>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [persistWarning, setPersistWarning] = useState<string | null>(null);
+  // Frozen analysis basis — the exact image + GPS the overlays were
+  // locked to at save time. Overrides primary-map-index and hunt-level
+  // locationCoords when present. See src/utils/analysisContext.ts.
+  const [analysisBasis, setAnalysisBasis] = useState<ResolvedAnalysisBasis | null>(null);
 
   // v2 Overlay-to-Setup linking & focus
   const { focusState, linkedSetups, linkedObservations, focus, clearFocus } = useMapFocus(
@@ -257,6 +266,12 @@ export default function ResultsScreen() {
       locationCoords: hydrated.metadata.locationCoords ?? undefined,
     };
 
+    // Frozen analysis basis — the exact image/GPS the overlays were
+    // locked to. Precedence: analysisContext > primaryMedia fallback.
+    // Callers rendering the overlay MUST prefer this over the legacy
+    // mapImage / primaryMapIndex / locationCoords fields above.
+    setAnalysisBasis(resolveAnalysisBasis(hydrated));
+
     return { hunt: adapted, warning: res.warningMessage };
   };
 
@@ -298,7 +313,20 @@ export default function ResultsScreen() {
 
   const mapImages = hunt ? getMapImages() : [];
   const primaryIdx = (hunt as any)?.primaryMapIndex ?? 0;
-  const primaryImage = mapImages[primaryIdx] || mapImages[0] || null;
+  // Precedence: saved analysis basis > primaryMapIndex > first image.
+  // A frozen analysisContext.imageUri always wins, so overlays stay
+  // locked to the image that was actually analyzed — even if the
+  // user later interacts with the history record in ways that would
+  // drift the primary-map-index.
+  const primaryImage =
+    analysisBasis?.imageUri ||
+    mapImages[primaryIdx] ||
+    mapImages[0] ||
+    null;
+  // Overlays should only be rendered when the analysis basis is still
+  // valid. If 'stale', we keep the image but the ImageOverlayCanvas
+  // shows a warning banner — see the render block below.
+  const overlayStatus: 'valid' | 'stale' = analysisBasis?.overlayStatus === 'stale' ? 'stale' : 'valid';
 
   // --- Edit Mode Functions ---
   const enterEditMode = () => {
@@ -589,17 +617,55 @@ export default function ResultsScreen() {
         {/* ANALYSIS VIEW - Primary Image + Overlays */}
         {viewMode === 'analysis' && (
         <View style={styles.mapSection}>
-          {/* Primary image with overlays */}
-          <View style={styles.mapContainer}>
+          {/* Primary image with overlays. The ImageOverlayCanvas puts
+              the image and all overlay markers inside ONE animated
+              transform container — so pinch/pan keeps every overlay
+              pixel-aligned with the image it was locked to.
+              Zoom is disabled in edit mode so the existing marker
+              PanResponder drag behavior stays at scale=1 and remains
+              predictable. */}
+          <View
+            style={styles.mapContainer}
+            onTouchEnd={editMode && addMode ? handleMapPress : undefined}
+          >
             {primaryImage ? (
-              <View
-                style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
-                onTouchEnd={editMode && addMode ? handleMapPress : undefined}
+              <ImageOverlayCanvas
+                imageUri={primaryImage}
+                width={MAP_WIDTH}
+                height={MAP_HEIGHT}
+                enableZoom={!editMode}
+                overlayStatus={overlayStatus}
+                testID="overlay-canvas"
               >
-                <Image source={{ uri: primaryImage }} style={styles.mapImage} resizeMode="cover" />
-              </View>
+                {/* Overlay markers — ALWAYS on the primary image.
+                    Positioned in image-space (%), share transform. */}
+                {overlays.map((overlay, idx) => (
+                  <DraggableMarker
+                    key={overlay.id}
+                    overlay={overlay}
+                    index={idx}
+                    editMode={editMode}
+                    isSelected={selectedOverlay?.id === overlay.id}
+                    onPress={() => setSelectedOverlay(selectedOverlay?.id === overlay.id ? null : overlay)}
+                    onDragStart={() => handleMarkerDragStart(idx)}
+                    onDrag={(dx, dy) => handleMarkerDrag(idx, dx, dy)}
+                    onDragEnd={handleMarkerDragEnd}
+                  />
+                ))}
+
+                {/* Focus ring — pulsing indicator when a setup/observation card was tapped */}
+                {focusState.target && (
+                  <FocusRing
+                    x={focusState.target.x_percent}
+                    y={focusState.target.y_percent}
+                    pulse={focusPulse}
+                    mapWidth={MAP_WIDTH}
+                    mapHeight={MAP_HEIGHT}
+                  />
+                )}
+              </ImageOverlayCanvas>
             ) : (
-              <View style={{ width: MAP_WIDTH, height: MAP_HEIGHT }} onTouchEnd={editMode && addMode ? handleMapPress : undefined}>
+              <View style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}>
                 <TacticalMapView
                   center={hunt.locationCoords || { lat: 39.8283, lon: -98.5795 }}
                   zoom={hunt.locationCoords ? 14 : 5}
@@ -609,34 +675,9 @@ export default function ResultsScreen() {
               </View>
             )}
 
-            {/* Overlay markers — ALWAYS on the primary image */}
-            {overlays.map((overlay, idx) => (
-              <DraggableMarker
-                key={overlay.id}
-                overlay={overlay}
-                index={idx}
-                editMode={editMode}
-                isSelected={selectedOverlay?.id === overlay.id}
-                onPress={() => setSelectedOverlay(selectedOverlay?.id === overlay.id ? null : overlay)}
-                onDragStart={() => handleMarkerDragStart(idx)}
-                onDrag={(dx, dy) => handleMarkerDrag(idx, dx, dy)}
-                onDragEnd={handleMarkerDragEnd}
-              />
-            ))}
-
-            {/* Focus ring — pulsing indicator when a setup/observation card was tapped */}
-            {focusState.target && (
-              <FocusRing
-                x={focusState.target.x_percent}
-                y={focusState.target.y_percent}
-                pulse={focusPulse}
-                mapWidth={MAP_WIDTH}
-                mapHeight={MAP_HEIGHT}
-              />
-            )}
-
-            {/* Legend overlay */}
-            {showLegend && !editMode && (
+            {/* Legend overlay — stays in screen-space (NOT transformed) so
+                it remains readable at any zoom level. */}
+            {showLegend && !editMode && primaryImage && (
               <View style={styles.legendOverlay}>
                 <Text style={styles.legendTitle}>MAP LEGEND</Text>
                 {Object.entries(OVERLAY_LABELS).map(([key, label]) => (

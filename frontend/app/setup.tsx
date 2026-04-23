@@ -341,6 +341,24 @@ export default function SetupScreen() {
         }));
         const enrichedResult = { ...data.result, overlays: overlaysWithIds };
 
+        // Capture the natural dimensions of the EXACT image the user
+        // chose as the primary analyzed image. We bake these, along
+        // with the GPS that was active at analyze time, into the
+        // AnalysisContext so overlays never drift on reload even if
+        // the user later shuffles the image list or edits the hunt.
+        const primaryBase64 = mapImages[primaryMapIndex];
+        const primaryDims = await new Promise<{ width: number; height: number }>(resolve => {
+          try {
+            Image.getSize(
+              primaryBase64,
+              (w, h) => resolve({ width: w, height: h }),
+              () => resolve({ width: 0, height: 0 }),
+            );
+          } catch {
+            resolve({ width: 0, height: 0 });
+          }
+        });
+
         // Persist via the tier-aware media + persistence layer. This
         // ingests images into the right backend (FileSystem / IndexedDB
         // / cloud-stub), strips base64 from the record, applies the
@@ -360,6 +378,16 @@ export default function SetupScreen() {
           locationCoords,
           base64Images: mapImages,
           primaryMediaIndex: primaryMapIndex,
+          // Frozen analysis basis — see src/utils/analysisContext.ts.
+          analysisContext: {
+            imageNaturalWidth: primaryDims.width,
+            imageNaturalHeight: primaryDims.height,
+            // Explicit GPS for the analyzed image. Defaults to the
+            // hunt's locationCoords (they're the same at analyze time)
+            // but this field is then frozen — later edits to any hunt
+            // default GPS would NOT retroactively change overlays.
+            gps: locationCoords,
+          },
         });
 
         if (refreshUser) refreshUser();

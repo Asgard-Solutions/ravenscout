@@ -10,6 +10,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
+  AnalysisContext,
   HydratedHuntResult,
   HydratedMedia,
   LegacyV1HuntRecord,
@@ -122,6 +123,18 @@ export async function hydrateRuntimeHuntFromAnalysis(
     warnings.push('Some images could not be loaded. Analysis is still available.');
   }
 
+  // Defensive: if the saved analysisContext refers to an imageId that
+  // no longer resolves to any media, downgrade it to `stale`. The UI
+  // layer can still use `analysisContext.gps` as authoritative but
+  // should warn the user / prompt re-analysis.
+  let ctx: AnalysisContext | null = analysis.analysisContext ?? null;
+  if (ctx && ctx.imageId) {
+    const stillPresent = media.some(m => m.asset.imageId === ctx!.imageId);
+    if (!stillPresent && ctx.overlayStatus !== 'stale') {
+      ctx = { ...ctx, overlayStatus: 'stale' };
+    }
+  }
+
   return {
     id: analysis.id,
     createdAt: analysis.createdAt,
@@ -134,6 +147,7 @@ export async function hydrateRuntimeHuntFromAnalysis(
     missingMediaCount: missing,
     fromSessionCache,
     warning: warnings.length ? warnings.join(' ') : null,
+    analysisContext: ctx,
   };
 }
 
@@ -359,6 +373,22 @@ export interface SaveHuntInput {
   /** Base64 inputs received from camera/map capture/picker. */
   base64Images: string[];
   primaryMediaIndex: number;
+  /**
+   * Frozen analysis basis for the exact image + GPS used to produce
+   * the result. At save time the caller supplies the image's natural
+   * dimensions (measured via Image.getSize) and, optionally, the GPS
+   * and overlay calibration. We fill in the imageId once the primary
+   * media asset has been persisted. When omitted, we synthesize a
+   * reasonable context from the other inputs so saved hunts never
+   * lose this lock.
+   */
+  analysisContext?: {
+    imageNaturalWidth?: number;
+    imageNaturalHeight?: number;
+    /** If omitted, falls back to `locationCoords`. */
+    gps?: { lat: number; lon: number } | null;
+    overlayCalibration?: import('./types').OverlayCalibration | null;
+  };
 }
 
 export interface SaveHuntOutcome {
@@ -411,6 +441,11 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
     mediaRefs,
     primaryMediaRef,
     storageStrategy: strategy.strategy,
+    analysisContext: buildInitialAnalysisContext({
+      primaryMediaRef,
+      ctxInput: input.analysisContext,
+      fallbackGps: input.locationCoords ?? null,
+    }),
   });
 
   // 2) Persist analysis record.
@@ -530,4 +565,30 @@ export async function deleteHuntById(id: string): Promise<void> {
   const { removeMediaForHunt } = await import('./mediaStore');
   await deleteAnalysis(id);
   await removeMediaForHunt(id);
+}
+
+// ------------------------------ AnalysisContext helpers ------------------------------
+
+// The pure builder lives in `/src/utils/analysisContext.ts` so tests
+// can import it without dragging in AsyncStorage. We re-export for
+// callers that already import from huntHydration.
+export { buildInitialAnalysisContext } from '../utils/analysisContext';
+
+/**
+ * Mark a hunt's overlays as stale. Called when the user changes the
+ * basis of the analysis (switches primary image, moves GPS, edits
+ * calibration anchors). Idempotent — safe to call repeatedly.
+ */
+export async function markOverlayStale(huntId: string): Promise<boolean> {
+  const analysis = await loadAnalysis(huntId);
+  if (!analysis || !analysis.analysisContext) return false;
+  if (analysis.analysisContext.overlayStatus === 'stale') return true;
+  const updated: PersistedHuntAnalysis = {
+    ...analysis,
+    analysisContext: {
+      ...analysis.analysisContext,
+      overlayStatus: 'stale',
+    },
+  };
+  return saveAnalysis(updated);
 }

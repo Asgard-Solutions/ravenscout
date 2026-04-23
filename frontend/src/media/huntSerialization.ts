@@ -108,6 +108,7 @@ export function buildPersistedAnalysis(input: {
   mediaRefs: string[];
   primaryMediaRef: string | null;
   storageStrategy: StorageStrategy;
+  analysisContext?: import('./types').AnalysisContext | null;
 }): PersistedHuntAnalysis {
   return stripBase64Images({
     schema: 'hunt.analysis.v1',
@@ -118,5 +119,6 @@ export function buildPersistedAnalysis(input: {
     mediaRefs: input.mediaRefs,
     primaryMediaRef: input.primaryMediaRef,
     storageStrategy: input.storageStrategy,
+    analysisContext: input.analysisContext ?? null,
   });
 }

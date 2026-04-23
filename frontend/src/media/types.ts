@@ -98,6 +98,42 @@ export interface PersistedHuntAnalysis {
   mediaRefs: string[];
   primaryMediaRef: string | null;
   storageStrategy: StorageStrategy;
+  /**
+   * Frozen snapshot of the exact image + GPS used to produce the
+   * analysis result. Source of truth for overlay rendering — takes
+   * precedence over metadata.locationCoords (the hunt-level default)
+   * and over primaryMediaRef (which may become stale if the user
+   * later re-selects the primary image).
+   *
+   * Absent on records created before v3.1. Callers should fall back
+   * to primaryMediaRef + metadata.locationCoords in that case.
+   */
+  analysisContext?: AnalysisContext | null;
+}
+
+// ----------------------------- Analysis context -----------------------------
+
+export interface OverlayCalibration {
+  scale?: number;
+  offsetX?: number;
+  offsetY?: number;
+  rotation?: number;
+  anchorPoints?: Array<{ x: number; y: number }>;
+}
+
+export interface AnalysisContext {
+  schema: 'analysis-context.v1';
+  imageId: string;
+  gps: { lat: number; lon: number } | null;
+  imageNaturalWidth: number;
+  imageNaturalHeight: number;
+  overlayCalibration: OverlayCalibration | null;
+  /** 'valid' when the analysis context is in sync with the saved
+   *  media + overlays; 'stale' when the basis has changed (image
+   *  switched, GPS changed, anchors moved) and overlays should not
+   *  be rendered as authoritative. */
+  overlayStatus: 'valid' | 'stale';
+  lockedAt: string;
 }
 
 // ----------------------------- Runtime shapes -----------------------------
@@ -126,6 +162,10 @@ export interface HydratedHuntResult {
   missingMediaCount: number;
   fromSessionCache: boolean;
   warning: string | null;
+  /** Frozen analysis basis: the exact image + GPS that produced the
+   *  overlays. Always prefer this over `metadata.locationCoords` when
+   *  present. May be null on records created before v3.1. */
+  analysisContext: AnalysisContext | null;
 }
 
 // ----------------------------- Legacy shapes (read-only) -----------------------------

@@ -15,6 +15,8 @@ export {
   hydrateRuntimeHuntFromAnalysis,
   listHistory,
   deleteHuntById,
+  buildInitialAnalysisContext,
+  markOverlayStale,
   type SaveHuntInput,
   type SaveHuntOutcome,
   type HistoryEntryLite,
