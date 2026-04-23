@@ -414,16 +414,19 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
   });
   const huntId = input.analysisResult?.id as string;
 
-  // 1) Persist images via MediaStore.
-  const assets = await saveMediaBatch(input.base64Images, {
-    tier: input.tier, platform: Platform.OS, huntId,
-  });
-
-  const primaryIdx = Math.max(0, Math.min(assets.length - 1, input.primaryMediaIndex || 0));
-  const mediaRefs = assets.map(a => a.imageId);
-  const primaryMediaRef = assets[primaryIdx]?.imageId ?? null;
-
-  const metadata = extractMetadata({
+  // ------------------------------------------------------------------
+  // STEP 0 — Seat an in-memory session entry FIRST, before touching
+  // disk/cloud. This is the only tier that survives web-preview
+  // persistence failures (expo-file-system has no writable directory
+  // in the browser). /results reads the session store before falling
+  // back to AsyncStorage + legacy stores, so seating it here means
+  // even a fully-failed save never blocks the user from seeing their
+  // just-analyzed hunt.
+  //
+  // We later OVERWRITE this entry with the real persisted record if
+  // the rest of the pipeline succeeds.
+  // ------------------------------------------------------------------
+  const provisionalMetadata = extractMetadata({
     species: input.species,
     speciesName: input.speciesName,
     date: input.date,
@@ -436,6 +439,74 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
     weatherData: input.weatherData,
     locationCoords: input.locationCoords,
   });
+
+  // Use raw base64 strings as the provisional displayUris. We key
+  // them by synthetic provisional ids so a later real persisted
+  // record (which re-keys to MediaStore asset ids) can cleanly
+  // replace this entry via setCurrentHunt().
+  const provisionalMediaRefs: string[] = input.base64Images.map(
+    (_b, i) => `provisional-${huntId}-${i}`,
+  );
+  const provisionalSessionUris: Record<string, string> = {};
+  input.base64Images.forEach((b64, i) => {
+    if (b64) provisionalSessionUris[provisionalMediaRefs[i]] = b64;
+  });
+  const provisionalPrimaryIdx = Math.max(
+    0,
+    Math.min(provisionalMediaRefs.length - 1, input.primaryMediaIndex || 0),
+  );
+  const provisionalPrimaryRef = provisionalMediaRefs[provisionalPrimaryIdx] ?? null;
+  const provisionalAnalysis = buildPersistedAnalysis({
+    id: huntId,
+    metadata: provisionalMetadata,
+    analysis: input.analysisResult,
+    mediaRefs: provisionalMediaRefs,
+    primaryMediaRef: provisionalPrimaryRef,
+    storageStrategy: strategy.strategy,
+    analysisContext: buildInitialAnalysisContext({
+      primaryMediaRef: provisionalPrimaryRef,
+      ctxInput: input.analysisContext,
+      fallbackGps: input.locationCoords ?? null,
+    }),
+  });
+  const provisionalRuntime: RuntimeHunt = {
+    ...provisionalAnalysis,
+    displayUris: provisionalSessionUris,
+  };
+  setCurrentHunt(huntId, provisionalRuntime, {
+    persistFailed: true,
+    persistError: 'provisional (pre-persist)',
+  });
+
+  // ------------------------------------------------------------------
+  // STEP 1 — Persist images via MediaStore. Any per-image failure is
+  // already logged + non-fatal inside saveMediaBatch, so this won't
+  // throw on its own. We still defend against a surprise adapter
+  // regression with a try/catch so we can gracefully keep the
+  // provisional session entry in place.
+  // ------------------------------------------------------------------
+  let assets: import('./types').MediaAsset[] = [];
+  try {
+    assets = await saveMediaBatch(input.base64Images, {
+      tier: input.tier, platform: Platform.OS, huntId,
+    });
+  } catch (err: any) {
+    logClientEvent({
+      event: 'persist_degraded',
+      data: {
+        hunt_id: huntId,
+        reason: 'saveMediaBatch_threw_unexpectedly',
+        error: err?.message || String(err),
+      },
+    });
+    assets = [];
+  }
+
+  const primaryIdx = Math.max(0, Math.min(assets.length - 1, input.primaryMediaIndex || 0));
+  const mediaRefs = assets.map(a => a.imageId);
+  const primaryMediaRef = assets[primaryIdx]?.imageId ?? null;
+
+  const metadata = provisionalMetadata;
 
   const analysis = buildPersistedAnalysis({
     id: huntId,
@@ -451,15 +522,46 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
     }),
   });
 
-  // 2) Persist analysis record.
-  const analysisPersisted = await saveAnalysis(analysis);
+  // ------------------------------------------------------------------
+  // STEP 2 — Persist the analysis record. saveAnalysis returns false
+  // on failure (AsyncStorage quota / JSON errors) — never throws —
+  // but we still try/catch for belt-and-suspenders.
+  // ------------------------------------------------------------------
+  let analysisPersisted = false;
+  try {
+    analysisPersisted = await saveAnalysis(analysis);
+  } catch (err: any) {
+    analysisPersisted = false;
+    logClientEvent({
+      event: 'storage_write_failed',
+      data: {
+        hunt_id: huntId,
+        store: 'analysis',
+        reason: 'saveAnalysis_threw',
+        error: err?.message || String(err),
+      },
+    });
+  }
 
-  // 3) In-memory runtime hunt: keep session URIs for instant display.
+  // ------------------------------------------------------------------
+  // STEP 3 — REPLACE the provisional session entry with the real one.
+  // If media persistence failed we fall back to the provisional
+  // base64 uris so the screen still renders — keyed to whichever
+  // asset refs actually exist (real > provisional).
+  // ------------------------------------------------------------------
   const sessionUris: Record<string, string> = {};
-  assets.forEach((a, i) => {
-    if (input.base64Images[i]) sessionUris[a.imageId] = input.base64Images[i];
-  });
-  const runtime: RuntimeHunt = { ...analysis, displayUris: sessionUris };
+  if (assets.length > 0) {
+    assets.forEach((a, i) => {
+      if (input.base64Images[i]) sessionUris[a.imageId] = input.base64Images[i];
+    });
+  } else {
+    // No assets persisted — carry the provisional uris forward so the
+    // results screen still has images to show.
+    Object.assign(sessionUris, provisionalSessionUris);
+  }
+  const runtimeAnalysis =
+    assets.length > 0 ? analysis : provisionalAnalysis;
+  const runtime: RuntimeHunt = { ...runtimeAnalysis, displayUris: sessionUris };
   setCurrentHunt(huntId, runtime, {
     persistFailed: !analysisPersisted,
     persistError: analysisPersisted ? null : 'analysisStore write failed',
