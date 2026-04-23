@@ -573,3 +573,31 @@ agent_communication:
 
       No stuck tasks on this feature. Test_credentials.md unchanged.
 
+  - agent: "testing"
+    message: |
+      Validated hunt_style_resolution contract on POST /api/analyze-hunt
+      against the preview URL with Bearer test_session_rs_001 (Pro).
+      40/40 substantive assertions pass. Harness: /app/hunt_style_test.py.
+
+      Response shape ({styleId, styleLabel, source, rawInput}) for
+      each case — all 200s:
+        A) omitted      -> {null, null, "unspecified", null}
+        B) "archery"    -> {"archery","Archery","user_selected","archery"}
+        C) "Public Land"-> {"public_land","Public Land","user_selected","Public Land"}
+        D) "bow hunting"-> {"archery","Archery","user_selected","bow hunting"}  (alias → canonical; rawInput preserved verbatim)
+        E) "banana"     -> {null, null, "unspecified", "banana"}  (200 NOT 4xx — silent fallback as designed)
+
+      Regression F: region_resolution still present + correct on all
+      5 responses. With GPS (31.2956, -95.9778) on conditions,
+      resolvedRegionId="east_texas" / source="gps" on every call.
+      Zero interference between resolutions.
+
+      Server logs confirm both "Region resolved: ..." and
+      "Hunt style resolved: id=... source=..." fire per call.
+
+      Note: harness printed 5 lines "FAIL region_resolution has
+      recognizable keys" — false positives (it expected
+      region_id/regionId; API uses resolvedRegionId). Real
+      region_resolution dict is well-shaped per the preceding
+      assertions. No backend issue. No fixes applied. No stuck tasks.
+
