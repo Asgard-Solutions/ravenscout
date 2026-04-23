@@ -179,5 +179,80 @@ test('provisional: reports approximate byte size (large payload surfaces in log)
     { 'provisional-hunt-big-0': big },
   );
   assert.equal(w.ok, true);
+  assert.equal(w.mode, 'full');
   assert.ok(w.bytes >= 100000, `bytes should include payload, got ${w.bytes}`);
+});
+
+// ================= size-cap fallback (mobile Chrome OOM protection) =================
+
+test('provisional: over-cap payload falls back to lite mode, analysis still readable', async () => {
+  const store: any = await import('../provisionalHuntStore');
+  freshStore();
+  // 4MB payload > 3MB cap
+  const huge = 'A'.repeat(4 * 1024 * 1024);
+  const w = await store.writeProvisionalHunt(
+    'hunt-huge',
+    sampleAnalysis('hunt-huge'),
+    { 'provisional-hunt-huge-0': huge },
+  );
+  assert.equal(w.ok, true);
+  assert.equal(w.mode, 'lite', 'must fall back to lite when over cap');
+  assert.ok(w.error && /full_probe_exceeds_cap/.test(w.error));
+
+  const r = await store.readProvisionalHunt('hunt-huge');
+  assert.ok(r);
+  assert.equal(r.mode, 'lite');
+  assert.equal(r.analysis.id, 'hunt-huge');
+  assert.deepEqual(r.displayUris, {}, 'lite must not carry images');
+});
+
+test('provisional: just-under-cap full payload still stored as full', async () => {
+  const store: any = await import('../provisionalHuntStore');
+  freshStore();
+  // ~2MB — under the 3MB cap
+  const big = 'A'.repeat(2 * 1024 * 1024);
+  const w = await store.writeProvisionalHunt(
+    'hunt-just-under',
+    sampleAnalysis('hunt-just-under'),
+    { 'provisional-hunt-just-under-0': big },
+  );
+  assert.equal(w.ok, true);
+  assert.equal(w.mode, 'full');
+
+  const r = await store.readProvisionalHunt('hunt-just-under');
+  assert.ok(r);
+  assert.equal(r.mode, 'full');
+  assert.equal(
+    r.displayUris['provisional-hunt-just-under-0']?.length,
+    big.length,
+  );
+});
+
+test('provisional: quota-exceeded setItem falls back to lite, never throws', async () => {
+  const store: any = await import('../provisionalHuntStore');
+  freshStore();
+  // Force setItem to reject to simulate QuotaExceededError on 1st attempt only
+  // (the lite retry should use ~12KB and succeed).
+  let call = 0;
+  const orig = MockAsyncStorage.setItem;
+  MockAsyncStorage.setItem = async (k: string, v: string) => {
+    call++;
+    if (call === 1) throw new Error('QuotaExceededError: setItem failed');
+    return orig(k, v);
+  };
+  try {
+    const w = await store.writeProvisionalHunt(
+      'hunt-quota',
+      sampleAnalysis('hunt-quota'),
+      { 'provisional-hunt-quota-0': 'A'.repeat(200000) }, // 200KB — under cap
+    );
+    assert.equal(w.ok, true);
+    assert.equal(w.mode, 'lite', 'quota failure must fall through to lite');
+    assert.ok(w.error && /lite_write_failed|QuotaExceededError/.test(w.error));
+    const r = await store.readProvisionalHunt('hunt-quota');
+    assert.ok(r);
+    assert.equal(r.mode, 'lite');
+  } finally {
+    MockAsyncStorage.setItem = orig;
+  }
 });

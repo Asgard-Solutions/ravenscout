@@ -27,6 +27,16 @@ import type { PersistedHuntAnalysis, RuntimeHunt } from './types';
 
 export const PROVISIONAL_HUNT_KEY = 'raven_provisional_hunt_v1';
 
+/**
+ * Hard ceiling on the serialized provisional payload. Web
+ * AsyncStorage is localStorage-backed with a ~5MB per-origin cap,
+ * and mobile Chrome's JS heap is tight — we'd rather skip the
+ * write (and log why) than OOM the runtime or get a silent
+ * QuotaExceededError. Anything above this cap falls back to a
+ * lightweight, image-less entry so /results can still hydrate.
+ */
+export const PROVISIONAL_SIZE_CAP_BYTES = 3 * 1024 * 1024; // 3MB
+
 export interface ProvisionalHuntEntry {
   schema: 'raven.provisional.v1';
   huntId: string;
@@ -35,7 +45,9 @@ export interface ProvisionalHuntEntry {
   analysis: PersistedHuntAnalysis;
   /**
    * imageId -> base64 data URI. Keyed by the SAME provisional /
-   * persisted imageIds used in `analysis.mediaRefs`.
+   * persisted imageIds used in `analysis.mediaRefs`. May be empty
+   * when the full-size entry exceeded PROVISIONAL_SIZE_CAP_BYTES —
+   * see `mode` for which path was taken.
    */
   displayUris: Record<string, string>;
   /**
@@ -44,38 +56,117 @@ export interface ProvisionalHuntEntry {
    * "hunt_not_found".
    */
   approxBytes: number;
+  /**
+   * Which payload tier was written:
+   *   'full'       — analysis + images (preferred, used when under cap)
+   *   'lite'       — analysis only, NO images (when full would exceed
+   *                  the quota cap; /results will render placeholders)
+   */
+  mode: 'full' | 'lite';
 }
 
-function approxSize(obj: unknown): number {
-  try {
-    return JSON.stringify(obj).length;
-  } catch {
-    return 0;
-  }
+function approxSize(s: string): number {
+  return s ? s.length : 0;
 }
 
 export async function writeProvisionalHunt(
   huntId: string,
   analysis: PersistedHuntAnalysis,
   displayUris: Record<string, string>,
-): Promise<{ ok: boolean; bytes: number; error?: string }> {
-  const entry: ProvisionalHuntEntry = {
+): Promise<{ ok: boolean; bytes: number; mode: 'full' | 'lite'; error?: string }> {
+  // Build the full entry WITHOUT displayUris first — that part is
+  // tiny and its serialized size is our floor regardless of image
+  // payload. We stringify exactly ONCE per candidate payload to
+  // avoid double-allocation on low-memory phones (1.8MB base64 x2
+  // concurrent strings was OOMing mobile Chrome).
+  const liteEntry: ProvisionalHuntEntry = {
     schema: 'raven.provisional.v1',
     huntId,
     createdAt: new Date().toISOString(),
     analysis,
-    displayUris,
+    displayUris: {},
     approxBytes: 0,
+    mode: 'lite',
   };
-  entry.approxBytes = approxSize(entry);
+
+  // Probe the full payload size cheaply: the lite entry stringified,
+  // plus the raw sum of displayUris base64 lengths (close enough;
+  // we don't need byte-accurate here).
+  let liteStr: string;
   try {
-    await AsyncStorage.setItem(PROVISIONAL_HUNT_KEY, JSON.stringify(entry));
-    return { ok: true, bytes: entry.approxBytes };
+    liteStr = JSON.stringify(liteEntry);
+  } catch (err: any) {
+    return { ok: false, bytes: 0, mode: 'lite', error: err?.message || String(err) };
+  }
+  const liteBytes = approxSize(liteStr);
+  const imagesBytes = Object.values(displayUris).reduce(
+    (acc, v) => acc + (v ? v.length : 0),
+    0,
+  );
+  const fullProbe = liteBytes + imagesBytes;
+
+  // Prefer the FULL entry when it's safely under cap.
+  if (fullProbe <= PROVISIONAL_SIZE_CAP_BYTES) {
+    const fullEntry: ProvisionalHuntEntry = {
+      ...liteEntry,
+      displayUris,
+      approxBytes: fullProbe,
+      mode: 'full',
+    };
+    let fullStr: string;
+    try {
+      fullStr = JSON.stringify(fullEntry);
+    } catch (err: any) {
+      // Extremely unlikely (circular data or host limits). Fall
+      // through to the lite write — better to have analysis text
+      // on /results than nothing.
+      return await writeLite(huntId, liteEntry, liteStr, err?.message);
+    }
+    try {
+      await AsyncStorage.setItem(PROVISIONAL_HUNT_KEY, fullStr);
+      return { ok: true, bytes: fullStr.length, mode: 'full' };
+    } catch (err: any) {
+      // Quota exceeded or adapter failure — fall back to lite.
+      return await writeLite(huntId, liteEntry, liteStr, err?.message);
+    }
+  }
+
+  // Full payload would exceed the cap — don't even try; write lite.
+  return await writeLite(
+    huntId,
+    liteEntry,
+    liteStr,
+    `full_probe_exceeds_cap: ${fullProbe} > ${PROVISIONAL_SIZE_CAP_BYTES}`,
+  );
+}
+
+async function writeLite(
+  huntId: string,
+  liteEntry: ProvisionalHuntEntry,
+  liteStr: string,
+  upstreamReason?: string,
+): Promise<{ ok: boolean; bytes: number; mode: 'full' | 'lite'; error?: string }> {
+  void huntId; // used for log context at caller
+  const finalize = (e: ProvisionalHuntEntry, s: string) => ({
+    entry: e,
+    str: s.slice(0, s.length), // no-op; explicit reference
+  });
+  const withBytes = { ...liteEntry, approxBytes: liteStr.length, mode: 'lite' as const };
+  const { str } = finalize(withBytes, JSON.stringify(withBytes));
+  try {
+    await AsyncStorage.setItem(PROVISIONAL_HUNT_KEY, str);
+    return {
+      ok: true,
+      bytes: str.length,
+      mode: 'lite',
+      error: upstreamReason,
+    };
   } catch (err: any) {
     return {
       ok: false,
-      bytes: entry.approxBytes,
-      error: err?.message || String(err),
+      bytes: str.length,
+      mode: 'lite',
+      error: `${upstreamReason ?? ''} | lite_write_failed: ${err?.message || String(err)}`.trim(),
     };
   }
 }

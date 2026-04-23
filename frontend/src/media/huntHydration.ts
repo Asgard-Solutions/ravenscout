@@ -558,6 +558,7 @@ export async function saveHunt(input: SaveHuntInput): Promise<SaveHuntOutcome> {
       hunt_id: huntId,
       ok: provisionalWrite.ok,
       bytes: provisionalWrite.bytes,
+      mode: provisionalWrite.mode,
       error: provisionalWrite.error ?? null,
       quota_warning: provisionalWrite.bytes > 4 * 1024 * 1024,
     },
