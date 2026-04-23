@@ -9,6 +9,7 @@
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
+      "bundleIdentifier": "com.asgardsolution.ravenscout",
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload map images for hunt analysis",
@@ -16,6 +17,7 @@
       }
     },
     "android": {
+      "package": "com.asgardsolution.ravenscout",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#0B1F2A"
@@ -44,7 +46,13 @@
           "backgroundColor": "#0B1F2A"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.REPLACE_WITH_REVERSED_IOS_CLIENT_ID"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

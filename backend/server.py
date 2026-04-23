@@ -256,6 +256,122 @@ async def exchange_session(request: Request):
     return response
 
 
+# ------------------------------------------------------------------
+# /api/auth/google  — PORTABLE auth for Railway / non-Emergent hosts
+# ------------------------------------------------------------------
+# The client (Expo mobile app) obtains a Google ID token natively via
+# @react-native-google-signin/google-signin or expo-auth-session.
+# It POSTs the ID token here; we verify the signature against
+# Google's JWKS, check the audience matches GOOGLE_CLIENT_ID, and
+# mint our own session_token.
+#
+# REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT
+# URLS, THIS BREAKS THE AUTH.
+#
+# Migration behavior: upsert users by email so existing accounts
+# (those originally created via the Emergent Google Auth flow) keep
+# their tier / analysis_count / revenuecat_id. Only net-new emails
+# start fresh on the "trial" tier.
+
+class GoogleAuthBody(BaseModel):
+    id_token: str
+
+
+@api_router.post("/auth/google")
+async def auth_google(body: GoogleAuthBody):
+    google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
+    if not google_client_id:
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_CLIENT_ID not configured on server",
+        )
+
+    # Verify the ID token against Google's JWKS. This checks
+    # signature, issuer (accounts.google.com), audience (our
+    # GOOGLE_CLIENT_ID), and expiry. Raises ValueError on ANY
+    # tampering or mismatch.
+    try:
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+        claims = google_id_token.verify_oauth2_token(
+            body.id_token,
+            google_requests.Request(),
+            google_client_id,
+            clock_skew_in_seconds=10,
+        )
+    except ValueError as e:
+        logger.warning(f"Google ID token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid Google credential")
+    except Exception as e:
+        logger.error(f"Google ID token verification crashed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid Google credential")
+
+    email = (claims.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="No email in Google credential")
+    if not claims.get("email_verified", True):
+        # Some accounts return false. Don't hard-fail but log.
+        logger.warning(f"Google email not verified: {email}")
+
+    name = claims.get("name", "")
+    picture = claims.get("picture", "")
+    google_sub = claims.get("sub")  # stable Google user id
+
+    # Upsert the user by email. Existing users keep tier / usage.
+    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if existing_user:
+        user_id = existing_user["user_id"]
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "name": name,
+                "picture": picture,
+                "google_sub": google_sub,
+                "last_login": now_iso,
+            }},
+        )
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "google_sub": google_sub,
+            "tier": "trial",
+            "analysis_count": 0,
+            "billing_cycle_start": now_iso,
+            "rollover_count": 0,
+            "revenuecat_id": None,
+            "created_at": now_iso,
+            "last_login": now_iso,
+        })
+
+    # Mint our session token (same format as /auth/session so the
+    # rest of the stack works unchanged).
+    session_token = f"rs_{uuid.uuid4().hex}"
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat(),
+        "created_at": now_iso,
+        "provider": "google_oauth",
+    })
+
+    return JSONResponse({
+        "user_id": user_id,
+        "email": email,
+        "name": name,
+        "picture": picture,
+        "session_token": session_token,
+    })
+
+
+
+
 @api_router.get("/auth/me")
 async def get_me(request: Request):
     user = await get_current_user(request)
@@ -668,13 +784,27 @@ SPECIES_DATA = {
 # AI ANALYSIS (unchanged)
 # ============================================================
 async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial") -> dict:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    """Run GPT-5.2 Vision analysis on the hunt map.
+
+    LLM selection:
+      - If OPENAI_API_KEY is set, talk to OpenAI directly via the
+        official `openai` SDK. This is the PORTABLE path — works on
+        Railway, Fly.io, Docker, or any non-Emergent host.
+      - Else fall back to EMERGENT_LLM_KEY + emergentintegrations
+        (legacy in-Emergent dev only).
+    Either way the downstream parse/validate pipeline is identical.
+    """
     from prompt_builder import assemble_system_prompt, assemble_user_prompt, get_repair_prompt, get_evidence_level
     from schema_validator import parse_llm_response, validate_and_normalize, convert_v2_to_v1
 
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
-    if not api_key:
-        raise ValueError("EMERGENT_LLM_KEY not configured")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    emergent_key = os.environ.get("EMERGENT_LLM_KEY")
+    if not openai_key and not emergent_key:
+        raise ValueError(
+            "Missing LLM credentials. Set OPENAI_API_KEY (preferred, works "
+            "anywhere) or EMERGENT_LLM_KEY (Emergent-hosted only)."
+        )
+    use_openai_direct = bool(openai_key)
 
     species = SPECIES_DATA.get(conditions.animal)
     if not species:
@@ -753,12 +883,6 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
 
     logger.info(f"Prompt built: tier={tier}, images={actual_image_count}, species={conditions.animal}, schema=v2")
 
-    # Assemble image contents with labels
-    image_contents = []
-    for idx, img in enumerate(images_to_send):
-        clean = img.split(",", 1)[1] if "," in img else img
-        image_contents.append(ImageContent(image_base64=clean))
-
     # Add image labels to user prompt if multi-image
     if actual_image_count > 1:
         labels = ["Image 1: PRIMARY coordinate reference map"]
@@ -767,11 +891,56 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         user_prompt_text = "\n".join(labels) + "\n\n" + user_prompt_text
 
     session_id = str(uuid.uuid4())
-    chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_prompt)
-    chat.with_model("openai", "gpt-5.2")
+    if use_openai_direct:
+        # ------------- PORTABLE PATH: OpenAI SDK directly -------------
+        from openai import AsyncOpenAI
+        client_openai = AsyncOpenAI(api_key=openai_key)
 
-    user_message = UserMessage(text=user_prompt_text, file_contents=image_contents)
-    response = await chat.send_message(user_message)
+        # GPT-5.2 Vision multipart content: [{"type":"text"}, {"type":"image_url"}, ...]
+        user_content: list = [{"type": "text", "text": user_prompt_text}]
+        for img in images_to_send:
+            clean = img.split(",", 1)[1] if "," in img else img
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{clean}"},
+            })
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        # First call
+        completion = await client_openai.chat.completions.create(
+            model="gpt-5.2",
+            messages=messages,
+        )
+        response = completion.choices[0].message.content or ""
+
+        async def _send_repair(repair_text: str) -> str:
+            messages.append({"role": "assistant", "content": response})
+            messages.append({"role": "user", "content": repair_text})
+            c = await client_openai.chat.completions.create(
+                model="gpt-5.2",
+                messages=messages,
+            )
+            return c.choices[0].message.content or ""
+    else:
+        # ------------- LEGACY PATH: emergentintegrations -------------
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+        image_contents = []
+        for idx, img in enumerate(images_to_send):
+            clean = img.split(",", 1)[1] if "," in img else img
+            image_contents.append(ImageContent(image_base64=clean))
+
+        chat = LlmChat(api_key=emergent_key, session_id=session_id, system_message=system_prompt)
+        chat.with_model("openai", "gpt-5.2")
+
+        user_message = UserMessage(text=user_prompt_text, file_contents=image_contents)
+        response = await chat.send_message(user_message)
+
+        async def _send_repair(repair_text: str) -> str:
+            return await chat.send_message(UserMessage(text=repair_text))
+
     logger.info(f"AI response received: len={len(response)}")
 
     # Parse and validate
@@ -780,8 +949,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
     if not parse_ok:
         logger.warning(f"Parse failed: {parse_err}. Attempting repair...")
         repair_prompt = get_repair_prompt(response)
-        repair_msg = UserMessage(text=repair_prompt)
-        repair_response = await chat.send_message(repair_msg)
+        repair_response = await _send_repair(repair_prompt)
         parse_ok, parsed, parse_err = parse_llm_response(repair_response)
         if not parse_ok:
             raise ValueError(f"LLM response repair failed: {parse_err}")

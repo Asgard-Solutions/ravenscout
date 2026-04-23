@@ -1,16 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, Platform, Linking } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, Alert } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as WebBrowser from 'expo-web-browser';
-import { COLORS, BACKEND_URL } from '../src/constants/theme';
+import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { user, loading, login } = useAuth();
+  const { user, loading, loginWithGoogle } = useAuth();
   const [authLoading, setAuthLoading] = useState(false);
-  const params = useLocalSearchParams();
 
   // If already logged in, redirect
   useEffect(() => {
@@ -19,58 +17,40 @@ export default function LoginScreen() {
     }
   }, [loading, user]);
 
-  // Handle session_id from redirect (web)
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      const hash = typeof window !== 'undefined' ? window.location.hash : '';
-      if (hash.includes('session_id=')) {
-        const sessionId = hash.split('session_id=')[1]?.split('&')[0];
-        if (sessionId) {
-          handleSessionExchange(sessionId);
-          // Clean hash
-          if (typeof window !== 'undefined') {
-            window.history.replaceState(null, '', window.location.pathname);
-          }
-        }
-      }
-    }
-  }, []);
-
-  const handleSessionExchange = async (sessionId: string) => {
-    setAuthLoading(true);
-    const success = await login(sessionId);
-    setAuthLoading(false);
-    if (success) {
-      router.replace('/');
-    }
-  };
-
+  // Direct Google Sign-In via native SDK. Works the same in Expo Go
+  // (dev client) and EAS production builds. No web redirect URLs,
+  // no Emergent-managed auth proxy.
+  //
+  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT
+  // URLS, THIS BREAKS THE AUTH.
   const handleGoogleLogin = async () => {
     setAuthLoading(true);
     try {
-      if (Platform.OS === 'web') {
-        // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-        const redirectUrl = (typeof window !== 'undefined' ? window.location.origin : '') + '/login';
-        window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+      const result = await loginWithGoogle();
+      if (result.ok) {
+        router.replace('/');
         return;
       }
-
-      // Mobile: Use WebBrowser
-      // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-      const redirectUrl = `${BACKEND_URL}/login`;
-      const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-
-      if (result.type === 'success' && result.url) {
-        const url = result.url;
-        const hashPart = url.split('#')[1] || '';
-        const sessionId = new URLSearchParams(hashPart).get('session_id');
-        if (sessionId) {
-          await handleSessionExchange(sessionId);
-        }
+      // Silent on user-cancelled
+      if (result.reason === 'cancelled') return;
+      if (result.reason === 'web_not_supported') {
+        Alert.alert(
+          'Mobile-only',
+          'Raven Scout runs on iOS and Android. Please install the mobile app to sign in.',
+        );
+        return;
       }
+      if (result.reason === 'missing_google_client_id_env') {
+        Alert.alert(
+          'Configuration error',
+          'Google Client ID not configured. Set EXPO_PUBLIC_GOOGLE_CLIENT_ID in the build.',
+        );
+        return;
+      }
+      Alert.alert('Sign-in failed', `Could not sign in (${result.reason}). Please try again.`);
     } catch (err) {
       console.error('Auth error:', err);
+      Alert.alert('Sign-in failed', 'Unexpected error — please try again.');
     } finally {
       setAuthLoading(false);
     }

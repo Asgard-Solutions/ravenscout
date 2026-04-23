@@ -742,10 +742,117 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Hunts CRUD backend + cloud sync + mobile-only web blocker"
+    - "Railway-readiness refactor (auth/google + OpenAI direct LLM + deploy files)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+backend_railway_readiness:
+  - task: "POST /api/auth/google — portable Google OAuth (replaces Emergent Auth for Railway)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          /api/auth/google contract verified end-to-end against the
+          preview URL. Harness: /app/backend_test_railway.py — all
+          assertions in this group PASS with ZERO 500s:
+            • no body         -> 422 validation error
+            • empty body {}   -> 422 validation error
+            • id_token=""     -> 401 (falls through to google-auth,
+                                returns "Invalid Google credential")
+            • id_token="bogus"-> 401 "Invalid Google credential"
+                                (logged server-side: "Wrong number of
+                                 segments in token")
+            • 3-segment tampered JWT (fake signature) -> 401
+            • "a.b.c" / unicode / 4000-char garbage   -> 401 (no 500)
+          GOOGLE_CLIENT_ID is present in backend/.env and the endpoint
+          correctly routes through google.oauth2.id_token.verify_oauth2_token.
+          Valid-token success path not exercised (requires a real
+          Google ID token issued against the same audience — per the
+          review brief, OK to skip; the 401 rejection path exercises
+          the full verification flow.)
+
+  - task: "analyze-hunt LLM swap — OpenAI direct SDK path (OPENAI_API_KEY preferred over EMERGENT_LLM_KEY)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          POST /api/analyze-hunt with a fresh 256x256 PNG + Bearer
+          test_session_rs_001 returned:
+            • HTTP 200
+            • success=true
+            • result.id + 5 overlays
+            • region_resolution = {resolvedRegionId="east_texas",
+                regionResolutionSource="gps"}
+            • hunt_style_resolution = {styleId="saddle",
+                styleLabel="Saddle", source="user_selected",
+                rawInput="saddle"}
+            • No 500, no LiteLLM error traces
+          Verified OpenAI direct path was used: a fresh analyze-hunt
+          call produced ZERO new LiteLLM / emergentintegrations /
+          LlmChat / litellm.APIError markers in
+          /var/log/supervisor/backend.out.log between the pre-run
+          and post-run log offsets. (The older LiteLLM.Info banner
+          on line 139 of out.log is from a prior run before the swap
+          landed; it does not recur.)
+
+  - task: "Railway deployment artifacts (Procfile, railway.json, .env.railway.example, README_RAILWAY.md)"
+    implemented: true
+    working: true
+    file: "/app/backend/Procfile, /app/backend/railway.json, /app/backend/.env.railway.example, /app/backend/README_RAILWAY.md"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          All 4 files present and valid:
+            • Procfile matches exactly:
+                "web: uvicorn server:app --host 0.0.0.0 --port $PORT"
+            • railway.json is valid JSON with:
+                deploy.startCommand = uvicorn server:app ...
+                deploy.healthcheckPath = "/api/health"
+                deploy.healthcheckTimeout = 30
+                deploy.restartPolicyType = "ON_FAILURE"
+            • .env.railway.example documents MONGODB_URI,
+                OPENAI_API_KEY, GOOGLE_CLIENT_ID, S3_BUCKET_NAME,
+                WEATHER_API_KEY, REVENUECAT_SECRET_KEY, AWS_*.
+            • README_RAILWAY.md is a complete deployment guide with
+                Google OAuth client-type table + /api/health +
+                /api/auth/google curl examples.
+
+  - task: "Regression smoke — /api/health, /api/auth/me, /api/subscription/tiers, /api/hunts CRUD"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          No regressions after the Railway refactor:
+            • GET /api/health -> 200 {"status":"ok"}
+            • GET /api/auth/me (Bearer test_session_rs_001) -> 200
+                tier=pro, user_id=test-user-001
+            • GET /api/subscription/tiers -> 200 with trial/core/pro
+            • /api/hunts CRUD spot check (POST, GET list, GET single,
+                PUT, DELETE) all 200; DELETE returned deleted=1.
+          Total: 26/26 assertions pass in /app/backend_test_railway.py.
 
 agent_communication:
   - agent: "main"
