@@ -44,6 +44,7 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://ravenscout-production.up.railway.app",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com"
       },
       "channel": "development"
