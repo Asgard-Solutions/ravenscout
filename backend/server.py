@@ -26,8 +26,23 @@ if not mongo_url:
         "Missing Mongo connection string. Set MONGO_URL or MONGODB_URI in backend/.env."
     )
 db_name = os.environ.get('DB_NAME') or 'raven_scout'
-client = AsyncIOMotorClient(mongo_url)
-db = client[db_name]
+
+# Initialize client and db as None - will connect on first use
+client = None
+db = None
+
+async def get_database():
+    """Get database connection, connecting on first use"""
+    global client, db
+    if client is None:
+        client = AsyncIOMotorClient(
+            mongo_url,
+            serverSelectionTimeoutMS=10000,  # 10 second timeout
+            connectTimeoutMS=10000,
+            socketTimeoutMS=10000
+        )
+        db = client[db_name]
+    return db
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -90,7 +105,7 @@ async def get_current_user(request: Request) -> dict:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    session = await (await get_database()).user_sessions.find_one({"session_token": token}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=401, detail="Invalid session")
 
@@ -102,7 +117,7 @@ async def get_current_user(request: Request) -> dict:
     if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Session expired")
 
-    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    user = await (await get_database()).users.find_one({"user_id": session["user_id"]}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user
@@ -1003,7 +1018,19 @@ async def root():
 
 @api_router.get("/health")
 async def health():
-    return {"status": "ok"}
+    """Railway health check - always returns OK for container health"""
+    return {"status": "ok", "service": "ravenscout-api"}
+
+@api_router.get("/health/db")
+async def health_db():
+    """Database connectivity check"""
+    try:
+        # Test MongoDB connection
+        database = await get_database()
+        await database.client.admin.command('ping')
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        return {"status": "error", "database": "disconnected", "error": str(e)}
 
 @api_router.get("/species")
 async def get_species():
@@ -1500,4 +1527,5 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    if client:
+        client.close()
