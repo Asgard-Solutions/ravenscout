@@ -67,8 +67,10 @@ class TestSpeciesResolution:
         assert resolve_species_pack(name) is HOG_PACK
 
     @pytest.mark.parametrize("name", [
-        None, "", "   ", "elk", "moose", "bear",
-        "pronghorn", "squirrel", "whitetail_bobcat",
+        None, "", "   ",
+        # Still-unsupported species — these should continue to fall
+        # back to the generic pack even after the expansion.
+        "squirrel", "whitetail_bobcat", "bobcat", "mountain lion",
     ])
     def test_unsupported_species_falls_back(self, name):
         pack = resolve_species_pack(name)
@@ -77,16 +79,28 @@ class TestSpeciesResolution:
         assert pack.fallback_reason is not None
 
     def test_is_supported_species(self):
+        # Original three species.
         assert is_supported_species("deer") is True
         assert is_supported_species("turkey") is True
         assert is_supported_species("hog") is True
-        assert is_supported_species("elk") is False
+        # Expansion species (elk / bear / moose / antelope / coyote).
+        assert is_supported_species("elk") is True
+        assert is_supported_species("bear") is True
+        assert is_supported_species("moose") is True
+        assert is_supported_species("antelope") is True
+        assert is_supported_species("pronghorn") is True  # alias
+        assert is_supported_species("coyote") is True
+        # Still-unsupported + null-ish inputs.
+        assert is_supported_species("squirrel") is False
         assert is_supported_species(None) is False
 
     def test_inventory_shape(self):
         items = get_all_canonical_species()
         canon = {i["canonical_id"] for i in items}
-        assert canon == {"whitetail", "turkey", "hog"}
+        assert canon == {
+            "whitetail", "turkey", "hog",
+            "elk", "bear", "moose", "antelope", "coyote",
+        }
         # Display names and alias lists exist for every entry.
         for item in items:
             assert item["display_name"]
@@ -252,8 +266,20 @@ class TestAssembleSystemPrompt:
         # No turkey-specific drift
         assert "strut" not in prompt.lower()
 
-    def test_unsupported_species_uses_fallback_in_assembled_prompt(self):
+    def test_includes_elk_specific_text(self):
+        # Elk was moved from fallback to a first-class pack as part of
+        # the species expansion — verify its pack is now wired in.
         prompt = assemble_system_prompt("elk", DUMMY_CONDITIONS, 1, "pro")
+        assert "SPECIES: Elk" in prompt
+        # Elk-specific tactical language.
+        assert "thermal" in prompt.lower()
+        # No whitetail-specific drift.
+        assert "SPECIES: Whitetail Deer" not in prompt
+
+    def test_unsupported_species_uses_fallback_in_assembled_prompt(self):
+        # A truly-unsupported species should still fall through to the
+        # generic pack and render the FALLBACK NOTICE.
+        prompt = assemble_system_prompt("squirrel", DUMMY_CONDITIONS, 1, "pro")
         assert "SPECIES: Unspecified Game Species" in prompt
         assert "FALLBACK NOTICE" in prompt
         # Shared blocks still present
