@@ -742,8 +742,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "POST /api/auth/set-password (Google-only → attach password)"
-    - "GET /api/auth/me has_password flag"
+    - "Pro tier limit → 40/month + 12-month rollover accumulate-mode"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1887,3 +1886,177 @@ agent_communication:
       polish if you want exact spec-parity on short-pw case: drop
       Pydantic min_length from SetPasswordBody.new_password.
 
+
+
+tier_limits_rollover_v2:
+  - task: "Pro tier limit → 40/month + 12-month rollover accumulate-mode"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Tier limits + rollover v2 verified end-to-end against the
+          preview URL (EXPO_PUBLIC_BACKEND_URL =
+          https://tactical-auth-hub.preview.emergentagent.com).
+          Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
+          Zero 500s on any /api/auth/me call during the run
+          (supervisor access log shows only 200/401).
+
+          Fixture: seeded a one-off Core test user directly in Mongo
+          (user_id=test-user-core-rollover / session=test_session_core_rollover
+          / tier=core) since test_credentials.md has no Core fixture.
+          The existing Pro fixtures (test-user-001, test-user-002) and
+          Trial fixture (test-user-trial) were re-seeded defensively
+          (upsert on users + user_sessions, session expiry +30d) before
+          the scenarios run. No credentials rotated.
+
+          === SCENARIO 1 — Pro tier limit = 40 ===
+          Setup: test-user-002 reset to
+            {tier:pro, analysis_count:0, rollover_count:0,
+             billing_cycle_start: now()}
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              tier: "pro",
+              usage: {allowed:true, remaining:40, limit:40,
+                      rollover:0, tier:"pro"},
+              ...
+            }
+          ✅ tier == "pro"
+          ✅ usage.limit == 40  (was 100 pre-change — confirmed updated)
+          ✅ usage.remaining == 40 - 0 + 0 == 40
+          ✅ usage.allowed == true
+
+          === SCENARIO 2 — Core replace-mode rollover (unchanged) ===
+          Setup: test-user-core-rollover set to
+            {tier:core, analysis_count:3, rollover_count:0,
+             billing_cycle_start: now() - 31 days}
+          GET /api/auth/me Bearer test_session_core_rollover →
+            200 {
+              tier: "core",
+              usage: {allowed:true, remaining:17, limit:10,
+                      rollover:7, tier:"core"},
+              ...
+            }
+          ✅ usage.limit == 10
+          ✅ usage.rollover == 7   (= 10 - 3, capped at tier limit 10)
+          ✅ usage.remaining == 17 (= 10 + 7)
+          ✅ DB side: analysis_count reset to 0
+          ✅ DB side: rollover_count persisted as 7
+          Confirms rollover_months <= 1 branch:
+            new_rollover = min(unused_this_cycle, analysis_limit)
+          behaves as spec (replace-mode, single prior month carryover).
+
+          === SCENARIO 3 — Pro accumulate-mode rollover (new) ===
+          Setup: test-user-002 set to
+            {tier:pro, analysis_count:5, rollover_count:30,
+             billing_cycle_start: now() - 31 days}
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              tier: "pro",
+              usage: {allowed:true, remaining:105, limit:40,
+                      rollover:65, tier:"pro"},
+              ...
+            }
+          Math check:
+            unused_this_cycle = 40 - 5 = 35
+            new_rollover      = min(30 + 35, 40 * 12) = min(65, 480) = 65
+            total_available   = 40 + 65 = 105
+          ✅ usage.limit == 40
+          ✅ usage.rollover == 65
+          ✅ usage.remaining == 105
+          ✅ DB side: analysis_count reset to 0
+          ✅ DB side: rollover_count persisted as 65
+          Confirms rollover_months > 1 branch:
+            new_rollover = min(rollover_count + unused_this_cycle,
+                               analysis_limit * rollover_months)
+          correctly ADDs unused onto existing rollover (accumulate-mode).
+
+          === SCENARIO 4 — Pro rollover cap = 480 (40 × 12) ===
+          Setup: test-user-002 set to
+            {tier:pro, analysis_count:0, rollover_count:475,
+             billing_cycle_start: now() - 31 days}
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              usage: {allowed:true, remaining:520, limit:40,
+                      rollover:480, tier:"pro"}, ...
+            }
+          Math check:
+            unused_this_cycle = 40 - 0 = 40
+            new_rollover      = min(475 + 40, 480) = min(515, 480) = 480
+            total_available   = 40 + 480 = 520
+          ✅ usage.rollover == 480 (capped at 40*12)
+          ✅ usage.remaining == 520
+          ✅ usage.limit == 40
+
+          === SCENARIO 5 — Pro limit reached message ===
+          Setup: test-user-002 set to
+            {tier:pro, analysis_count:40, rollover_count:0,
+             billing_cycle_start: now()}  (fresh cycle, no rollover)
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              usage: {
+                allowed: false,
+                remaining: 0,
+                limit: 40,
+                tier: "pro",
+                message: "Monthly limit reached. Upgrade or wait for next cycle."
+              }, ...
+            }
+          ✅ usage.allowed == false
+          ✅ usage.remaining == 0
+          ✅ usage.limit == 40
+          ✅ usage.message contains "Monthly limit reached"
+
+          === SCENARIO 6 — Regression: Trial + auth ===
+          ✅ Trial (test_session_trial_001) → 200 with
+             usage.limit == 3, tier == "trial" (is_lifetime path,
+             unchanged by this patch).
+          ✅ Pro 1 (test_session_rs_001) → 200 with usage.limit == 40.
+          ✅ Zero 500s on /api/auth/me across the entire run.
+
+          === CLEANUP ===
+          ✅ test-user-002 restored to clean state:
+             {tier:"pro", analysis_count:0, rollover_count:0,
+              billing_cycle_start: now()}.
+          Subsequent sessions (Profile screens, analyze flow, etc.)
+          will start with a full 40-analysis Pro quota and no rollover.
+
+          No source files modified by testing. Main agent: please
+          summarise and finish — Pro 40/month + 12-month accumulate
+          rollover + 480 cap are production-ready. Core replace-mode
+          (10 + 1-month carryover) remains unchanged and correct.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      tier_limits_rollover_v2 validated — 33/33 assertions PASS via
+      /app/tier_rollover_test.py against the preview URL.
+
+      All 6 review scenarios green:
+        1. Pro usage.limit is now 40 (was 100).
+        2. Core replace-mode rollover unchanged: 10 + (10-3) = 17
+           remaining, rollover=7.
+        3. Pro accumulate-mode rollover: rollover 30 + unused 35 = 65,
+           remaining = 40 + 65 = 105.
+        4. Pro rollover cap honored: 475 + 40 clamps to 480 (40*12),
+           remaining = 520.
+        5. Pro limit-reached returns allowed=false, remaining=0,
+           limit=40, message="Monthly limit reached. Upgrade or wait
+           for next cycle."
+        6. Trial unchanged (limit=3, is_lifetime), zero 500s anywhere.
+
+      DB-side effects verified for the rollover cases: in-place update
+      inside check_analysis_allowed resets analysis_count→0 and
+      persists the new rollover_count. Cleanup restored test-user-002
+      to {tier:pro, analysis_count:0, rollover_count:0,
+      billing_cycle_start:now()}. No credential or source changes.
+
+      Note: test_credentials.md still says "Pro: 100 analyses/month"
+      (line 38). That's a doc-only staleness — the live tier config
+      and behavior are 40/month. Worth updating when you touch the
+      credentials file next; not a functional issue.

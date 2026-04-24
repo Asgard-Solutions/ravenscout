@@ -61,15 +61,21 @@ TIERS = {
         "cloud_sync": False,
         "monthly_price": 7.99,
         "annual_price": 79.99,
+        # Rollover policy: how many billing cycles' worth of unused
+        # analyses a user is allowed to accumulate.
+        #   1  -> "carry over to next month only" (replace-mode)
+        #   12 -> "carry over for up to a year" (accumulate-mode)
+        "rollover_months": 1,
     },
     "pro": {
         "name": "Pro",
-        "analysis_limit": 100,  # Per month
+        "analysis_limit": 40,  # Per month
         "is_lifetime": False,
         "weather_api": True,
         "cloud_sync": True,
         "monthly_price": 14.99,
         "annual_price": 149.99,
+        "rollover_months": 12,
     },
 }
 
@@ -151,9 +157,19 @@ async def check_analysis_allowed(user: dict) -> dict:
             # Check if we need to reset the cycle
             now = datetime.now(timezone.utc)
             if now >= cycle_start + timedelta(days=30):
-                # Calculate rollover (max 1 month carryover, capped at tier limit)
-                unused = max(0, tier["analysis_limit"] - analysis_count)
-                new_rollover = min(unused, tier["analysis_limit"])
+                # Rollover policy:
+                #   rollover_months == 1  -> replace-mode: carry only
+                #     this cycle's unused into the next cycle (Core)
+                #   rollover_months > 1   -> accumulate-mode: add
+                #     this cycle's unused on top of existing rollover,
+                #     capped at N months' worth (Pro, N = 12)
+                unused_this_cycle = max(0, tier["analysis_limit"] - analysis_count)
+                rollover_months = tier.get("rollover_months", 1)
+                if rollover_months <= 1:
+                    new_rollover = min(unused_this_cycle, tier["analysis_limit"])
+                else:
+                    rollover_cap = tier["analysis_limit"] * rollover_months
+                    new_rollover = min(rollover_count + unused_this_cycle, rollover_cap)
 
                 new_cycle_start = cycle_start + timedelta(days=30)
                 while new_cycle_start + timedelta(days=30) < now:
