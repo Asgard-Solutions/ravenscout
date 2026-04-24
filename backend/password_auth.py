@@ -206,8 +206,11 @@ class ChangePasswordBody(BaseModel):
 
 class SetPasswordBody(BaseModel):
     """Used by Google-only users to attach a password for the first
-    time. No `current_password` because there isn't one yet."""
-    new_password: str = Field(..., min_length=10, max_length=256)
+    time. No `current_password` because there isn't one yet.
+    Intentionally NOT using Pydantic min_length on new_password so the
+    custom validate_password() error messages win (400 + specific
+    reason) instead of Pydantic's generic 422."""
+    new_password: str = Field(..., max_length=256)
 
 
 class UpdateProfileBody(BaseModel):
