@@ -41,21 +41,20 @@ const FRAMES: ImageSourcePropType[] = [
   require('../../assets/images/spinner/2.png'),
   require('../../assets/images/spinner/3.png'),
   require('../../assets/images/spinner/4.png'),
-  // 5-8 will slot in here automatically if you drop them in
-  // /app/frontend/assets/images/spinner/ and uncomment these lines:
-  // require('../../assets/images/spinner/5.png'),
-  // require('../../assets/images/spinner/6.png'),
-  // require('../../assets/images/spinner/7.png'),
-  // require('../../assets/images/spinner/8.png'),
+  require('../../assets/images/spinner/5.png'),
+  require('../../assets/images/spinner/6.png'),
+  require('../../assets/images/spinner/7.png'),
+  require('../../assets/images/spinner/8.png'),
 ];
 
 export interface RavenSpinnerProps {
   /** Width & height in px. Default 120 — matches the large
    * ActivityIndicator footprint the old spinner occupied. */
   size?: number;
-  /** ms per frame. Default 100 — with 8 frames that gives a full
-   * orbit every 800ms (spec-recommended). Lower (80ms) = faster
-   * pulse; higher (120ms) = more contemplative. */
+  /** ms per frame. Default 150 — with 8 frames that gives a full
+   * orbit every 1200ms. Feels deliberate and matches the "raven
+   * circling in thought" vibe. Lower (100ms) = faster pulse;
+   * higher (200ms) = slow-motion. */
   frameDuration?: number;
   /** Pass false to freeze on the current frame. Useful if you
    * eventually want to fade in/out without stopping the loop. */
@@ -68,7 +67,7 @@ export interface RavenSpinnerProps {
 
 export function RavenSpinner({
   size = 120,
-  frameDuration = 100,
+  frameDuration = 150,
   playing = true,
   accessibilityLabel = 'Loading',
   style,
