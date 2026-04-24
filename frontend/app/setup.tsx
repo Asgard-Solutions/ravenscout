@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Image, Alert, ActivityIndicator, Platform, KeyboardAvoidingView, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -13,6 +13,7 @@ import { HUNT_STYLES, type HuntStyleId, getHuntStyleLabel } from '../src/constan
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
 import { RavenSpinner } from '../src/components/RavenSpinner';
+import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
@@ -43,6 +44,8 @@ export default function SetupScreen() {
   const router = useRouter();
   const { isConnected } = useNetwork();
   const { sessionToken, refreshUser, user } = useAuth();
+  const scrollRef = useRef<ScrollView>(null);
+  useScrollToTopOnFocus(scrollRef);
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [limitReached, setLimitReached] = useState(false);
@@ -629,7 +632,7 @@ export default function SetupScreen() {
           ))}
         </View>
 
-        <ScrollView style={styles.scrollContent} contentContainerStyle={styles.scrollInner} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <ScrollView ref={scrollRef} style={styles.scrollContent} contentContainerStyle={styles.scrollInner} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {/* Step 0: Species */}
           {step === 0 && (
             <View>

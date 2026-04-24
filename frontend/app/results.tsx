@@ -12,6 +12,7 @@ import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservation
 import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
 import { loadHunt as loadHuntFromStore, finalizeProvisionalHunt } from '../src/media/huntPersistence';
 import { RavenSpinner } from '../src/components/RavenSpinner';
+import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 import { ImageOverlayCanvas } from '../src/components/ImageOverlayCanvas';
@@ -132,6 +133,7 @@ export default function ResultsScreen() {
   const [currentMapIndex, setCurrentMapIndex] = useState(0);
   const mapScrollRef = useRef<ScrollView>(null);
   const rootScrollRef = useRef<ScrollView>(null);
+  useScrollToTopOnFocus(rootScrollRef);
   const [loadFailed, setLoadFailed] = useState(false);
   const [persistWarning, setPersistWarning] = useState<string | null>(null);
   // Frozen analysis basis — the exact image + GPS the overlays were
