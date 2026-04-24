@@ -17,6 +17,11 @@ safe to call with any string without taking down a request.
 from typing import Dict, List, Optional, Tuple
 
 from .hog import HOG_PACK
+from .elk import ELK_PACK
+from .bear import BEAR_PACK
+from .moose import MOOSE_PACK
+from .antelope import ANTELOPE_PACK
+from .coyote import COYOTE_PACK
 from .pack import OverlayFallbackReason, SeasonalModifier, SpeciesPromptPack
 from .seasons import resolve_seasonal_modifier
 from .turkey import TURKEY_PACK
@@ -27,6 +32,11 @@ _PACKS: Tuple[SpeciesPromptPack, ...] = (
     WHITETAIL_PACK,
     TURKEY_PACK,
     HOG_PACK,
+    ELK_PACK,
+    BEAR_PACK,
+    MOOSE_PACK,
+    ANTELOPE_PACK,
+    COYOTE_PACK,
 )
 
 

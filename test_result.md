@@ -742,10 +742,144 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Pro tier limit → 40/month + 12-month rollover accumulate-mode"
+    - "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+species_expansion_v1:
+  - task: "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
+    implemented: true
+    working: true
+    file: "/app/backend/species_registry.py, /app/backend/species_prompts/{elk,bear,moose,antelope,coyote}.py, /app/backend/species_prompts/registry.py, /app/backend/species_prompts/__init__.py, /app/backend/server.py (GET /api/species, POST /api/analyze-hunt species gate)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Species expansion validated end-to-end against the preview URL
+          (EXPO_PUBLIC_BACKEND_URL =
+          https://tactical-auth-hub.preview.emergentagent.com). Harness:
+          /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
+          (the one FAIL is pre-existing stale pytest assertions, see
+          Scenario 6 below).
+
+          Scenario 1 — PROMPT-PACK RESOLUTION  (PASS)
+          ✅ resolve_species_pack("deer").canonical_id == "whitetail"
+          ✅ resolve_species_pack("turkey").canonical_id == "turkey"
+          ✅ resolve_species_pack("hog").canonical_id == "hog"
+          ✅ resolve_species_pack("elk").canonical_id == "elk"
+          ✅ resolve_species_pack("bear").canonical_id == "bear"
+          ✅ resolve_species_pack("moose").canonical_id == "moose"
+          ✅ resolve_species_pack("antelope").canonical_id == "antelope"
+          ✅ resolve_species_pack("coyote").canonical_id == "coyote"
+          ✅ is_supported_species(<each of the 8>) == True
+          ✅ resolve_species_pack("unicorn").is_fallback is True
+          Verified _PACKS tuple now has 8 entries in
+          /app/backend/species_prompts/registry.py.
+
+          Scenario 2 — GET /api/species (anonymous)  (PASS)
+          ✅ HTTP 200
+          ✅ user_tier == "trial" (anonymous → most restrictive)
+          ✅ species array length == 8 (waterfowl/dove/quail absent)
+          ✅ categories length == 3 with ids == {big_game, predator, bird}
+          ✅ all categories have non-empty labels
+          ✅ deer, turkey, hog -> locked:false
+          ✅ elk, bear, moose, antelope, coyote -> locked:true
+          ✅ every species has non-empty terminology
+             (male/female/young/group)
+          ✅ every species has form_fields object
+
+          Scenario 3 — GET /api/species as pro / core  (PASS)
+          Used Bearer test_session_rs_002 (test-user-002, tier=pro).
+          ✅ user_tier == "pro"; all 8 species locked=false
+          Then swapped test-user-002.tier -> "core" via direct Mongo
+          update, re-called:
+          ✅ user_tier == "core"; all 8 species still locked=false
+             (core unlocks everything currently enabled, as expected —
+             nothing is min_tier="pro" right now; waterfowl/dove/quail
+             are the pro-gated entries but they remain enabled=False).
+          ✅ Restored test-user-002.tier back to "pro".
+
+          Scenario 4 — /api/analyze-hunt tier gating (critical)  (PASS)
+          Using Bearer test_session_trial_001 (test-user-trial, tier=trial):
+          ✅ POST /api/analyze-hunt animal="elk" + tiny 256x256 PNG
+             -> 403 with detail exactly:
+             "Elk is a Core feature. Upgrade your plan to analyze it."
+             (contains "Core feature" per spec)
+          ✅ Same request with animal="deer" -> NOT 403 on species gate
+             (actual status was 200, end-to-end analysis succeeded;
+             any non-403 would have been acceptable per the brief)
+          Using Bearer test_session_rs_001 (pro) + animal="elk"
+             + tiny 256x256 PNG:
+          ✅ 200 with success=true — Pro user proceeds past the species
+             gate AND the full LLM analysis pipeline ran (overlays +
+             region_resolution + hunt_style_resolution emitted).
+
+          Scenario 5 — Legacy SPECIES_DATA shim  (PASS)
+          Ran in /app/backend:
+            python -c "from server import SPECIES_DATA; \
+                       print(sorted(SPECIES_DATA.keys()))"
+          ✅ Output: ['antelope','bear','coyote','deer','elk','hog',
+                      'moose','turkey']  (8 entries, all enabled species)
+          ✅ For every entry: name + icon + description populated,
+             behavior_rules is a non-empty list (lengths 5–6 per
+             species), and the rules are the same strings the prompt
+             packs expose (no drift — legacy_species_data() pulls
+             directly from resolve_species_pack).
+
+          Scenario 6 — Backward compat + existing pytest suite
+          ✅ GET /api/auth/me Bearer test_session_rs_001 -> 200
+             (user_id=test-user-001, tier=pro).
+          ✅ Zero NEW 500s attributable to this suite during the run
+             (the verify-otp 500 lines present in the log tail are
+             pre-existing entries from the pre-tz-fix era, already
+             documented in an earlier test_result.md entry).
+          ❌ /app/backend/tests/test_species_prompt_packs.py — 68
+             passing, 7 FAILING. The 7 failures are the OLD test
+             assertions that still insist elk/moose/bear/pronghorn
+             fall back to the GENERIC_FALLBACK_PACK:
+               * TestSpeciesResolution.test_unsupported_species_falls_back[elk]
+               * TestSpeciesResolution.test_unsupported_species_falls_back[moose]
+               * TestSpeciesResolution.test_unsupported_species_falls_back[bear]
+               * TestSpeciesResolution.test_unsupported_species_falls_back[pronghorn]
+               * TestSpeciesResolution.test_is_supported_species
+               * TestSpeciesResolution.test_inventory_shape
+               * TestAssembleSystemPrompt.test_unsupported_species_uses_fallback_in_assembled_prompt
+             Those assertions were WRITTEN BEFORE the 5 new packs
+             existed and are invalidated by the very feature under
+             review — they now (correctly!) prove that elk/moose/bear/
+             pronghorn resolve to their own first-class packs, which is
+             exactly the behavior we just shipped. Main agent needs to
+             update the test file (move elk/moose/bear/pronghorn out of
+             the "unsupported" param set, grow the expected inventory
+             length from 3 to 8, and add the 5 new species to the
+             assembled-prompt happy-path tests).
+             This is a stale-test issue, NOT a regression of the new
+             registry / packs / gating — all of those are verified
+             working end-to-end above. Does not block sign-off.
+
+          Security summary
+          ✅ Species tier gating is enforced at the /api/analyze-hunt
+             layer (not only in the UI): trial users POSTing elk /
+             bear / moose / antelope / coyote are rejected with 403
+             before the LLM call.
+          ✅ The 403 message includes "Core feature" + species name +
+             "Upgrade your plan" — matches the review spec.
+          ✅ Deer/turkey/hog remain usable for trial users
+             (not gated).
+          ✅ Hidden species (waterfowl/dove/quail, enabled=False) are
+             invisible to the catalog endpoint on every tier.
+
+          No source files modified by the testing agent. Action item for
+          main agent: update tests/test_species_prompt_packs.py to
+          reflect the expanded canonical inventory (see Scenario 6
+          failure list). The runtime feature itself is
+          production-ready.
+
+
 
 password_auth_set_password:
   - task: "POST /api/auth/set-password — first-time password attach for Google-only users"
@@ -2060,3 +2194,61 @@ agent_communication:
       (line 38). That's a doc-only staleness — the live tier config
       and behavior are 40/month. Worth updating when you touch the
       credentials file next; not a functional issue.
+
+  - agent: "testing"
+    message: |
+      Species expansion v1 validated end-to-end against the preview URL.
+      Harness: /app/species_expansion_test.py — 40 PASS / 1 non-blocking
+      FAIL (stale pytest assertions, details below).
+
+      ✅ Scenario 1 — prompt-pack resolution: all 8 species
+         (deer/turkey/hog/elk/bear/moose/antelope/coyote) resolve to
+         their own non-fallback packs with matching canonical_ids;
+         `unicorn` correctly falls back.
+      ✅ Scenario 2 — GET /api/species (anonymous): 200,
+         user_tier="trial", 8 species, 3 categories, correct
+         locked/unlocked split (deer/turkey/hog unlocked;
+         elk/bear/moose/antelope/coyote locked), waterfowl/dove/quail
+         hidden (enabled=False), terminology + form_fields populated
+         on every entry.
+      ✅ Scenario 3 — GET /api/species for pro (test_session_rs_002)
+         and core (swapped via Mongo): all 8 unlocked both ways.
+         Restored test-user-002 to tier=pro post-run.
+      ✅ Scenario 4 — /api/analyze-hunt tier gating (critical):
+         trial+elk -> 403 with detail "Elk is a Core feature. Upgrade
+         your plan to analyze it." (matches spec); trial+deer -> 200
+         (end-to-end analysis ran, not species-gated); pro+elk -> 200
+         success=true (Pro proceeds past gate and completes analysis).
+      ✅ Scenario 5 — legacy SPECIES_DATA shim: 8 keys exactly, every
+         entry has name + icon + description + non-empty
+         behavior_rules list (lengths 5-6).
+      ✅ Scenario 6 — GET /api/auth/me test_session_rs_001 -> 200.
+         Zero NEW 500s in backend logs during the run.
+      ❌ Scenario 6 — existing pytest suite
+         (tests/test_species_prompt_packs.py): 68 passing, 7 FAILING.
+         The 7 failures are stale assertions that still insist
+         elk/moose/bear/pronghorn resolve to GENERIC_FALLBACK_PACK —
+         they were written before the 5 new packs existed and are
+         invalidated by the very feature under review. NOT a
+         regression of the new code; the runtime feature is correct.
+         Main agent needs to update the test file:
+           * TestSpeciesResolution.test_unsupported_species_falls_back
+             — drop `elk`, `moose`, `bear`, `pronghorn` from the
+             param list (keep `squirrel`, `whitetail_bobcat`, None, "",
+             "   ").
+           * TestSpeciesResolution.test_is_supported_species — expand
+             its "supported" expectations to include elk/bear/moose/
+             antelope/coyote.
+           * TestSpeciesResolution.test_inventory_shape — inventory
+             length is now 8 (was 3).
+           * TestAssembleSystemPrompt.
+             test_unsupported_species_uses_fallback_in_assembled_prompt
+             — drop the newly-supported species from the "unsupported"
+             param set.
+
+      No source files modified by testing. test_result.md updated with
+      a new `species_expansion_v1` task block. Main agent: please
+      update tests/test_species_prompt_packs.py to match the new
+      inventory; the species registry / prompt packs / /api/species /
+      /api/analyze-hunt gating are production-ready.
+

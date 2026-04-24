@@ -765,44 +765,13 @@ class AnalyzeResponse(BaseModel):
 # ============================================================
 # SPECIES DATA (unchanged)
 # ============================================================
-SPECIES_DATA = {
-    "deer": {
-        "name": "Whitetail Deer", "icon": "deer",
-        "description": "Focus on bedding-to-feeding transitions. Prioritize funnels, saddles, and edges. Wind advantage is critical.",
-        "behavior_rules": [
-            "Deer move from bedding to feeding areas during dawn and dusk transitions",
-            "Funnels, saddles, and terrain edges concentrate deer movement",
-            "Wind direction is critical - always set up downwind of expected travel",
-            "Mature bucks use cover and terrain to stay hidden during daylight",
-            "Water sources are magnets during hot weather",
-            "Rut activity changes movement patterns significantly"
-        ]
-    },
-    "turkey": {
-        "name": "Wild Turkey", "icon": "turkey",
-        "description": "Focus on roost-to-strut zones. Open areas near cover edges. Morning setup positioning is key.",
-        "behavior_rules": [
-            "Turkeys roost in tall trees, often near water or ridgelines",
-            "Morning fly-down leads to strut zones in open areas",
-            "Set up between roost and open areas like fields or clearings",
-            "Turkeys prefer edges between cover and open ground",
-            "Avoid setting up too close to roost trees",
-            "Afternoon turkeys return toward roost through familiar travel routes"
-        ]
-    },
-    "hog": {
-        "name": "Wild Hog", "icon": "hog",
-        "description": "Focus on water, thick cover, and feeding zones. Night movement tendencies. Ambush near trails and crossings.",
-        "behavior_rules": [
-            "Hogs are primarily nocturnal, most active at dusk and dawn",
-            "Water and wallowing areas are critical attractants",
-            "Thick cover provides daytime bedding areas",
-            "Hogs travel established trails between bedding, water, and food",
-            "Agricultural fields and food plots attract hog activity",
-            "Trail crossings and pinch points are ideal ambush locations"
-        ]
-    }
-}
+# Legacy SPECIES_DATA dict — now sourced from `species_registry` so
+# adding a new species only requires a registry entry + prompt pack.
+# The shape (`{id: {name, icon, description, behavior_rules}}`) is
+# preserved for the analysis pipeline callers.
+from species_registry import legacy_species_data
+
+SPECIES_DATA = legacy_species_data()
 
 
 # ============================================================
@@ -1042,11 +1011,44 @@ async def health_db():
         return {"status": "error", "database": "disconnected", "error": str(e)}
 
 @api_router.get("/species")
-async def get_species():
-    species_list = []
-    for key, data in SPECIES_DATA.items():
-        species_list.append({"id": key, "name": data["name"], "description": data["description"], "icon": data["icon"]})
-    return {"species": species_list}
+async def get_species(request: Request):
+    """Return the species catalog for the signed-in user.
+
+    - Always includes every currently ``enabled`` species.
+    - Each entry carries a ``locked`` flag that the UI uses to decide
+      whether to route to the subscription screen on tap.
+    - For unauthenticated callers, locks are computed against the
+      ``trial`` tier (most restrictive) so the public schema is the
+      same shape.
+    - ``categories`` is the stable UI grouping order.
+    """
+    # Best-effort user fetch — anonymous callers still get a valid
+    # tier-locked catalog (mostly used by the setup screen once the
+    # user is authed, but we want the endpoint usable for screenshots).
+    tier = "trial"
+    try:
+        user = await get_current_user(request)
+        tier = user.get("tier", "trial")
+    except HTTPException:
+        tier = "trial"
+
+    from species_registry import (
+        list_species,
+        is_species_unlocked,
+        to_api_dict,
+        get_categories,
+    )
+
+    catalog = []
+    for s in list_species(include_disabled=False, user_tier=tier, only_unlocked=False):
+        locked = not is_species_unlocked(s.id, tier)
+        catalog.append(to_api_dict(s, locked=locked))
+
+    return {
+        "user_tier": tier,
+        "categories": get_categories(),
+        "species": catalog,
+    }
 
 
 @api_router.post("/analyze-hunt")
@@ -1066,8 +1068,21 @@ async def analyze_hunt(request: Request):
     if not usage["allowed"]:
         return AnalyzeResponse(success=False, error=usage["message"], usage=usage)
 
-    # Check weather API access for trial users
+    # Enforce species tier gating — don't let a trial user bypass the
+    # UI lock and POST animal="elk" directly.
     tier_key = user.get("tier", "trial")
+    from species_registry import is_species_unlocked, get_species_by_id
+    requested_species = (analyze_req.conditions.animal or "").strip().lower()
+    if requested_species and not is_species_unlocked(requested_species, tier_key):
+        cfg = get_species_by_id(requested_species)
+        species_name = cfg.name if cfg else requested_species.title()
+        min_tier = cfg.min_tier.title() if cfg else "Core"
+        raise HTTPException(
+            status_code=403,
+            detail=f"{species_name} is a {min_tier} feature. Upgrade your plan to analyze it.",
+        )
+
+    # Check weather API access for trial users
 
     try:
         logger.info(f"Analyzing hunt for {analyze_req.conditions.animal} (user: {user['user_id']}, tier: {tier_key}, images: 1+{len(analyze_req.additional_images or [])})")
