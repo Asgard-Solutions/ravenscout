@@ -583,7 +583,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://panorama-memory-fix.preview.emergentagent.com).
+          https://tactical-auth-hub.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -742,10 +742,232 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Railway-readiness refactor (auth/google + OpenAI direct LLM + deploy files)"
-  stuck_tasks: []
+    - "Password reset OTP flow (request-password-reset, verify-otp, reset-password)"
+  stuck_tasks:
+    - "Password reset OTP flow (request-password-reset, verify-otp, reset-password)"
   test_all: false
   test_priority: "high_first"
+
+password_auth:
+  - task: "POST /api/auth/register + /api/auth/login (bcrypt, session minting)"
+    implemented: true
+    working: true
+    file: "/app/backend/password_auth.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Password auth endpoints wired into api_router via
+          build_password_auth_router(db, get_current_user). Please verify:
+          1. POST /api/auth/register with a fresh email+strong password
+             returns 200 with session_token, user_id, email, name.
+             Password policy errors (short, no upper, no digit, no symbol)
+             each return 400 with a clear `detail` string.
+          2. POST /api/auth/register with an existing email (that already
+             has password_hash) returns 409.
+          3. POST /api/auth/login valid creds -> 200 + session_token;
+             wrong password -> 401 "Invalid email or password." (same
+             wording for unknown-email case — no enumeration).
+          4. The session_token returned by register/login works
+             immediately against GET /api/auth/me (Bearer).
+          5. POST /api/auth/change-password requires Bearer; wrong
+             current_password -> 401; success -> 200 and old non-current
+             sessions are invalidated.
+      - working: true
+        agent: "testing"
+        comment: |
+          REGISTER + LOGIN + CHANGE-PASSWORD all verified end-to-end
+          against the preview URL. Harness: /app/password_auth_test.py.
+
+          POST /api/auth/register
+          ✅ Fresh email `pwtest_<uuid>@example.com` / "StrongPass1!" /
+             name="PW Test" -> 200 with
+             {user_id, email, name, session_token, email_verified:false}.
+          ✅ Email is lowercased in the response.
+          ✅ session_token minted — immediately usable on /api/auth/me.
+          ✅ pw="short1!" -> 422 (pydantic min_length=10 fires before
+             validate_password — still a proper user-facing rejection,
+             no 500).
+          ✅ pw="lowercase1!" (no upper) -> 400 with
+             detail="Password must include an uppercase letter."
+          ✅ pw="UPPERCASE1!" (no lower) -> 400 with
+             detail="Password must include a lowercase letter."
+          ✅ pw="NoDigitsAll!" (no digit) -> 400 with
+             detail="Password must include a number."
+          ✅ pw="NoSymbols123A" (no symbol) -> 400 with
+             detail="Password must include a symbol (e.g. !@#$)."
+          ✅ Re-register same email -> 409
+             detail="An account already exists for this email."
+
+          POST /api/auth/login
+          ✅ Correct creds -> 200 with session_token.
+          ✅ Wrong password -> 401
+             detail="Invalid email or password."
+          ✅ Unknown email -> 401 with IDENTICAL detail text
+             (no enumeration — spec verified).
+
+          POST /api/auth/change-password (Bearer)
+          ✅ Wrong current_password -> 401
+             detail="Current password is incorrect."
+          ✅ Correct current_password + new="ThirdPassX3#" -> 200 {ok:true}.
+          ✅ Login with old pw -> 401; login with new pw -> 200.
+          ✅ Without Bearer -> 401.
+
+          Zero 500s in this group. No source modifications.
+
+  - task: "Password reset OTP flow (request-password-reset, verify-otp, reset-password)"
+    implemented: true
+    working: false
+    file: "/app/backend/password_auth.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          MSGRAPH_* env vars are intentionally blank in dev; the backend
+          falls back to ConsoleMailer which logs the OTP to
+          /var/log/supervisor/backend.out.log. Please verify:
+          1. POST /api/auth/request-password-reset always returns 200
+             (anti-enumeration), including for unknown emails.
+          2. For a known email, a 6-digit OTP row is created in the
+             password_reset_otps collection and the OTP itself is
+             visible in the console mailer log (ConsoleMailer emits
+             "Would send email" with the code in the text body).
+          3. POST /api/auth/verify-otp with the captured OTP -> 200
+             and a reset_token; wrong otp -> 401; after 5 wrong tries
+             the code is purged + 429.
+          4. POST /api/auth/reset-password with the reset_token + a
+             strong new password -> 200 + new session_token; that
+             token works on /api/auth/me; the old pw no longer logs in.
+      - working: false
+        agent: "testing"
+        comment: |
+          CRITICAL BUG — /api/auth/verify-otp returns 500 on EVERY call,
+          which also blocks /api/auth/reset-password (unreachable without
+          a reset_token from verify-otp). The entire password-reset flow
+          is broken end-to-end.
+
+          Request-password-reset (upstream) works correctly:
+          ✅ POST /api/auth/request-password-reset for known email
+             -> 200 {ok:true} (and ConsoleMailer logged the 6-digit OTP).
+          ✅ POST /api/auth/request-password-reset for unknown email
+             -> 200 {ok:true} (anti-enumeration honored).
+          ✅ OTP captured from ConsoleMailer log (see NOTE below about
+             log path — review said .out.log, actual path is .err.log).
+
+          Verify-otp is broken:
+          ❌ POST /api/auth/verify-otp with ANY otp (right or wrong)
+             returns HTTP 500 "Internal Server Error".
+          ❌ 5-wrong-attempt lockout path unreachable — we observed
+             [500,500,500,500,500,500] instead of the expected
+             [401,401,401,401,401,429].
+          ❌ After-purge state unreachable — returned 500 instead of
+             the expected 400 "No active reset code. Request a new one."
+
+          ROOT CAUSE (from /var/log/supervisor/backend.err.log):
+            File "/app/backend/password_auth.py", line 370, in verify_otp
+              if not expires_at or expires_at < datetime.now(timezone.utc):
+            TypeError: can't compare offset-naive and offset-aware datetimes
+
+          The `expires_at` stored via
+            db.password_reset_otps.insert_one({
+              ...
+              "expires_at": datetime.now(timezone.utc) + timedelta(minutes=15),
+            })
+          is a tz-AWARE Python datetime, but MongoDB's BSON Date type is
+          tz-NAIVE, and motor returns it as a naive datetime on read.
+          The comparison `expires_at < datetime.now(timezone.utc)` then
+          raises TypeError.
+
+          The isinstance(expires_at, str) branch at lines 365-369 handles
+          the string case but NOT the tz-naive datetime case that Mongo
+          actually returns.
+
+          SUGGESTED FIX (password_auth.py — main agent to apply):
+            After retrieving `expires_at` in BOTH
+              verify_otp  (~line 364-370)
+              reset_password (~line 400-406)
+            normalize tzinfo before the comparison, e.g.:
+                if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+            Alternatively compare both sides as naive UTC:
+                now_naive = datetime.utcnow()
+                if not expires_at or expires_at < now_naive: ...
+            (First option is cleaner.)
+
+          Exact failing request body (for debugging):
+            POST https://tactical-auth-hub.preview.emergentagent.com/api/auth/verify-otp
+            Content-Type: application/json
+            {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
+              -> 500 "Internal Server Error"
+            {"email":"pwtest_b1ffa166ad@example.com","otp":"000000"}   <- wrong
+              -> 500 "Internal Server Error"
+
+          NOTE on ConsoleMailer log location:
+          The review instruction said the OTP is logged to
+          /var/log/supervisor/backend.out.log, but in this environment
+          the Python logger writes to stderr by default and supervisor
+          pipes stderr to backend.err.log. The OTP line
+          "[ConsoleMailer] Would send email:..." actually appears in
+          backend.err.log (verified — 2+ entries per run). Harness
+          updated to scan both paths. This is just a doc
+          inaccuracy — it does NOT affect production (MSGraph mailer
+          is the prod path), just dev testing instructions.
+
+          Once the tz fix lands in password_auth.py, please re-run the
+          harness; all remaining assertions in this group are scripted
+          and ready (verify-otp 401/200/429, reset-password 200 with
+          new session_token, old pw -> 401, new pw -> 200, old-session
+          invalidation).
+
+  - task: "Profile endpoints — PATCH /api/users/me + DELETE /api/users/me"
+    implemented: true
+    working: true
+    file: "/app/backend/password_auth.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          1. PATCH /api/users/me with {"name":"New Name"} + Bearer -> 200
+             and subsequent GET /api/auth/me reflects the change.
+          2. DELETE /api/users/me with Bearer -> 200 {ok:true,deleted:1};
+             subsequent GET /api/auth/me with the same Bearer -> 401.
+          3. Both endpoints -> 401 without Bearer.
+      - working: true
+        agent: "testing"
+        comment: |
+          All profile contract behaviors verified against preview URL
+          using a freshly-registered disposable user.
+
+          PATCH /api/users/me
+          ✅ Without Bearer -> 401 "Not authenticated".
+          ✅ With Bearer, body {"name":"Renamed User"} -> 200.
+          ✅ Subsequent GET /api/auth/me returns name="Renamed User"
+             (change durably persisted).
+
+          DELETE /api/users/me
+          ✅ Without Bearer -> 401.
+          ✅ With Bearer -> 200 {"ok":true,"deleted":1}.
+          ✅ Subsequent GET /api/auth/me with the SAME Bearer -> 401
+             (cascade delete of user + sessions honored).
+
+          Regression (test_session_rs_001 still works)
+          ✅ After seeding the missing test-user-001 user document (the
+             session row already existed in user_sessions but the users
+             row had been dropped from the DB — pre-existing state drift,
+             not caused by this suite), GET /api/auth/me with Bearer
+             test_session_rs_001 -> 200 with tier=pro and
+             user_id=test-user-001. test_credentials.md unchanged.
+
+test_plan_archive_railway:
 
 backend_railway_readiness:
   - task: "POST /api/auth/google — portable Google OAuth (replaces Emergent Auth for Railway)"
@@ -909,7 +1131,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://panorama-memory-fix.preview.emergentagent.com/api). Test
+      URL (https://tactical-auth-hub.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -1214,3 +1436,157 @@ agent_communication:
 
       No source files modified. No stuck tasks. Main agent: please
       summarise and finish — Hunts CRUD is production-ready.
+
+  - agent: "main"
+    message: |
+      Feb 2026 — Password Auth + Profile + Biometric wiring complete.
+
+      Changes this round:
+      1. /app/backend/.env — added MSGRAPH_TENANT_ID / CLIENT_ID /
+         CLIENT_SECRET / SENDER placeholders + EMAIL_PROVIDER=auto.
+         When blank, password_auth.py's ConsoleMailer logs the OTP to
+         backend.out.log (so the reset flow is fully testable without
+         real Graph creds).
+      2. /app/frontend/app/index.tsx — replaced the top-right sign-out
+         icon with a circular profile avatar (Google photo → fallback
+         initial) that routes to /profile. Sign-out now lives inside
+         the profile screen.
+      3. /app/frontend/app/login.tsx — after any successful password or
+         Google sign-in, offers one-tap biometric enrollment if the
+         device has Face ID / Fingerprint enrolled and the user hasn't
+         opted in yet. Stores the current session token in
+         SecureStore under a biometric-protected key.
+
+      Please validate the password_auth task group:
+        • /api/auth/register + /api/auth/login (bcrypt)
+        • /api/auth/request-password-reset + verify-otp + reset-password
+          (OTP is in ConsoleMailer log since MSGRAPH_* are blank)
+        • /api/auth/change-password
+        • PATCH /api/users/me + DELETE /api/users/me
+      Regression check: GET /api/auth/me must still work for existing
+      test_session_rs_001 Bearer and for tokens freshly minted by
+      register/login/reset-password.
+
+  - agent: "testing"
+    message: |
+      password_auth suite validated against the preview URL
+      (EXPO_PUBLIC_BACKEND_URL = https://tactical-auth-hub.preview.emergentagent.com).
+      Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
+
+      SCENARIO-BY-SCENARIO RESULTS
+
+        1) REGISTER (POST /api/auth/register)                    ✅ PASS
+           - Fresh email "pwtest_<uuid>@example.com" / "StrongPass1!"
+             / name="PW Test" -> 200 {user_id, email (lowercased),
+             name, session_token, email_verified:false}.
+           - All 5 weak-password negatives each return a proper
+             rejection with a user-facing detail string:
+               "short1!"      -> 422 (pydantic min_length fires first)
+               "lowercase1!"  -> 400 "...include an uppercase letter."
+               "UPPERCASE1!"  -> 400 "...include a lowercase letter."
+               "NoDigitsAll!" -> 400 "...include a number."
+               "NoSymbols123A"-> 400 "...include a symbol (e.g. !@#$)."
+           - Re-register same email -> 409
+             "An account already exists for this email."
+
+        2) LOGIN (POST /api/auth/login)                           ✅ PASS
+           - Correct creds -> 200 with session_token.
+           - Wrong password -> 401 "Invalid email or password."
+           - Unknown email -> 401 with IDENTICAL detail text
+             (no enumeration — verified).
+
+        3) GET /api/auth/me with fresh session                    ✅ PASS
+           - Bearer from register call -> 200 and echoes registered
+             email. Post-reset and post-login bearers also work on
+             /auth/me (verified where reachable).
+
+        4) REQUEST PASSWORD RESET                                 ✅ PASS
+           (POST /api/auth/request-password-reset)
+           - Unknown email -> 200 {ok:true} (anti-enumeration).
+           - Known email -> 200 {ok:true}; ConsoleMailer line
+             "[ConsoleMailer] Would send email:" appeared in
+             /var/log/supervisor/backend.err.log carrying the
+             6-digit OTP in the text body — successfully regex-
+             captured ("password reset code is: NNNNNN").
+             NOTE: review instructions said backend.out.log, but
+             Python's root logger writes to stderr -> supervisor
+             routes that to .err.log. Harness scans both for
+             robustness.
+
+        5) VERIFY OTP (POST /api/auth/verify-otp)                 ❌ FAIL
+           CRITICAL — verify-otp returns HTTP 500 on EVERY call:
+           - Wrong OTP ("000000")  -> 500 Internal Server Error
+           - Correct captured OTP  -> 500 Internal Server Error
+           - Lockout sub-test (6 consecutive wrong OTPs on a
+             fresh reset request) -> [500,500,500,500,500,500]
+             instead of the expected [401,401,401,401,401,429].
+           Example failing request body:
+             POST /api/auth/verify-otp
+             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}
+             -> 500 "Internal Server Error"
+
+           ROOT CAUSE (from backend.err.log traceback — 100%
+           reproducible):
+             File "/app/backend/password_auth.py", line 370, in verify_otp
+               if not expires_at or expires_at < datetime.now(timezone.utc):
+             TypeError: can't compare offset-naive and offset-aware datetimes
+
+           password_reset_otps docs insert "expires_at" as a
+           tz-AWARE datetime, but MongoDB's BSON Date is tz-NAIVE,
+           so motor returns it as a naive datetime. The guard at
+           lines 365-369 only handles the (expires_at as str)
+           case and leaves the native-datetime tz mismatch
+           unhandled.
+
+           SUGGESTED FIX (for main agent — do NOT re-fix if
+           already applied):
+             After reading `expires_at` in BOTH verify_otp and
+             reset_password, normalize tz:
+                 if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                     expires_at = expires_at.replace(tzinfo=timezone.utc)
+             (Alternatively compare both sides as naive UTC.)
+             The same bug almost certainly exists at ~line 406 in
+             reset_password — please patch both symmetrically.
+
+        6) RESET PASSWORD (POST /api/auth/reset-password)         ❌ BLOCKED
+           Unreachable — verify-otp never yields a reset_token.
+           Will verify once #5 is fixed. Harness scenarios are
+           scripted and ready.
+
+        7) CHANGE PASSWORD (POST /api/auth/change-password)       ✅ PASS
+           - Wrong current_password -> 401
+             "Current password is incorrect."
+           - current="StrongPass1!", new="ThirdPassX3#" -> 200 {ok:true}.
+           - Login old pw -> 401; login new pw -> 200.
+           - Without Bearer -> 401.
+
+        8) PROFILE (PATCH + DELETE /api/users/me)                 ✅ PASS
+           - PATCH without Bearer -> 401; DELETE without Bearer -> 401.
+           - PATCH {name:"Renamed User"} -> 200; subsequent
+             GET /api/auth/me returns name="Renamed User".
+           - DELETE -> 200 {ok:true, deleted:1}; subsequent
+             GET /api/auth/me with same Bearer -> 401.
+             (Cascade delete of users + user_sessions confirmed.)
+
+        9) REGRESSION — existing test_session_rs_001               ✅ PASS
+           - Initially 401 "User not found" because the users row
+             for test-user-001 had been dropped from the DB (the
+             session_token row in user_sessions still existed).
+             Pre-existing state drift — NOT caused by this suite.
+             Re-seeded the missing user doc directly in Mongo
+             (tier=pro, email=test@ravenscout.app) per
+             /app/memory/test_credentials.md.
+           - After re-seed: GET /api/auth/me with Bearer
+             test_session_rs_001 -> 200 {user_id:"test-user-001",
+             tier:"pro", ...}. No test_credentials.md changes.
+
+      ZERO 500s outside verify-otp. No source files modified by
+      the testing agent. No auth bypass, no enumeration, no cross-
+      user data leaks. Change-password correctly keeps the current
+      token and invalidates *other* sessions.
+
+      BLOCKING BUG: /app/backend/password_auth.py verify_otp (line
+      370) + reset_password (line 406) tz-comparison TypeError.
+      Please apply the suggested fix above and re-call the testing
+      agent — the harness will re-run scenarios 5 and 6 end-to-end.
+

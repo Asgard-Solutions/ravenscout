@@ -1504,6 +1504,12 @@ async def delete_hunt(hunt_id: str, request: Request):
 # ============================================================
 # APP SETUP
 # ============================================================
+
+# Mount password/email + profile endpoints onto the /api router.
+# Factored out into password_auth.py so server.py stays navigable.
+from password_auth import build_password_auth_router
+api_router.include_router(build_password_auth_router(db, get_current_user))
+
 app.include_router(api_router)
 
 app.add_middleware(
