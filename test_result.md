@@ -741,10 +741,139 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "POST /api/auth/set-password (Google-only → attach password)"
+    - "GET /api/auth/me has_password flag"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+password_auth_set_password:
+  - task: "POST /api/auth/set-password — first-time password attach for Google-only users"
+    implemented: true
+    working: true
+    file: "/app/backend/password_auth.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoint wired. Requires a valid session (Bearer) but NO
+          current_password. Only succeeds if the user has no password_hash
+          yet. Also added `has_password` to GET /api/auth/me so the UI
+          can show "Set Password" vs "Change Password".
+      - working: true
+        agent: "testing"
+        comment: |
+          POST /api/auth/set-password + has_password flag verified end-to-end
+          against the preview URL (EXPO_PUBLIC_BACKEND_URL). Harness:
+          /app/set_password_test.py — 24/26 assertions PASS. The 2 remaining
+          items are a documented MINOR (see end of this comment) — zero
+          critical issues and zero 500s on /api/auth/set-password.
+
+          Setup note: when the harness started, the test-user-002 user
+          DOCUMENT had been dropped from the DB by earlier profile-delete
+          tests, even though the user_sessions row for test_session_rs_002
+          was still present (session expires +30 days). Testing agent
+          re-seeded the user doc (user_id=test-user-002 / email=
+          test2@ravenscout.app / tier=pro / analysis_count=0 / rollover=0)
+          via a direct Mongo upsert to restore parity with
+          /app/memory/test_credentials.md. This is a fixture-drift fix, NOT
+          a functional fix to the endpoint under test.
+
+          === SCENARIO 1 — Google-only user (password_hash $unset) ===
+          Pre: db.users.update_one({email:"test2@ravenscout.app"},
+                                   {"$unset":{"password_hash":""}}).
+          ✅ 1a  GET  /api/auth/me   Bearer test_session_rs_002
+                 -> 200, has_password=false (bool), field present.
+          ✅ 1b  POST /api/auth/set-password {"new_password":"NewStrong1!"}
+                 -> 200 body {"ok":true}.
+          ✅ 1c  GET  /api/auth/me -> 200 has_password=true.
+          ✅ 1d  POST /api/auth/login
+                 {"email":"test2@ravenscout.app","password":"NewStrong1!"}
+                 -> 200 with session_token="rs_<hex>" (freshly minted).
+          ✅ 1e  Second POST /api/auth/set-password with a different strong
+                 pw -> 409 with exact detail
+                 "This account already has a password. Use Change Password
+                  instead." (substring "already has a password" asserted)
+
+          === SCENARIO 2 — Weak password validation ===
+          Pre: re-$unset password_hash so endpoint reaches validate_password.
+          ✅ "lowercase1!"   -> 400 detail="Password must include an uppercase letter."
+          ✅ "UPPERCASE1!"   -> 400 detail="Password must include a lowercase letter."
+          ✅ "NoDigitsAll!"  -> 400 detail="Password must include a number."
+          ✅ "NoSymbols123A" -> 400 detail="Password must include a symbol (e.g. !@#$)."
+          ⚠️ Minor: "short1!" (7 chars) returns 422 (Pydantic
+             string_too_short) INSTEAD OF 400 with the custom
+             "Password must be at least 10 characters long." This is because
+             SetPasswordBody defines new_password with Field(..., min_length=10),
+             so Pydantic validation fires BEFORE validate_password can emit
+             the custom message. The user still gets a proper rejection (no
+             500), and the prior RegisterBody flow has identical behavior
+             (already documented in the password_auth task as acceptable).
+             Low impact — functionally correct rejection, just a different
+             status code + message shape than the review spec. If you want
+             full parity with the spec (400 + custom detail), drop
+             min_length=10 from SetPasswordBody.new_password and let
+             validate_password handle ALL length/strength errors.
+
+          === SCENARIO 3 — Auth ===
+          ✅ No Bearer                     -> 401 "Not authenticated"
+          ✅ Bearer "garbage"              -> 401 "Invalid session"
+          ✅ Empty body {} with Bearer      -> 422 (missing new_password),
+                                              NOT 500.
+          ✅ No body at all with Bearer     -> 422, NOT 500.
+
+          === SCENARIO 4 — Regression ===
+          ✅ GET /api/auth/me Bearer test_session_rs_001 -> 200 with
+             has_password present as boolean (actual value: false — user 001
+             is currently Google-only; either true or false is acceptable
+             per the review, the assertion is just that the field exists
+             and is a bool).
+          ✅ Zero 500s on /api/auth/set-password across the whole run
+             (verified via /var/log/supervisor/backend.out.log — only
+             200/400/401/409/422 status codes recorded against
+             POST /api/auth/set-password during the testing window).
+             Pre-existing 500s in the log are all from older
+             /api/auth/verify-otp runs before the tz-naive fix; they do
+             NOT recur.
+
+          === RESTORATION STATE ===
+          After the suite, testing agent restored test-user-002 to
+          Google-only state by RE-UNSETTING password_hash — so the user
+          is still a useful Google-only fixture for future runs (matches
+          its documented intent in test_credentials.md). Session token
+          test_session_rs_002 remains valid. tier=pro preserved. If you
+          want to sign in with email+password again, call
+          /api/auth/set-password once more with a strong pw.
+
+          No source files modified by testing. Main agent: please
+          summarise and finish — /api/auth/set-password is
+          production-ready; optionally drop min_length=10 from the
+          Pydantic body if you want 400-with-custom-detail parity for
+          the short-password case (low priority).
+
+          Please verify:
+
+          1. A Google-only user (has no password_hash):
+             a) GET /api/auth/me -> 200 with `has_password: false`.
+             b) POST /api/auth/set-password with a strong pw -> 200 {ok:true}.
+             c) GET /api/auth/me now returns `has_password: true`.
+             d) POST /api/auth/login with that email+pw -> 200 session_token.
+             e) Second call to /api/auth/set-password -> 409
+                "This account already has a password. Use Change Password instead."
+
+          2. Weak password validation: shortpw, no-upper, no-digit, no-symbol
+             each return 400 with a clear `detail` string.
+
+          3. Without Bearer -> 401.
+
+          Setup note: there's no Google-only test user seeded. Create one
+          directly in Mongo (or register a fresh account, then manually
+          `users.update_one({email:...}, {"$unset": {"password_hash": 1}})`
+          to simulate a Google-only user) to exercise scenario 1.
 
 password_auth:
   - task: "POST /api/auth/register + /api/auth/login (bcrypt, session minting)"
@@ -1688,4 +1817,73 @@ agent_communication:
       and stuck_tasks cleared. Scenarios 1-4 and 7-9 were NOT retested
       (already passing per prior run). Main agent: please summarise
       and finish — password-reset OTP flow is production-ready.
+
+
+  - agent: "testing"
+    message: |
+      POST /api/auth/set-password + has_password flag on /api/auth/me
+      VERIFIED end-to-end against EXPO_PUBLIC_BACKEND_URL. Harness:
+      /app/set_password_test.py — 24/26 assertions PASS, 0 critical
+      failures, 0 500s on /api/auth/set-password.
+
+      Pass/fail per review scenario:
+
+        SCENARIO 1 — Google-only user (password_hash $unset)
+          1a GET /api/auth/me -> 200 has_password:false           ✅
+          1b POST /api/auth/set-password NewStrong1! -> 200 ok    ✅
+          1c GET /api/auth/me -> has_password:true                ✅
+          1d POST /api/auth/login with new pw -> 200 session_token✅
+          1e Second set-password -> 409 "already has a password"  ✅
+
+        SCENARIO 2 — Weak passwords (after re-unset password_hash)
+          "lowercase1!"    -> 400 "Password must include an uppercase letter."  ✅
+          "UPPERCASE1!"    -> 400 "Password must include a lowercase letter."   ✅
+          "NoDigitsAll!"   -> 400 "Password must include a number."             ✅
+          "NoSymbols123A"  -> 400 "Password must include a symbol (e.g. !@#$)." ✅
+          "short1!"        -> 422 (Pydantic string_too_short)                    ⚠️ Minor
+            ↑ Not 400. Root cause: SetPasswordBody defines new_password with
+              Field(..., min_length=10), so Pydantic validates BEFORE
+              validate_password can emit the custom "Password must be at
+              least 10 characters long." message. Same behavior as
+              RegisterBody (already documented as acceptable in the existing
+              password_auth task). The user still gets a proper rejection
+              (no 500). If you want 400 + custom detail parity, drop
+              min_length=10 from SetPasswordBody.new_password and let
+              validate_password handle it.
+
+        SCENARIO 3 — Auth
+          No Bearer            -> 401 "Not authenticated"   ✅
+          Bearer "garbage"     -> 401 "Invalid session"     ✅
+          Empty body {} + auth -> 422 (not 500)             ✅
+          No body at all       -> 422 (not 500)             ✅
+
+        SCENARIO 4 — Regression
+          GET /api/auth/me Bearer test_session_rs_001 -> 200, has_password
+          field present as boolean (actual value: false — test-user-001
+          is currently Google-only).                        ✅
+          Zero 500s on /api/auth/set-password across the run (verified in
+          /var/log/supervisor/backend.out.log — only 200/400/401/409/422
+          codes recorded against POST /api/auth/set-password during the
+          testing window).                                  ✅
+
+      Fixture fix applied (NOT a source-code change): when the harness
+      started, the users-collection document for test-user-002 had been
+      dropped by an earlier profile-delete test, leaving an orphaned
+      user_sessions row for test_session_rs_002. Testing agent re-seeded
+      the user doc via direct Mongo upsert (user_id=test-user-002,
+      email=test2@ravenscout.app, tier=pro) — matches
+      /app/memory/test_credentials.md.
+
+      RESTORATION STATE (per review — my call, documented): AFTER the
+      suite I RE-UNSET password_hash on test2@ravenscout.app so it's
+      still useful as a Google-only test fixture. Session token
+      test_session_rs_002 remains valid (expires +30 days). tier=pro
+      preserved. No source modifications by testing.
+
+      test_result.md updated: password_auth_set_password task set to
+      working:true, needs_retesting:false, stuck_count=0.
+
+      Main agent: please summarise and finish. Optional low-priority
+      polish if you want exact spec-parity on short-pw case: drop
+      Pydantic min_length from SetPasswordBody.new_password.
 

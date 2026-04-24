@@ -66,7 +66,7 @@ export default function ProfileScreen() {
   useScrollToTopOnFocus(scrollRef);
 
   const {
-    user, sessionToken, updateProfile, changePassword,
+    user, sessionToken, updateProfile, changePassword, setPassword,
     deleteAccount, logout, refreshUser,
   } = useAuth();
 
@@ -190,15 +190,26 @@ export default function ProfileScreen() {
   };
 
   const doChangePw = async () => {
-    if (!curPw || !newPw) return;
+    // Branch: Google-only users call setPassword (no current_password);
+    // everyone else calls changePassword.
+    const hasPw = !!user?.has_password;
+    if ((hasPw && (!curPw || !newPw)) || (!hasPw && !newPw)) return;
     if (newPw !== confirmPw) { Alert.alert('Passwords do not match'); return; }
     setBusy(true);
-    const r = await changePassword(curPw, newPw);
+    const r = hasPw
+      ? await changePassword(curPw, newPw)
+      : await setPassword(newPw);
     setBusy(false);
-    if (!r.ok) { Alert.alert('Could not change password', (r as any).reason); return; }
+    if (!r.ok) {
+      Alert.alert(hasPw ? 'Could not change password' : 'Could not set password', (r as any).reason);
+      return;
+    }
     setCurPw(''); setNewPw(''); setConfirmPw('');
     setPwModalOpen(false);
-    Alert.alert('Password updated', 'Other devices have been signed out.');
+    Alert.alert(
+      hasPw ? 'Password updated' : 'Password created',
+      hasPw ? 'Other devices have been signed out.' : 'You can now sign in with either Google or your new email/password.',
+    );
   };
 
   const openUrl = async (url: string) => {
@@ -421,8 +432,25 @@ export default function ProfileScreen() {
               <TouchableOpacity style={styles.listRow} onPress={() => setPwModalOpen(true)} activeOpacity={0.7}>
                 <View style={styles.listIconCircle}><Ionicons name="key-outline" size={18} color={COLORS.accent} /></View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.listRowTitle}>Change Password</Text>
-                  <Text style={styles.listRowSubtitle}>Update your sign-in password</Text>
+                  <Text style={styles.listRowTitle}>{user.has_password ? 'Change Password' : 'Set Password'}</Text>
+                  <Text style={styles.listRowSubtitle}>
+                    {user.has_password
+                      ? 'Update your sign-in password'
+                      : 'Add a password so you can sign in without Google'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+              <View style={styles.listDivider} />
+              <TouchableOpacity
+                style={styles.listRow}
+                onPress={() => router.push({ pathname: '/forgot-password', params: { email: user.email } })}
+                activeOpacity={0.7}
+              >
+                <View style={styles.listIconCircle}><Ionicons name="mail-unread-outline" size={18} color={COLORS.accent} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.listRowTitle}>Forgot / Reset Password</Text>
+                  <Text style={styles.listRowSubtitle}>Email a verification code to reset via OTP</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={COLORS.textSecondary} />
               </TouchableOpacity>
@@ -561,13 +589,19 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* Change Password Modal */}
+      {/* Change / Set Password Modal */}
       <Modal visible={pwModalOpen} transparent animationType="slide" onRequestClose={() => setPwModalOpen(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Change Password</Text>
-            <Text style={styles.modalSubtitle}>Other devices will be signed out for safety.</Text>
-            <TextInput style={styles.modalInput} placeholder="Current password" placeholderTextColor={COLORS.textSecondary} value={curPw} onChangeText={setCurPw} secureTextEntry />
+            <Text style={styles.modalTitle}>{user.has_password ? 'Change Password' : 'Set Password'}</Text>
+            <Text style={styles.modalSubtitle}>
+              {user.has_password
+                ? 'Other devices will be signed out for safety.'
+                : 'Add a password to this account. Google sign-in still works — this just adds a second way in.'}
+            </Text>
+            {user.has_password && (
+              <TextInput style={styles.modalInput} placeholder="Current password" placeholderTextColor={COLORS.textSecondary} value={curPw} onChangeText={setCurPw} secureTextEntry />
+            )}
             <TextInput style={styles.modalInput} placeholder="New password" placeholderTextColor={COLORS.textSecondary} value={newPw} onChangeText={setNewPw} secureTextEntry />
             <TextInput style={styles.modalInput} placeholder="Confirm new password" placeholderTextColor={COLORS.textSecondary} value={confirmPw} onChangeText={setConfirmPw} secureTextEntry />
             <Text style={styles.helpText}>10+ chars · upper · lower · number · symbol</Text>
@@ -575,8 +609,13 @@ export default function ProfileScreen() {
               <TouchableOpacity style={styles.modalCancel} onPress={() => { setPwModalOpen(false); setCurPw(''); setNewPw(''); setConfirmPw(''); }} activeOpacity={0.85}>
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSave} onPress={doChangePw} disabled={busy || !curPw || !newPw} activeOpacity={0.85}>
-                {busy ? <ActivityIndicator color={COLORS.primary} /> : <Text style={styles.modalSaveText}>Update</Text>}
+              <TouchableOpacity
+                style={styles.modalSave}
+                onPress={doChangePw}
+                disabled={busy || !newPw || (user.has_password && !curPw)}
+                activeOpacity={0.85}
+              >
+                {busy ? <ActivityIndicator color={COLORS.primary} /> : <Text style={styles.modalSaveText}>{user.has_password ? 'Update' : 'Save'}</Text>}
               </TouchableOpacity>
             </View>
           </View>

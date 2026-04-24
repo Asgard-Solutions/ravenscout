@@ -388,6 +388,10 @@ async def get_me(request: Request):
         "picture": user.get("picture", ""),
         "tier": user.get("tier", "trial"),
         "usage": usage,
+        # True if the account has an email/password credential attached.
+        # False for Google-only users — the Profile UI uses this to show
+        # "Set Password" instead of "Change Password".
+        "has_password": bool(user.get("password_hash")),
     }
 
 
