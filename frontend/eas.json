@@ -10,21 +10,21 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://panorama-memory-fix.preview.emergentagent.com",
+        "EXPO_PUBLIC_BACKEND_URL": "https://ravenscout-production.up.railway.app",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com"
       },
       "channel": "preview"
     },
-    "preview-railway": {
+    "preview-emergent": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://REPLACE_WITH_RAILWAY_URL.up.railway.app",
+        "EXPO_PUBLIC_BACKEND_URL": "https://panorama-memory-fix.preview.emergentagent.com",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com"
       },
-      "channel": "preview-railway"
+      "channel": "preview-emergent"
     },
     "production": {
       "autoIncrement": true,
@@ -32,7 +32,7 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://REPLACE_WITH_RAILWAY_URL.up.railway.app",
+        "EXPO_PUBLIC_BACKEND_URL": "https://ravenscout-production.up.railway.app",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com"
       },
       "channel": "production"
