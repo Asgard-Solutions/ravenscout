@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator, Alert, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
+import { RavenSpinner } from '../src/components/RavenSpinner';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -60,7 +61,7 @@ export default function LoginScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.accent} />
+          <RavenSpinner size={120} />
         </View>
       </SafeAreaView>
     );
@@ -69,10 +70,16 @@ export default function LoginScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* Brand */}
+        {/* Brand — rslogo.png includes the "RAVEN SCOUT" wordmark,
+            so we drop the separate Ionicons + Text title that used
+            to sit here. */}
         <View style={styles.brandSection}>
-          <Ionicons name="navigate" size={56} color={COLORS.accent} />
-          <Text style={styles.brandName}>RAVEN SCOUT</Text>
+          <Image
+            source={require('../assets/images/rslogo.png')}
+            style={styles.brandLogo}
+            resizeMode="contain"
+            accessibilityLabel="Raven Scout"
+          />
           <Text style={styles.tagline}>A smarter way to plan your hunt.</Text>
         </View>
 
@@ -130,6 +137,15 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   container: { flex: 1, padding: 32, justifyContent: 'center' },
   brandSection: { alignItems: 'center', marginBottom: 48 },
+  brandLogo: {
+    // The rslogo.png is a ~2k × 2k square with the shield, bird and
+    // "RAVEN SCOUT" wordmark already composed. We size it down to a
+    // comfortable portrait-mode splash size (~60% of a typical
+    // phone width) and let resizeMode=contain preserve the aspect.
+    width: 260,
+    height: 260,
+    marginBottom: 4,
+  },
   brandName: { color: COLORS.textPrimary, fontSize: 32, fontWeight: '900', letterSpacing: 4, marginTop: 16 },
   tagline: { color: COLORS.fogGray, fontSize: 15, marginTop: 8, letterSpacing: 0.5 },
   featuresSection: { marginBottom: 48, gap: 16 },
