@@ -18,18 +18,18 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [bioInfo, setBioInfo] = useState<{ enabled: boolean; label: string } | null>(null);
+  const [bioEnabled, setBioEnabled] = useState(false);
 
   useEffect(() => { if (!loading && user) router.replace('/'); }, [loading, user]);
 
-  // Check biometric availability + opt-in flag on mount.
+  // Check biometric availability + opt-in flag on mount. We don't need
+  // the specific biometric type (face vs fingerprint) for the button
+  // label — "Use Biometrics" works universally, and the OS prompt itself
+  // already shows the right artwork (Face ID / Touch ID / Android BiometricPrompt).
   useEffect(() => {
     (async () => {
       const [info, enabled] = await Promise.all([isBiometricAvailable(), isBiometricEnabled()]);
-      if (info.available && enabled) {
-        const label = info.type === 'face' ? 'Face ID' : info.type === 'fingerprint' ? 'Fingerprint' : 'Biometric';
-        setBioInfo({ enabled: true, label });
-      }
+      if (info.available && enabled) setBioEnabled(true);
     })();
   }, []);
 
@@ -168,10 +168,10 @@ export default function LoginScreen() {
             <Text style={styles.secondaryBtnText}>Continue with Google</Text>
           </TouchableOpacity>
 
-          {bioInfo?.enabled && (
+          {bioEnabled && (
             <TouchableOpacity style={styles.secondaryBtn} onPress={handleBiometric} disabled={busy} activeOpacity={0.85}>
-              <Ionicons name={bioInfo.label === 'Face ID' ? 'happy' : 'finger-print'} size={20} color={COLORS.accent} />
-              <Text style={styles.secondaryBtnText}>Use {bioInfo.label}</Text>
+              <Ionicons name="finger-print" size={20} color={COLORS.accent} />
+              <Text style={styles.secondaryBtnText}>Use Biometrics</Text>
             </TouchableOpacity>
           )}
         </ScrollView>
@@ -184,8 +184,8 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.primary },
   loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   container: { padding: 24, paddingBottom: 48 },
-  brandSection: { alignItems: 'center', marginBottom: 32 },
-  brandLogo: { width: 220, height: 220, marginBottom: 4 },
+  brandSection: { alignItems: 'center', marginBottom: 24 },
+  brandLogo: { width: 300, height: 300, marginBottom: 0 },
   tagline: { color: COLORS.textSecondary, fontSize: 14, marginTop: 8 },
   input: { borderWidth: 1, borderColor: 'rgba(200,155,60,0.25)', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, color: COLORS.textPrimary, marginBottom: 12, fontSize: 15 },
   primaryBtn: { backgroundColor: COLORS.accent, paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginTop: 4 },
