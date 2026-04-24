@@ -741,11 +741,169 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+species_expansion_v1_modifiers:
+  - task: "Deepened prompt packs — regional + hunt-style modifiers for elk/bear/moose/antelope/coyote"
+    implemented: true
+    working: true
+    file: "/app/backend/species_prompts/{elk,bear,moose,antelope,coyote}.py, /app/backend/prompt_builder.py, /app/backend/tests/test_species_expansion_modifiers.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Deepened prompt packs (regional + hunt-style modifiers) verified
+          end-to-end via direct import of
+          `prompt_builder.assemble_system_prompt` and a live /api/analyze-hunt
+          smoke call.
+
+          Wrote /app/backend/tests/test_species_expansion_modifiers.py (41
+          tests). Combined suite:
+              cd /app/backend && python -m pytest \
+                tests/test_species_prompt_packs.py \
+                tests/test_species_expansion_modifiers.py -q
+              -> 115 passed in 0.06s  (74 prior + 41 new; zero regressions)
+
+          SCENARIO 1 — HUNT-STYLE MODIFIER RENDERING  (17 (species,style)
+          pairs)
+          ✅ elk      × {archery, rifle, spot_and_stalk, public_land}
+          ✅ bear     × {archery, rifle, spot_and_stalk}
+          ✅ moose    × {archery, rifle, spot_and_stalk}
+          ✅ antelope × {archery, rifle, blind, spot_and_stalk}
+          ✅ coyote   × {archery, rifle, public_land}
+          For each, the assembled prompt contains:
+            • The modifier's `name` (e.g. "Rifle (Elk)",
+              "Archery (Black Bear)", "Ground Blind / Pit Blind (Pronghorn)",
+              etc. — exact match to the dataclass `name` field).
+            • The HUNT STYLE CONTEXT header with style_id=<canonical>.
+            • A distinguishing phrase from tactical_adjustments (e.g.
+              elk+archery "caller 30-60 yards behind the shooter",
+              antelope+blind "stock tanks, windmill outflows",
+              coyote+rifle "rested bipod / pack, sight downwind", etc.).
+            • The "unspecified" fallback notice is NOT emitted when a
+              real style resolves.
+          ✅ Cross-contamination guard: for every one of the 5 species, the
+             assembled prompt does NOT contain the whitetail-specific
+             phrase "hinge-cut" (from whitetail.tactical_guidance). Confirms
+             no bleed-through between packs.
+
+          SCENARIO 2 — REGIONAL MODIFIER RENDERING  (12 (species,region)
+          pairs)
+          ✅ elk      × {mountain_west, plains}
+          ✅ bear     × {mountain_west, southeast_us, midwest}
+          ✅ moose    × {mountain_west, midwest}
+          ✅ antelope × {plains, mountain_west}
+          ✅ coyote   × {plains, southeast_us, mountain_west}
+          For each, the assembled prompt contains:
+            • The regional modifier's `name` (e.g. elk+mountain_west
+              "Mountain West (Rocky Mountain Elk)",
+              coyote+southeast_us "Southeastern Coyote", etc.).
+            • The REGIONAL CONTEXT header with region_id=<canonical>.
+            • A distinguishing regional phrase (elk+mountain_west "aspen";
+              antelope+plains "Wyoming"; coyote+southeast_us
+              "pine plantation"; bear+southeast_us "pocosin";
+              moose+mountain_west "Shiras"; coyote+mountain_west "juniper";
+              elk+plains "coulee"; bear+mountain_west "avalanche chute";
+              bear+midwest "Upper Midwest"; moose+midwest "Minnesota";
+              antelope+mountain_west "sagebrush"; coyote+plains
+              "shelterbelt").
+            • "REGIONAL CONTEXT: generic" NOT emitted when a real region
+              resolves.
+
+          SCENARIO 3 — COMBINED STYLE + REGION  (3 cases)
+          ✅ elk + archery + mountain_west
+          ✅ antelope + blind + plains
+          ✅ coyote + rifle + southeast_us
+          For each, BOTH names and BOTH distinguishing phrases appear,
+          neither fallback notice is emitted, AND the builder's stable
+          block order is verified by string-index ordering:
+            SPECIES -> REGIONAL CONTEXT -> SEASONAL CONTEXT ->
+            HUNT STYLE CONTEXT -> HUNT CONDITIONS.
+
+          SCENARIO 4 — FALLBACK — UNKNOWN STYLE OR REGION
+          ✅ elk + hunt_style="saddle" (elk registers archery/rifle/
+             spot_and_stalk/public_land, NOT saddle)  -> prompt renders
+             with "HUNT STYLE CONTEXT: unspecified" (graceful neutral
+             notice); no exception; no cross-contamination from the
+             whitetail saddle pack.
+          ✅ elk + region_id="south_texas" (elk registers mountain_west/
+             plains only) -> prompt renders with "REGIONAL CONTEXT:
+             generic (region_id=south_texas, source=manual_override)";
+             no whitetail "South Texas (Brush Country)" content leaks.
+          ✅ coyote + hunt_style="saddle" + region_id="east_texas" (both
+             unknown to coyote pack) -> prompt renders with BOTH
+             fallback notices, no exception, no cross-pack leakage.
+          ✅ Belt-and-braces: assemble_system_prompt called with
+             hunt_style="banana_boat_method" + region="narnia" for each
+             of the 5 expanded species — no exception; all prompts
+             render > 500 chars.
+
+          SCENARIO 5 — BACKWARD COMPAT (whitetail untouched)
+          Already covered by the existing
+          tests/test_species_prompt_packs.py suite (74 passing, re-run
+          here), and reconfirmed via the combined pytest run above.
+          Whitetail's "SPECIES: Whitetail Deer" block + its
+          south_texas regional modifier + its archery hunt-style
+          modifier all still render correctly. No regressions detected
+          in the 74 prior tests.
+
+          SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
+          Backend base URL: EXPO_PUBLIC_BACKEND_URL =
+          https://tactical-auth-hub.preview.emergentagent.com
+          POST /api/analyze-hunt
+            Headers: Authorization: Bearer test_session_rs_001
+                     Content-Type: application/json
+                     User-Agent: RavenScoutTest/1.0
+            Body   : {
+              "conditions": {
+                "animal": "coyote",
+                "hunt_date": "2026-02-15",
+                "time_window": "morning",
+                "wind_direction": "NW",
+                "temperature": "32F",
+                "property_type": "public",
+                "region": "Texas",
+                "hunt_style": "rifle",
+                "latitude": 31.2956,
+                "longitude": -95.9778
+              },
+              "map_image_base64": "<256x256 PNG>"
+            }
+          -> HTTP 200, success=true, 5 overlays,
+             region_resolution = {"resolvedRegionId":"east_texas",
+             "resolvedRegionLabel":"East Texas",
+             "regionResolutionSource":"gps","latitude":31.2956,
+             "longitude":-95.9778}
+             hunt_style_resolution = {"styleId":"rifle",
+             "styleLabel":"Rifle","source":"user_selected",
+             "rawInput":"rifle"}
+          ✅ NO 500. Pack rendering path never crashes with the expanded
+             modifier packs in-line.
+
+          FILES ADDED
+          ✅ /app/backend/tests/test_species_expansion_modifiers.py
+             (4 test classes, 41 parametrized assertions). Run:
+               cd /app/backend && python -m pytest \
+                 tests/test_species_expansion_modifiers.py -q
+               -> 41 passed in 0.04s
+             Combined with existing suite:
+               cd /app/backend && python -m pytest \
+                 tests/test_species_prompt_packs.py \
+                 tests/test_species_expansion_modifiers.py -q
+               -> 115 passed in 0.06s
+
+          No source files modified by testing. Deepened prompt packs are
+          production-ready; the five expanded species each register
+          well-formed hunt_style_modifiers and regional_modifiers that
+          render end-to-end through the assembled LLM system prompt,
+          with graceful fallbacks on unknown ids and zero cross-pack
+          contamination.
 
 species_expansion_v1:
   - task: "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
@@ -2252,3 +2410,60 @@ agent_communication:
       inventory; the species registry / prompt packs / /api/species /
       /api/analyze-hunt gating are production-ready.
 
+
+  - agent: "testing"
+    message: |
+      Deepened prompt packs (regional + hunt-style modifiers) verified
+      end-to-end for the 5 newly-expanded species
+      (elk/bear/moose/antelope/coyote).
+
+      New tests: /app/backend/tests/test_species_expansion_modifiers.py
+      (41 parametrized assertions across 4 classes).
+
+      Combined run:
+          cd /app/backend && python -m pytest \
+            tests/test_species_prompt_packs.py \
+            tests/test_species_expansion_modifiers.py -q
+          -> 115 passed in 0.06s  (74 prior + 41 new; zero regressions)
+
+      ✅ Scenario 1 — 17 (species,style) pairs: each renders its
+         canonical name (e.g. "Rifle (Elk)", "Archery (Black Bear)",
+         "Ground Blind / Pit Blind (Pronghorn)") + HUNT STYLE CONTEXT
+         header with style_id=<canonical> + a distinguishing
+         tactical_adjustments phrase. Cross-contamination guard: no
+         whitetail "hinge-cut" phrasing in any of the 5 packs.
+      ✅ Scenario 2 — 12 (species,region) pairs: each renders its
+         canonical regional name, REGIONAL CONTEXT header with
+         region_id=<canonical>, AND a distinguishing regional phrase
+         (elk+mountain_west "aspen"; antelope+plains "Wyoming";
+         coyote+southeast_us "pine plantation"; etc.).
+      ✅ Scenario 3 — combined: elk+archery+mountain_west,
+         antelope+blind+plains, coyote+rifle+southeast_us all render
+         BOTH modifiers. Builder block order verified:
+         SPECIES -> REGIONAL -> SEASONAL -> HUNT STYLE -> HUNT CONDITIONS.
+      ✅ Scenario 4 — graceful fallback: elk+saddle, elk+south_texas,
+         coyote+saddle+east_texas, plus generic banana_boat_method +
+         narnia across all 5 species — zero exceptions, neutral
+         "unspecified" / "generic" notices emitted, no cross-pack
+         leakage (whitetail saddle + whitetail south_texas content
+         never shows up in elk/coyote prompts).
+      ✅ Scenario 5 — backward compat: whitetail (deer) pack still
+         resolves correctly with archery + south_texas; covered by the
+         existing 74 tests in test_species_prompt_packs.py which all
+         re-passed in the combined run.
+      ✅ Scenario 6 — live smoke: POST /api/analyze-hunt with
+         animal=coyote, hunt_style=rifle, GPS 31.2956,-95.9778 and a
+         256x256 PNG against EXPO_PUBLIC_BACKEND_URL with Bearer
+         test_session_rs_001 -> 200 success=true (5 overlays),
+         region_resolution={east_texas, gps},
+         hunt_style_resolution={rifle, user_selected}. Zero 500s on the
+         expanded-pack rendering path. Backend log confirmed
+         "Region resolved" + "Hunt style resolved" both fire, the
+         prompt builds, OpenAI responds 200, pipeline completes.
+
+      test_result.md updated: new species_expansion_v1_modifiers task
+      block set to working:true, needs_retesting:false; current_focus
+      cleared. No source files modified by testing agent.
+
+      Main agent: please summarise and finish — deepened prompt packs
+      are production-ready.
