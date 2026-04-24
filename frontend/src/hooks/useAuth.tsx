@@ -21,6 +21,7 @@ interface User {
   name: string;
   picture: string;
   tier: string;
+  has_password?: boolean;
   usage: {
     allowed: boolean;
     remaining: number;
@@ -44,6 +45,7 @@ interface AuthContextType {
   resetPassword: (resetToken: string, newPassword: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   updateProfile: (patch: { name?: string; picture?: string }) => Promise<{ ok: true } | { ok: false; reason: string }>;
   changePassword: (currentPw: string, newPw: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  setPassword: (newPw: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   deleteAccount: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -60,6 +62,7 @@ const AuthContext = createContext<AuthContextType>({
   resetPassword: async () => ({ ok: false, reason: 'not_ready' }),
   updateProfile: async () => ({ ok: false, reason: 'not_ready' }),
   changePassword: async () => ({ ok: false, reason: 'not_ready' }),
+  setPassword: async () => ({ ok: false, reason: 'not_ready' }),
   deleteAccount: async () => ({ ok: false, reason: 'not_ready' }),
   logout: async () => {}, refreshUser: async () => {},
 });
@@ -315,6 +318,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // First-time password attach for Google-only users. No `current_password`
+  // because there isn't one yet. Backend rejects with 409 if the user
+  // already has a password_hash — UI should route them to changePassword.
+  const setPassword = async (newPw: string) => {
+    if (!sessionToken) return { ok: false as const, reason: 'no_session' };
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/auth/set-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({ new_password: newPw }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) return { ok: false as const, reason: data?.detail || `http_${resp.status}` };
+      // Refresh user so has_password flips to true immediately.
+      await refreshUser();
+      return { ok: true as const };
+    } catch (err: any) {
+      return { ok: false as const, reason: err?.message || 'network_error' };
+    }
+  };
+
   const deleteAccount = async () => {
     if (!sessionToken) return { ok: false as const, reason: 'no_session' };
     try {
@@ -354,7 +381,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user, loading, sessionToken,
       login, loginWithGoogle, loginWithPassword, registerWithPassword,
       requestPasswordReset, verifyOtp, resetPassword,
-      updateProfile, changePassword, deleteAccount,
+      updateProfile, changePassword, setPassword, deleteAccount,
       logout, refreshUser,
     }}>
       {children}

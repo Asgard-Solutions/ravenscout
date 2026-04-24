@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
@@ -10,8 +10,13 @@ import { useAuth } from '../src/hooks/useAuth';
 // Step 1: enter email -> backend emails an OTP via Microsoft Graph.
 // Step 2: enter OTP -> backend returns a short-lived reset_token.
 // Step 3: choose new password -> backend swaps the hash + signs user in.
+//
+// Optional `?email=` query param lets the Profile page deep-link here
+// with the signed-in user's email pre-filled (used by the "Forgot /
+// Reset Password" row for Google-only users).
 export default function ForgotPasswordScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ email?: string }>();
   const { requestPasswordReset, verifyOtp, resetPassword } = useAuth();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [email, setEmail] = useState('');
@@ -20,6 +25,13 @@ export default function ForgotPasswordScreen() {
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Pre-fill email once if the caller passed one in.
+  useEffect(() => {
+    const q = typeof params?.email === 'string' ? params.email : Array.isArray(params?.email) ? params.email[0] : '';
+    if (q && !email) setEmail(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params?.email]);
 
   const pwOk = newPw.length >= 10 && /[A-Z]/.test(newPw) && /[a-z]/.test(newPw) && /\d/.test(newPw) && /[!@#$%^&*(),.?":{}|<>_\-+=~`[\]\\/;']/.test(newPw);
 

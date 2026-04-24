@@ -204,6 +204,15 @@ class ChangePasswordBody(BaseModel):
     new_password: str = Field(..., min_length=10, max_length=256)
 
 
+class SetPasswordBody(BaseModel):
+    """Used by Google-only users to attach a password for the first
+    time. No `current_password` because there isn't one yet.
+    Intentionally NOT using Pydantic min_length on new_password so the
+    custom validate_password() error messages win (400 + specific
+    reason) instead of Pydantic's generic 422."""
+    new_password: str = Field(..., max_length=256)
+
+
 class UpdateProfileBody(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=80)
     picture: Optional[str] = Field(None, max_length=8192)  # base64 data URI or URL
@@ -451,6 +460,35 @@ def build_password_auth_router(db, get_current_user):
             "user_id": user["user_id"],
             "session_token": {"$ne": current_token},
         })
+        return {"ok": True}
+
+    # ---------- SET PASSWORD (first-time, for Google-only users) ----------
+    @router.post("/auth/set-password")
+    async def set_password(body: SetPasswordBody, request: Request):
+        """Attach a password to an account that was created via Google
+        sign-in and has no password yet. Requires a valid session but
+        NO current_password (there isn't one). If the user already has
+        a password, returns 409 — they should use /auth/change-password
+        instead.
+        """
+        user = await get_current_user(request)
+        pw_err = validate_password(body.new_password)
+        if pw_err:
+            raise HTTPException(status_code=400, detail=pw_err)
+        doc = await db.users.find_one(
+            {"user_id": user["user_id"]},
+            {"_id": 0, "password_hash": 1},
+        )
+        if doc and doc.get("password_hash"):
+            raise HTTPException(
+                status_code=409,
+                detail="This account already has a password. Use Change Password instead.",
+            )
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {"$set": {"password_hash": hash_password(body.new_password)}},
+        )
+        # Don't log out other devices — this is an additive change, not a reset.
         return {"ok": True}
 
     # ---------- PROFILE: read / update / delete ----------

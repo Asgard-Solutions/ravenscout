@@ -8,7 +8,8 @@ import { compressImage, profileForTier } from '../src/media/imageProcessor';
 import { logClientEvent } from '../src/utils/clientLog';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS, SPECIES, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
+import { COLORS, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
+import { useSpeciesCatalog, groupSpeciesByCategory } from '../src/constants/species';
 import { HUNT_STYLES, type HuntStyleId, getHuntStyleLabel } from '../src/constants/huntStyles';
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
@@ -48,6 +49,7 @@ export default function SetupScreen() {
   useScrollToTopOnFocus(scrollRef);
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
+  const speciesCatalog = useSpeciesCatalog();
   const [limitReached, setLimitReached] = useState(false);
 
   // Form state
@@ -450,7 +452,7 @@ export default function SetupScreen() {
             analysisResult: enrichedResult,
             metadata: {
               species: selectedSpecies,
-              speciesName: SPECIES.find(s => s.id === selectedSpecies)?.name || selectedSpecies,
+              speciesName: speciesCatalog.findSpecies(selectedSpecies)?.name || selectedSpecies,
               date: huntDate,
               timeWindow,
               windDirection,
@@ -535,7 +537,7 @@ export default function SetupScreen() {
           <Text style={styles.loadingTitle}>ANALYZING TERRAIN</Text>
           <Text style={styles.loadingSubtitle}>
             AI is evaluating your map for{'\n'}
-            {SPECIES.find(s => s.id === selectedSpecies)?.name || 'game'} patterns...
+            {speciesCatalog.findSpecies(selectedSpecies)?.name || 'game'} patterns...
           </Text>
           <View style={styles.loadingSteps}>
             {['Interpreting terrain features', 'Applying species behavior rules', 'Evaluating wind & conditions', 'Scoring setup locations'].map(label => (
@@ -637,19 +639,80 @@ export default function SetupScreen() {
           {step === 0 && (
             <View>
               <Text style={styles.stepTitle}>SELECT SPECIES</Text>
-              <Text style={styles.stepDescription}>Choose the game you're targeting</Text>
-              <View style={styles.speciesGrid}>
-                {SPECIES.map((species) => (
-                  <TouchableOpacity key={species.id} testID={`species-${species.id}`} style={[styles.speciesCard, selectedSpecies === species.id && styles.speciesCardActive]} onPress={() => setSelectedSpecies(species.id)} activeOpacity={0.7}>
-                    <View style={styles.speciesIconContainer}>
-                      <Ionicons name={species.id === 'deer' ? 'leaf' : species.id === 'turkey' ? 'sunny' : 'paw'} size={32} color={selectedSpecies === species.id ? COLORS.accent : COLORS.fogGray} />
+              <Text style={styles.stepDescription}>Choose the game you&apos;re targeting</Text>
+              {speciesCatalog.loading && speciesCatalog.species.length === 0 ? (
+                <ActivityIndicator color={COLORS.accent} style={{ marginTop: 20 }} />
+              ) : (
+                groupSpeciesByCategory(speciesCatalog.species, speciesCatalog.categories).map(group => (
+                  <View key={group.category.id} style={{ marginBottom: 18 }}>
+                    <Text style={styles.categoryHeader}>{group.category.label.toUpperCase()}</Text>
+                    <View style={styles.speciesGrid}>
+                      {group.species.map((species) => {
+                        const isActive = selectedSpecies === species.id;
+                        const isLocked = species.locked;
+                        const onPress = () => {
+                          if (isLocked) {
+                            Alert.alert(
+                              `${species.name} — ${species.min_tier.charAt(0).toUpperCase() + species.min_tier.slice(1)} feature`,
+                              `Upgrade to ${species.min_tier.charAt(0).toUpperCase() + species.min_tier.slice(1)} to analyze ${species.name.toLowerCase()} hunts.`,
+                              [
+                                { text: 'Not now', style: 'cancel' },
+                                { text: 'Upgrade', onPress: () => router.push('/subscription') },
+                              ],
+                            );
+                            return;
+                          }
+                          setSelectedSpecies(species.id);
+                        };
+                        return (
+                          <TouchableOpacity
+                            key={species.id}
+                            testID={`species-${species.id}`}
+                            style={[
+                              styles.speciesCard,
+                              isActive && styles.speciesCardActive,
+                              isLocked && styles.speciesCardLocked,
+                            ]}
+                            onPress={onPress}
+                            activeOpacity={0.7}
+                          >
+                            <View style={styles.speciesIconContainer}>
+                              <Ionicons
+                                name={(species.icon as any) || 'paw'}
+                                size={32}
+                                color={isActive ? COLORS.accent : isLocked ? COLORS.fogGray : COLORS.fogGray}
+                              />
+                            </View>
+                            <View style={styles.speciesHeaderRow}>
+                              <Text style={[styles.speciesName, isActive && styles.speciesNameActive]}>
+                                {species.name}
+                              </Text>
+                              {isLocked && (
+                                <View style={styles.lockBadge}>
+                                  <Ionicons name="lock-closed" size={12} color={COLORS.accent} />
+                                  <Text style={styles.lockBadgeText}>{species.min_tier.toUpperCase()}</Text>
+                                </View>
+                              )}
+                            </View>
+                            <Text style={styles.speciesDesc}>{species.description}</Text>
+                            {isActive && (
+                              <View style={styles.selectedCheck}>
+                                <Ionicons name="checkmark-circle" size={24} color={COLORS.accent} />
+                              </View>
+                            )}
+                            {isLocked && (
+                              <View style={styles.upgradeHintRow}>
+                                <Text style={styles.upgradeHintText}>Tap to upgrade</Text>
+                                <Ionicons name="chevron-forward" size={14} color={COLORS.accent} />
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
-                    <Text style={[styles.speciesName, selectedSpecies === species.id && styles.speciesNameActive]}>{species.name}</Text>
-                    <Text style={styles.speciesDesc}>{species.description}</Text>
-                    {selectedSpecies === species.id && <View style={styles.selectedCheck}><Ionicons name="checkmark-circle" size={24} color={COLORS.accent} /></View>}
-                  </TouchableOpacity>
-                ))}
-              </View>
+                  </View>
+                ))
+              )}
             </View>
           )}
 
@@ -1040,7 +1103,7 @@ export default function SetupScreen() {
               <Text style={styles.stepTitle}>REVIEW & ANALYZE</Text>
               <Text style={styles.stepDescription}>Confirm your hunt parameters</Text>
               <View style={styles.reviewCard}>
-                <ReviewRow label="Species" value={SPECIES.find(s => s.id === selectedSpecies)?.name || ''} />
+                <ReviewRow label="Species" value={speciesCatalog.findSpecies(selectedSpecies)?.name || ''} />
                 <ReviewRow label="Date" value={huntDate} />
                 <ReviewRow label="Time" value={TIME_WINDOWS.find(t => t.id === timeWindow)?.label || ''} />
                 <ReviewRow label="Wind" value={`${windDirection}${windSpeed ? ' · ' + windSpeed : ''}`} />
@@ -1154,10 +1217,30 @@ const styles = StyleSheet.create({
   speciesGrid: { gap: 14 },
   speciesCard: { backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 14, padding: 20, borderWidth: 2, borderColor: 'transparent' },
   speciesCardActive: { borderColor: COLORS.accent, backgroundColor: 'rgba(200, 155, 60, 0.08)' },
+  speciesCardLocked: {
+    opacity: 0.72,
+    borderColor: 'rgba(200, 155, 60, 0.25)',
+  },
   speciesIconContainer: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(58, 74, 82, 0.6)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  speciesHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   speciesName: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
   speciesNameActive: { color: COLORS.accent },
   speciesDesc: { color: COLORS.fogGray, fontSize: 13, marginTop: 6, lineHeight: 20 },
+  categoryHeader: {
+    color: COLORS.fogGray, fontSize: 11, fontWeight: '800',
+    letterSpacing: 2, marginBottom: 10, marginTop: 4,
+  },
+  lockBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
+    backgroundColor: 'rgba(200, 155, 60, 0.12)',
+    borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.35)',
+  },
+  lockBadgeText: { color: COLORS.accent, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  upgradeHintRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 10,
+  },
+  upgradeHintText: { color: COLORS.accent, fontSize: 12, fontWeight: '700' },
   selectedCheck: { position: 'absolute', top: 20, right: 20 },
   // Map Upload
   mapsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },

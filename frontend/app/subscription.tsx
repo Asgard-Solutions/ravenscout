@@ -20,8 +20,8 @@ const TIER_DATA = [
     popular: true,
   },
   {
-    id: 'pro', name: 'Pro', monthly: 14.99, annual: 149.99, analyses: '100/month',
-    features: ['100 AI analyses/month', 'Weather API auto-fill', 'Cloud sync across devices', 'Priority analysis', 'Unused analyses rollover (1 month)'],
+    id: 'pro', name: 'Pro', monthly: 14.99, annual: 149.99, analyses: '40/month',
+    features: ['40 AI analyses/month', 'Weather API auto-fill', 'Cloud sync across devices', 'Priority analysis', 'Unused analyses rollover (1 year)'],
     missing: [],
   },
 ];
@@ -207,7 +207,7 @@ export default function SubscriptionScreen() {
 
         <Text style={styles.footerNote}>
           Subscriptions are managed through App Store / Google Play.{'\n'}
-          Cancel anytime. Unused analyses carry over for 1 month.
+          Cancel anytime. Unused analyses carry over per your plan.
         </Text>
       </ScrollView>
     </SafeAreaView>

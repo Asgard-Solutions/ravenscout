@@ -741,10 +741,272 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+species_expansion_v1:
+  - task: "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
+    implemented: true
+    working: true
+    file: "/app/backend/species_registry.py, /app/backend/species_prompts/{elk,bear,moose,antelope,coyote}.py, /app/backend/species_prompts/registry.py, /app/backend/species_prompts/__init__.py, /app/backend/server.py (GET /api/species, POST /api/analyze-hunt species gate)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Species expansion validated end-to-end against the preview URL
+          (EXPO_PUBLIC_BACKEND_URL =
+          https://tactical-auth-hub.preview.emergentagent.com). Harness:
+          /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
+          (the one FAIL is pre-existing stale pytest assertions, see
+          Scenario 6 below).
+
+          Scenario 1 — PROMPT-PACK RESOLUTION  (PASS)
+          ✅ resolve_species_pack("deer").canonical_id == "whitetail"
+          ✅ resolve_species_pack("turkey").canonical_id == "turkey"
+          ✅ resolve_species_pack("hog").canonical_id == "hog"
+          ✅ resolve_species_pack("elk").canonical_id == "elk"
+          ✅ resolve_species_pack("bear").canonical_id == "bear"
+          ✅ resolve_species_pack("moose").canonical_id == "moose"
+          ✅ resolve_species_pack("antelope").canonical_id == "antelope"
+          ✅ resolve_species_pack("coyote").canonical_id == "coyote"
+          ✅ is_supported_species(<each of the 8>) == True
+          ✅ resolve_species_pack("unicorn").is_fallback is True
+          Verified _PACKS tuple now has 8 entries in
+          /app/backend/species_prompts/registry.py.
+
+          Scenario 2 — GET /api/species (anonymous)  (PASS)
+          ✅ HTTP 200
+          ✅ user_tier == "trial" (anonymous → most restrictive)
+          ✅ species array length == 8 (waterfowl/dove/quail absent)
+          ✅ categories length == 3 with ids == {big_game, predator, bird}
+          ✅ all categories have non-empty labels
+          ✅ deer, turkey, hog -> locked:false
+          ✅ elk, bear, moose, antelope, coyote -> locked:true
+          ✅ every species has non-empty terminology
+             (male/female/young/group)
+          ✅ every species has form_fields object
+
+          Scenario 3 — GET /api/species as pro / core  (PASS)
+          Used Bearer test_session_rs_002 (test-user-002, tier=pro).
+          ✅ user_tier == "pro"; all 8 species locked=false
+          Then swapped test-user-002.tier -> "core" via direct Mongo
+          update, re-called:
+          ✅ user_tier == "core"; all 8 species still locked=false
+             (core unlocks everything currently enabled, as expected —
+             nothing is min_tier="pro" right now; waterfowl/dove/quail
+             are the pro-gated entries but they remain enabled=False).
+          ✅ Restored test-user-002.tier back to "pro".
+
+          Scenario 4 — /api/analyze-hunt tier gating (critical)  (PASS)
+          Using Bearer test_session_trial_001 (test-user-trial, tier=trial):
+          ✅ POST /api/analyze-hunt animal="elk" + tiny 256x256 PNG
+             -> 403 with detail exactly:
+             "Elk is a Core feature. Upgrade your plan to analyze it."
+             (contains "Core feature" per spec)
+          ✅ Same request with animal="deer" -> NOT 403 on species gate
+             (actual status was 200, end-to-end analysis succeeded;
+             any non-403 would have been acceptable per the brief)
+          Using Bearer test_session_rs_001 (pro) + animal="elk"
+             + tiny 256x256 PNG:
+          ✅ 200 with success=true — Pro user proceeds past the species
+             gate AND the full LLM analysis pipeline ran (overlays +
+             region_resolution + hunt_style_resolution emitted).
+
+          Scenario 5 — Legacy SPECIES_DATA shim  (PASS)
+          Ran in /app/backend:
+            python -c "from server import SPECIES_DATA; \
+                       print(sorted(SPECIES_DATA.keys()))"
+          ✅ Output: ['antelope','bear','coyote','deer','elk','hog',
+                      'moose','turkey']  (8 entries, all enabled species)
+          ✅ For every entry: name + icon + description populated,
+             behavior_rules is a non-empty list (lengths 5–6 per
+             species), and the rules are the same strings the prompt
+             packs expose (no drift — legacy_species_data() pulls
+             directly from resolve_species_pack).
+
+          Scenario 6 — Backward compat + existing pytest suite
+          ✅ GET /api/auth/me Bearer test_session_rs_001 -> 200
+             (user_id=test-user-001, tier=pro).
+          ✅ Zero NEW 500s attributable to this suite during the run
+             (the verify-otp 500 lines present in the log tail are
+             pre-existing entries from the pre-tz-fix era, already
+             documented in an earlier test_result.md entry).
+          ❌ /app/backend/tests/test_species_prompt_packs.py — 68
+             passing, 7 FAILING. The 7 failures are the OLD test
+             assertions that still insist elk/moose/bear/pronghorn
+             fall back to the GENERIC_FALLBACK_PACK:
+               * TestSpeciesResolution.test_unsupported_species_falls_back[elk]
+               * TestSpeciesResolution.test_unsupported_species_falls_back[moose]
+               * TestSpeciesResolution.test_unsupported_species_falls_back[bear]
+               * TestSpeciesResolution.test_unsupported_species_falls_back[pronghorn]
+               * TestSpeciesResolution.test_is_supported_species
+               * TestSpeciesResolution.test_inventory_shape
+               * TestAssembleSystemPrompt.test_unsupported_species_uses_fallback_in_assembled_prompt
+             Those assertions were WRITTEN BEFORE the 5 new packs
+             existed and are invalidated by the very feature under
+             review — they now (correctly!) prove that elk/moose/bear/
+             pronghorn resolve to their own first-class packs, which is
+             exactly the behavior we just shipped. Main agent needs to
+             update the test file (move elk/moose/bear/pronghorn out of
+             the "unsupported" param set, grow the expected inventory
+             length from 3 to 8, and add the 5 new species to the
+             assembled-prompt happy-path tests).
+             This is a stale-test issue, NOT a regression of the new
+             registry / packs / gating — all of those are verified
+             working end-to-end above. Does not block sign-off.
+
+          Security summary
+          ✅ Species tier gating is enforced at the /api/analyze-hunt
+             layer (not only in the UI): trial users POSTing elk /
+             bear / moose / antelope / coyote are rejected with 403
+             before the LLM call.
+          ✅ The 403 message includes "Core feature" + species name +
+             "Upgrade your plan" — matches the review spec.
+          ✅ Deer/turkey/hog remain usable for trial users
+             (not gated).
+          ✅ Hidden species (waterfowl/dove/quail, enabled=False) are
+             invisible to the catalog endpoint on every tier.
+
+          No source files modified by the testing agent. Action item for
+          main agent: update tests/test_species_prompt_packs.py to
+          reflect the expanded canonical inventory (see Scenario 6
+          failure list). The runtime feature itself is
+          production-ready.
+
+
+
+password_auth_set_password:
+  - task: "POST /api/auth/set-password — first-time password attach for Google-only users"
+    implemented: true
+    working: true
+    file: "/app/backend/password_auth.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoint wired. Requires a valid session (Bearer) but NO
+          current_password. Only succeeds if the user has no password_hash
+          yet. Also added `has_password` to GET /api/auth/me so the UI
+          can show "Set Password" vs "Change Password".
+      - working: true
+        agent: "testing"
+        comment: |
+          POST /api/auth/set-password + has_password flag verified end-to-end
+          against the preview URL (EXPO_PUBLIC_BACKEND_URL). Harness:
+          /app/set_password_test.py — 24/26 assertions PASS. The 2 remaining
+          items are a documented MINOR (see end of this comment) — zero
+          critical issues and zero 500s on /api/auth/set-password.
+
+          Setup note: when the harness started, the test-user-002 user
+          DOCUMENT had been dropped from the DB by earlier profile-delete
+          tests, even though the user_sessions row for test_session_rs_002
+          was still present (session expires +30 days). Testing agent
+          re-seeded the user doc (user_id=test-user-002 / email=
+          test2@ravenscout.app / tier=pro / analysis_count=0 / rollover=0)
+          via a direct Mongo upsert to restore parity with
+          /app/memory/test_credentials.md. This is a fixture-drift fix, NOT
+          a functional fix to the endpoint under test.
+
+          === SCENARIO 1 — Google-only user (password_hash $unset) ===
+          Pre: db.users.update_one({email:"test2@ravenscout.app"},
+                                   {"$unset":{"password_hash":""}}).
+          ✅ 1a  GET  /api/auth/me   Bearer test_session_rs_002
+                 -> 200, has_password=false (bool), field present.
+          ✅ 1b  POST /api/auth/set-password {"new_password":"NewStrong1!"}
+                 -> 200 body {"ok":true}.
+          ✅ 1c  GET  /api/auth/me -> 200 has_password=true.
+          ✅ 1d  POST /api/auth/login
+                 {"email":"test2@ravenscout.app","password":"NewStrong1!"}
+                 -> 200 with session_token="rs_<hex>" (freshly minted).
+          ✅ 1e  Second POST /api/auth/set-password with a different strong
+                 pw -> 409 with exact detail
+                 "This account already has a password. Use Change Password
+                  instead." (substring "already has a password" asserted)
+
+          === SCENARIO 2 — Weak password validation ===
+          Pre: re-$unset password_hash so endpoint reaches validate_password.
+          ✅ "lowercase1!"   -> 400 detail="Password must include an uppercase letter."
+          ✅ "UPPERCASE1!"   -> 400 detail="Password must include a lowercase letter."
+          ✅ "NoDigitsAll!"  -> 400 detail="Password must include a number."
+          ✅ "NoSymbols123A" -> 400 detail="Password must include a symbol (e.g. !@#$)."
+          ⚠️ Minor: "short1!" (7 chars) returns 422 (Pydantic
+             string_too_short) INSTEAD OF 400 with the custom
+             "Password must be at least 10 characters long." This is because
+             SetPasswordBody defines new_password with Field(..., min_length=10),
+             so Pydantic validation fires BEFORE validate_password can emit
+             the custom message. The user still gets a proper rejection (no
+             500), and the prior RegisterBody flow has identical behavior
+             (already documented in the password_auth task as acceptable).
+             Low impact — functionally correct rejection, just a different
+             status code + message shape than the review spec. If you want
+             full parity with the spec (400 + custom detail), drop
+             min_length=10 from SetPasswordBody.new_password and let
+             validate_password handle ALL length/strength errors.
+
+          === SCENARIO 3 — Auth ===
+          ✅ No Bearer                     -> 401 "Not authenticated"
+          ✅ Bearer "garbage"              -> 401 "Invalid session"
+          ✅ Empty body {} with Bearer      -> 422 (missing new_password),
+                                              NOT 500.
+          ✅ No body at all with Bearer     -> 422, NOT 500.
+
+          === SCENARIO 4 — Regression ===
+          ✅ GET /api/auth/me Bearer test_session_rs_001 -> 200 with
+             has_password present as boolean (actual value: false — user 001
+             is currently Google-only; either true or false is acceptable
+             per the review, the assertion is just that the field exists
+             and is a bool).
+          ✅ Zero 500s on /api/auth/set-password across the whole run
+             (verified via /var/log/supervisor/backend.out.log — only
+             200/400/401/409/422 status codes recorded against
+             POST /api/auth/set-password during the testing window).
+             Pre-existing 500s in the log are all from older
+             /api/auth/verify-otp runs before the tz-naive fix; they do
+             NOT recur.
+
+          === RESTORATION STATE ===
+          After the suite, testing agent restored test-user-002 to
+          Google-only state by RE-UNSETTING password_hash — so the user
+          is still a useful Google-only fixture for future runs (matches
+          its documented intent in test_credentials.md). Session token
+          test_session_rs_002 remains valid. tier=pro preserved. If you
+          want to sign in with email+password again, call
+          /api/auth/set-password once more with a strong pw.
+
+          No source files modified by testing. Main agent: please
+          summarise and finish — /api/auth/set-password is
+          production-ready; optionally drop min_length=10 from the
+          Pydantic body if you want 400-with-custom-detail parity for
+          the short-password case (low priority).
+
+          Please verify:
+
+          1. A Google-only user (has no password_hash):
+             a) GET /api/auth/me -> 200 with `has_password: false`.
+             b) POST /api/auth/set-password with a strong pw -> 200 {ok:true}.
+             c) GET /api/auth/me now returns `has_password: true`.
+             d) POST /api/auth/login with that email+pw -> 200 session_token.
+             e) Second call to /api/auth/set-password -> 409
+                "This account already has a password. Use Change Password instead."
+
+          2. Weak password validation: shortpw, no-upper, no-digit, no-symbol
+             each return 400 with a clear `detail` string.
+
+          3. Without Bearer -> 401.
+
+          Setup note: there's no Google-only test user seeded. Create one
+          directly in Mongo (or register a fresh account, then manually
+          `users.update_one({email:...}, {"$unset": {"password_hash": 1}})`
+          to simulate a Google-only user) to exercise scenario 1.
 
 password_auth:
   - task: "POST /api/auth/register + /api/auth/login (bcrypt, session minting)"
@@ -1688,4 +1950,305 @@ agent_communication:
       and stuck_tasks cleared. Scenarios 1-4 and 7-9 were NOT retested
       (already passing per prior run). Main agent: please summarise
       and finish — password-reset OTP flow is production-ready.
+
+
+  - agent: "testing"
+    message: |
+      POST /api/auth/set-password + has_password flag on /api/auth/me
+      VERIFIED end-to-end against EXPO_PUBLIC_BACKEND_URL. Harness:
+      /app/set_password_test.py — 24/26 assertions PASS, 0 critical
+      failures, 0 500s on /api/auth/set-password.
+
+      Pass/fail per review scenario:
+
+        SCENARIO 1 — Google-only user (password_hash $unset)
+          1a GET /api/auth/me -> 200 has_password:false           ✅
+          1b POST /api/auth/set-password NewStrong1! -> 200 ok    ✅
+          1c GET /api/auth/me -> has_password:true                ✅
+          1d POST /api/auth/login with new pw -> 200 session_token✅
+          1e Second set-password -> 409 "already has a password"  ✅
+
+        SCENARIO 2 — Weak passwords (after re-unset password_hash)
+          "lowercase1!"    -> 400 "Password must include an uppercase letter."  ✅
+          "UPPERCASE1!"    -> 400 "Password must include a lowercase letter."   ✅
+          "NoDigitsAll!"   -> 400 "Password must include a number."             ✅
+          "NoSymbols123A"  -> 400 "Password must include a symbol (e.g. !@#$)." ✅
+          "short1!"        -> 422 (Pydantic string_too_short)                    ⚠️ Minor
+            ↑ Not 400. Root cause: SetPasswordBody defines new_password with
+              Field(..., min_length=10), so Pydantic validates BEFORE
+              validate_password can emit the custom "Password must be at
+              least 10 characters long." message. Same behavior as
+              RegisterBody (already documented as acceptable in the existing
+              password_auth task). The user still gets a proper rejection
+              (no 500). If you want 400 + custom detail parity, drop
+              min_length=10 from SetPasswordBody.new_password and let
+              validate_password handle it.
+
+        SCENARIO 3 — Auth
+          No Bearer            -> 401 "Not authenticated"   ✅
+          Bearer "garbage"     -> 401 "Invalid session"     ✅
+          Empty body {} + auth -> 422 (not 500)             ✅
+          No body at all       -> 422 (not 500)             ✅
+
+        SCENARIO 4 — Regression
+          GET /api/auth/me Bearer test_session_rs_001 -> 200, has_password
+          field present as boolean (actual value: false — test-user-001
+          is currently Google-only).                        ✅
+          Zero 500s on /api/auth/set-password across the run (verified in
+          /var/log/supervisor/backend.out.log — only 200/400/401/409/422
+          codes recorded against POST /api/auth/set-password during the
+          testing window).                                  ✅
+
+      Fixture fix applied (NOT a source-code change): when the harness
+      started, the users-collection document for test-user-002 had been
+      dropped by an earlier profile-delete test, leaving an orphaned
+      user_sessions row for test_session_rs_002. Testing agent re-seeded
+      the user doc via direct Mongo upsert (user_id=test-user-002,
+      email=test2@ravenscout.app, tier=pro) — matches
+      /app/memory/test_credentials.md.
+
+      RESTORATION STATE (per review — my call, documented): AFTER the
+      suite I RE-UNSET password_hash on test2@ravenscout.app so it's
+      still useful as a Google-only test fixture. Session token
+      test_session_rs_002 remains valid (expires +30 days). tier=pro
+      preserved. No source modifications by testing.
+
+      test_result.md updated: password_auth_set_password task set to
+      working:true, needs_retesting:false, stuck_count=0.
+
+      Main agent: please summarise and finish. Optional low-priority
+      polish if you want exact spec-parity on short-pw case: drop
+      Pydantic min_length from SetPasswordBody.new_password.
+
+
+
+tier_limits_rollover_v2:
+  - task: "Pro tier limit → 40/month + 12-month rollover accumulate-mode"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Tier limits + rollover v2 verified end-to-end against the
+          preview URL (EXPO_PUBLIC_BACKEND_URL =
+          https://tactical-auth-hub.preview.emergentagent.com).
+          Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
+          Zero 500s on any /api/auth/me call during the run
+          (supervisor access log shows only 200/401).
+
+          Fixture: seeded a one-off Core test user directly in Mongo
+          (user_id=test-user-core-rollover / session=test_session_core_rollover
+          / tier=core) since test_credentials.md has no Core fixture.
+          The existing Pro fixtures (test-user-001, test-user-002) and
+          Trial fixture (test-user-trial) were re-seeded defensively
+          (upsert on users + user_sessions, session expiry +30d) before
+          the scenarios run. No credentials rotated.
+
+          === SCENARIO 1 — Pro tier limit = 40 ===
+          Setup: test-user-002 reset to
+            {tier:pro, analysis_count:0, rollover_count:0,
+             billing_cycle_start: now()}
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              tier: "pro",
+              usage: {allowed:true, remaining:40, limit:40,
+                      rollover:0, tier:"pro"},
+              ...
+            }
+          ✅ tier == "pro"
+          ✅ usage.limit == 40  (was 100 pre-change — confirmed updated)
+          ✅ usage.remaining == 40 - 0 + 0 == 40
+          ✅ usage.allowed == true
+
+          === SCENARIO 2 — Core replace-mode rollover (unchanged) ===
+          Setup: test-user-core-rollover set to
+            {tier:core, analysis_count:3, rollover_count:0,
+             billing_cycle_start: now() - 31 days}
+          GET /api/auth/me Bearer test_session_core_rollover →
+            200 {
+              tier: "core",
+              usage: {allowed:true, remaining:17, limit:10,
+                      rollover:7, tier:"core"},
+              ...
+            }
+          ✅ usage.limit == 10
+          ✅ usage.rollover == 7   (= 10 - 3, capped at tier limit 10)
+          ✅ usage.remaining == 17 (= 10 + 7)
+          ✅ DB side: analysis_count reset to 0
+          ✅ DB side: rollover_count persisted as 7
+          Confirms rollover_months <= 1 branch:
+            new_rollover = min(unused_this_cycle, analysis_limit)
+          behaves as spec (replace-mode, single prior month carryover).
+
+          === SCENARIO 3 — Pro accumulate-mode rollover (new) ===
+          Setup: test-user-002 set to
+            {tier:pro, analysis_count:5, rollover_count:30,
+             billing_cycle_start: now() - 31 days}
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              tier: "pro",
+              usage: {allowed:true, remaining:105, limit:40,
+                      rollover:65, tier:"pro"},
+              ...
+            }
+          Math check:
+            unused_this_cycle = 40 - 5 = 35
+            new_rollover      = min(30 + 35, 40 * 12) = min(65, 480) = 65
+            total_available   = 40 + 65 = 105
+          ✅ usage.limit == 40
+          ✅ usage.rollover == 65
+          ✅ usage.remaining == 105
+          ✅ DB side: analysis_count reset to 0
+          ✅ DB side: rollover_count persisted as 65
+          Confirms rollover_months > 1 branch:
+            new_rollover = min(rollover_count + unused_this_cycle,
+                               analysis_limit * rollover_months)
+          correctly ADDs unused onto existing rollover (accumulate-mode).
+
+          === SCENARIO 4 — Pro rollover cap = 480 (40 × 12) ===
+          Setup: test-user-002 set to
+            {tier:pro, analysis_count:0, rollover_count:475,
+             billing_cycle_start: now() - 31 days}
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              usage: {allowed:true, remaining:520, limit:40,
+                      rollover:480, tier:"pro"}, ...
+            }
+          Math check:
+            unused_this_cycle = 40 - 0 = 40
+            new_rollover      = min(475 + 40, 480) = min(515, 480) = 480
+            total_available   = 40 + 480 = 520
+          ✅ usage.rollover == 480 (capped at 40*12)
+          ✅ usage.remaining == 520
+          ✅ usage.limit == 40
+
+          === SCENARIO 5 — Pro limit reached message ===
+          Setup: test-user-002 set to
+            {tier:pro, analysis_count:40, rollover_count:0,
+             billing_cycle_start: now()}  (fresh cycle, no rollover)
+          GET /api/auth/me Bearer test_session_rs_002 →
+            200 {
+              usage: {
+                allowed: false,
+                remaining: 0,
+                limit: 40,
+                tier: "pro",
+                message: "Monthly limit reached. Upgrade or wait for next cycle."
+              }, ...
+            }
+          ✅ usage.allowed == false
+          ✅ usage.remaining == 0
+          ✅ usage.limit == 40
+          ✅ usage.message contains "Monthly limit reached"
+
+          === SCENARIO 6 — Regression: Trial + auth ===
+          ✅ Trial (test_session_trial_001) → 200 with
+             usage.limit == 3, tier == "trial" (is_lifetime path,
+             unchanged by this patch).
+          ✅ Pro 1 (test_session_rs_001) → 200 with usage.limit == 40.
+          ✅ Zero 500s on /api/auth/me across the entire run.
+
+          === CLEANUP ===
+          ✅ test-user-002 restored to clean state:
+             {tier:"pro", analysis_count:0, rollover_count:0,
+              billing_cycle_start: now()}.
+          Subsequent sessions (Profile screens, analyze flow, etc.)
+          will start with a full 40-analysis Pro quota and no rollover.
+
+          No source files modified by testing. Main agent: please
+          summarise and finish — Pro 40/month + 12-month accumulate
+          rollover + 480 cap are production-ready. Core replace-mode
+          (10 + 1-month carryover) remains unchanged and correct.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      tier_limits_rollover_v2 validated — 33/33 assertions PASS via
+      /app/tier_rollover_test.py against the preview URL.
+
+      All 6 review scenarios green:
+        1. Pro usage.limit is now 40 (was 100).
+        2. Core replace-mode rollover unchanged: 10 + (10-3) = 17
+           remaining, rollover=7.
+        3. Pro accumulate-mode rollover: rollover 30 + unused 35 = 65,
+           remaining = 40 + 65 = 105.
+        4. Pro rollover cap honored: 475 + 40 clamps to 480 (40*12),
+           remaining = 520.
+        5. Pro limit-reached returns allowed=false, remaining=0,
+           limit=40, message="Monthly limit reached. Upgrade or wait
+           for next cycle."
+        6. Trial unchanged (limit=3, is_lifetime), zero 500s anywhere.
+
+      DB-side effects verified for the rollover cases: in-place update
+      inside check_analysis_allowed resets analysis_count→0 and
+      persists the new rollover_count. Cleanup restored test-user-002
+      to {tier:pro, analysis_count:0, rollover_count:0,
+      billing_cycle_start:now()}. No credential or source changes.
+
+      Note: test_credentials.md still says "Pro: 100 analyses/month"
+      (line 38). That's a doc-only staleness — the live tier config
+      and behavior are 40/month. Worth updating when you touch the
+      credentials file next; not a functional issue.
+
+  - agent: "testing"
+    message: |
+      Species expansion v1 validated end-to-end against the preview URL.
+      Harness: /app/species_expansion_test.py — 40 PASS / 1 non-blocking
+      FAIL (stale pytest assertions, details below).
+
+      ✅ Scenario 1 — prompt-pack resolution: all 8 species
+         (deer/turkey/hog/elk/bear/moose/antelope/coyote) resolve to
+         their own non-fallback packs with matching canonical_ids;
+         `unicorn` correctly falls back.
+      ✅ Scenario 2 — GET /api/species (anonymous): 200,
+         user_tier="trial", 8 species, 3 categories, correct
+         locked/unlocked split (deer/turkey/hog unlocked;
+         elk/bear/moose/antelope/coyote locked), waterfowl/dove/quail
+         hidden (enabled=False), terminology + form_fields populated
+         on every entry.
+      ✅ Scenario 3 — GET /api/species for pro (test_session_rs_002)
+         and core (swapped via Mongo): all 8 unlocked both ways.
+         Restored test-user-002 to tier=pro post-run.
+      ✅ Scenario 4 — /api/analyze-hunt tier gating (critical):
+         trial+elk -> 403 with detail "Elk is a Core feature. Upgrade
+         your plan to analyze it." (matches spec); trial+deer -> 200
+         (end-to-end analysis ran, not species-gated); pro+elk -> 200
+         success=true (Pro proceeds past gate and completes analysis).
+      ✅ Scenario 5 — legacy SPECIES_DATA shim: 8 keys exactly, every
+         entry has name + icon + description + non-empty
+         behavior_rules list (lengths 5-6).
+      ✅ Scenario 6 — GET /api/auth/me test_session_rs_001 -> 200.
+         Zero NEW 500s in backend logs during the run.
+      ❌ Scenario 6 — existing pytest suite
+         (tests/test_species_prompt_packs.py): 68 passing, 7 FAILING.
+         The 7 failures are stale assertions that still insist
+         elk/moose/bear/pronghorn resolve to GENERIC_FALLBACK_PACK —
+         they were written before the 5 new packs existed and are
+         invalidated by the very feature under review. NOT a
+         regression of the new code; the runtime feature is correct.
+         Main agent needs to update the test file:
+           * TestSpeciesResolution.test_unsupported_species_falls_back
+             — drop `elk`, `moose`, `bear`, `pronghorn` from the
+             param list (keep `squirrel`, `whitetail_bobcat`, None, "",
+             "   ").
+           * TestSpeciesResolution.test_is_supported_species — expand
+             its "supported" expectations to include elk/bear/moose/
+             antelope/coyote.
+           * TestSpeciesResolution.test_inventory_shape — inventory
+             length is now 8 (was 3).
+           * TestAssembleSystemPrompt.
+             test_unsupported_species_uses_fallback_in_assembled_prompt
+             — drop the newly-supported species from the "unsupported"
+             param set.
+
+      No source files modified by testing. test_result.md updated with
+      a new `species_expansion_v1` task block. Main agent: please
+      update tests/test_species_prompt_packs.py to match the new
+      inventory; the species registry / prompt packs / /api/species /
+      /api/analyze-hunt gating are production-ready.
 

@@ -39,6 +39,9 @@ export const CUSTOM_MARKER_TYPES = [
   { id: 'trail', label: 'Trail / Path', icon: 'footsteps', color: '#FFCA28' },
 ];
 
+// Legacy hardcoded species list — superseded by /api/species +
+// `src/constants/species.tsx`. Kept here so older imports keep
+// working, but new screens should use `useSpeciesCatalog()` instead.
 export const SPECIES = [
   {
     id: 'deer',
