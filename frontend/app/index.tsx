@@ -1,8 +1,6 @@
 import React, { useEffect } from 'react';
-import {
-  View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView,
-  Dimensions, ActivityIndicator,
-} from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
@@ -27,7 +25,7 @@ export default function HomeScreen() {
 
   if (loading || !user) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.loadingContainer}>
           <RavenSpinner size={120} />
         </View>
@@ -39,7 +37,7 @@ export default function HomeScreen() {
   const tierLabel = user.tier.toUpperCase();
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Header with account */}
         <View style={styles.header}>

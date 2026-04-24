@@ -1,19 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-  ScrollView,
-  TextInput,
-  Image,
-  Alert,
-  ActivityIndicator,
-  Platform,
-  KeyboardAvoidingView,
-  Dimensions,
-} from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Image, Alert, ActivityIndicator, Platform, KeyboardAvoidingView, Dimensions } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -539,7 +526,7 @@ export default function SetupScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.loadingContainer}>
           <RavenSpinner size={140} />
           <Text style={styles.loadingTitle}>ANALYZING TERRAIN</Text>
@@ -564,7 +551,7 @@ export default function SetupScreen() {
   if (limitReached) {
     const tierName = user?.tier?.toUpperCase() || 'TRIAL';
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.limitContainer}>
           <View style={styles.limitIconCircle}>
             <Ionicons name="lock-closed" size={40} color={COLORS.accent} />
@@ -614,7 +601,7 @@ export default function SetupScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         {!isConnected && (
           <View testID="offline-banner-setup" style={styles.offlineBanner}>

@@ -1,21 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-  ScrollView,
-  Image,
-  Dimensions,
-  PanResponder,
-  Alert,
-  Modal,
-  FlatList,
-  ActivityIndicator,
-  Animated,
-  Easing,
-} from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, PanResponder, Alert, Modal, FlatList, ActivityIndicator, Animated, Easing } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -568,7 +553,7 @@ export default function ResultsScreen() {
 
   if (!hunt) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.emptyState}>
           {loadFailed ? (
             <>
@@ -609,7 +594,7 @@ export default function ResultsScreen() {
   const result = hunt.result;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       {/* Offline Banner */}
       {!isConnected && (
         <View testID="offline-banner" style={styles.offlineBanner}>
