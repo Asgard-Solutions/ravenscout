@@ -26,7 +26,12 @@ if not mongo_url:
         "Missing Mongo connection string. Set MONGO_URL or MONGODB_URI in backend/.env."
     )
 db_name = os.environ.get('DB_NAME') or 'raven_scout'
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(
+    mongo_url,
+    serverSelectionTimeoutMS=5000,  # 5 second timeout for Railway startup
+    connectTimeoutMS=5000,
+    socketTimeoutMS=5000
+)
 db = client[db_name]
 
 app = FastAPI()
@@ -1003,7 +1008,18 @@ async def root():
 
 @api_router.get("/health")
 async def health():
-    return {"status": "ok"}
+    """Railway health check - always returns OK for container health"""
+    return {"status": "ok", "service": "ravenscout-api"}
+
+@api_router.get("/health/db")
+async def health_db():
+    """Database connectivity check"""
+    try:
+        # Test MongoDB connection
+        await client.admin.command('ping')
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        return {"status": "error", "database": "disconnected", "error": str(e)}
 
 @api_router.get("/species")
 async def get_species():
@@ -1332,9 +1348,9 @@ async def _ensure_hunts_indexes() -> None:
         logger.warning(f"hunts index setup failed (non-fatal): {e}")
 
 
-@app.on_event("startup")
-async def _startup_hunts_indexes():
-    await _ensure_hunts_indexes()
+# @app.on_event("startup")
+# async def _startup_hunts_indexes():
+#     await _ensure_hunts_indexes()
 
 
 @api_router.post("/hunts")
