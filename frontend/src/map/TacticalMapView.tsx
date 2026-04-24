@@ -166,6 +166,14 @@ export default function TacticalMapView({
         scrollEnabled={false}
         bounces={false}
         overScrollMode="never"
+        // Android: allow the WebView to own vertical gestures inside
+        // a ScrollView so pinch-zoom / pan on the MapLibre canvas
+        // isn't stolen by the parent scroll. Combined with the
+        // onStartShouldSetResponder* hooks on the map container in
+        // setup.tsx, this makes the map feel like a native gesture
+        // surface rather than a piece of scrollable content.
+        nestedScrollEnabled={true}
+        androidLayerType="hardware"
         onMessage={handleWebViewMessage}
       />
     );

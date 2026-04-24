@@ -738,7 +738,19 @@ export default function SetupScreen() {
                     </Text>
                   )}
 
-                  <View style={styles.interactiveMapContainer}>
+                  <View
+                    style={styles.interactiveMapContainer}
+                    // On Android, the parent ScrollView will steal pinch/pan
+                    // gestures from the WebView unless the map claims them
+                    // at the earliest responder phase. Returning true here
+                    // tells the ResponderSystem "this View handles its own
+                    // touches — parent, stop capturing". Without this the
+                    // whole page scrolls when the user tries to move the map.
+                    onStartShouldSetResponder={() => true}
+                    onMoveShouldSetResponder={() => true}
+                    onStartShouldSetResponderCapture={() => true}
+                    onMoveShouldSetResponderCapture={() => true}
+                  >
                     <TacticalMapView
                       key={mapKey}
                       center={locationCoords || { lat: 39.8283, lon: -98.5795 }}
