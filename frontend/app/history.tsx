@@ -1,16 +1,8 @@
-import React, { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-  ScrollView,
-  Image,
-  Alert,
-  RefreshControl,
-} from 'react-native';
+import React, { useState, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Alert, RefreshControl } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../src/constants/theme';
@@ -40,6 +32,8 @@ const SPECIES_ICONS: Record<string, string> = {
 
 export default function HistoryScreen() {
   const router = useRouter();
+  const scrollRef = useRef<ScrollView>(null);
+  useScrollToTopOnFocus(scrollRef);
   const { isConnected } = useNetwork();
   const { user } = useAuth();
   const [hunts, setHunts] = useState<HistoryRow[]>([]);
@@ -114,7 +108,7 @@ export default function HistoryScreen() {
   const getThumb = (hunt: HistoryRow): string | null => hunt.resolvedThumb ?? null;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       {/* Offline Banner */}
       {!isConnected && (
         <View testID="offline-banner-history" style={styles.offlineBanner}>

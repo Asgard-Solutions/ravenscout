@@ -37,6 +37,14 @@ interface AuthContextType {
   sessionToken: string | null;
   login: (sessionId: string) => Promise<boolean>;
   loginWithGoogle: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+  loginWithPassword: (email: string, password: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  registerWithPassword: (email: string, password: string, name: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  requestPasswordReset: (email: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  verifyOtp: (email: string, otp: string) => Promise<{ ok: true; resetToken: string } | { ok: false; reason: string }>;
+  resetPassword: (resetToken: string, newPassword: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  updateProfile: (patch: { name?: string; picture?: string }) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  changePassword: (currentPw: string, newPw: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  deleteAccount: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -45,6 +53,14 @@ const AuthContext = createContext<AuthContextType>({
   user: null, loading: true, sessionToken: null,
   login: async () => false,
   loginWithGoogle: async () => ({ ok: false, reason: 'not_ready' }),
+  loginWithPassword: async () => ({ ok: false, reason: 'not_ready' }),
+  registerWithPassword: async () => ({ ok: false, reason: 'not_ready' }),
+  requestPasswordReset: async () => ({ ok: false, reason: 'not_ready' }),
+  verifyOtp: async () => ({ ok: false, reason: 'not_ready' }),
+  resetPassword: async () => ({ ok: false, reason: 'not_ready' }),
+  updateProfile: async () => ({ ok: false, reason: 'not_ready' }),
+  changePassword: async () => ({ ok: false, reason: 'not_ready' }),
+  deleteAccount: async () => ({ ok: false, reason: 'not_ready' }),
   logout: async () => {}, refreshUser: async () => {},
 });
 
@@ -189,6 +205,136 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // ------------------------------------------------------------------
+  // Email + password auth (for users without / not wanting Google).
+  // Each fn is non-throwing: returns {ok:true} on success, or
+  // {ok:false, reason} where reason is the backend's `detail` string.
+  // ------------------------------------------------------------------
+  const authJsonFetch = async (path: string, body: any): Promise<{ ok: true; data: any } | { ok: false; reason: string }> => {
+    try {
+      const resp = await fetch(`${BACKEND_URL}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const detail = typeof data?.detail === 'string' ? data.detail : JSON.stringify(data?.detail || data);
+        return { ok: false, reason: detail || `http_${resp.status}` };
+      }
+      return { ok: true, data };
+    } catch (err: any) {
+      return { ok: false, reason: err?.message || 'network_error' };
+    }
+  };
+
+  const _installSession = async (data: any): Promise<void> => {
+    const token = data?.session_token;
+    if (!token) return;
+    await AsyncStorage.setItem('session_token', token);
+    setSessionToken(token);
+    const u = await fetchUser(token);
+    if (u) setUser(u);
+  };
+
+  const loginWithPassword = async (email: string, password: string) => {
+    const r = await authJsonFetch('/api/auth/login', { email, password });
+    if (!r.ok) return r;
+    await _installSession(r.data);
+    return { ok: true as const };
+  };
+
+  const registerWithPassword = async (email: string, password: string, name: string) => {
+    const r = await authJsonFetch('/api/auth/register', { email, password, name });
+    if (!r.ok) return r;
+    await _installSession(r.data);
+    return { ok: true as const };
+  };
+
+  const requestPasswordReset = async (email: string) => {
+    const r = await authJsonFetch('/api/auth/request-password-reset', { email });
+    if (!r.ok) return r;
+    return { ok: true as const };
+  };
+
+  const verifyOtp = async (email: string, otp: string) => {
+    const r = await authJsonFetch('/api/auth/verify-otp', { email, otp });
+    if (!r.ok) return r;
+    const resetToken: string = r.data?.reset_token || '';
+    if (!resetToken) return { ok: false as const, reason: 'no_reset_token' };
+    return { ok: true as const, resetToken };
+  };
+
+  const resetPassword = async (resetToken: string, newPassword: string) => {
+    const r = await authJsonFetch('/api/auth/reset-password', {
+      reset_token: resetToken,
+      new_password: newPassword,
+    });
+    if (!r.ok) return r;
+    await _installSession(r.data);
+    return { ok: true as const };
+  };
+
+  const updateProfile = async (patch: { name?: string; picture?: string }) => {
+    if (!sessionToken) return { ok: false as const, reason: 'no_session' };
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/users/me`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify(patch),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) return { ok: false as const, reason: data?.detail || `http_${resp.status}` };
+      // Refresh user so UI reflects the change.
+      await refreshUser();
+      return { ok: true as const };
+    } catch (err: any) {
+      return { ok: false as const, reason: err?.message || 'network_error' };
+    }
+  };
+
+  const changePassword = async (currentPw: string, newPw: string) => {
+    if (!sessionToken) return { ok: false as const, reason: 'no_session' };
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/auth/change-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({ current_password: currentPw, new_password: newPw }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) return { ok: false as const, reason: data?.detail || `http_${resp.status}` };
+      return { ok: true as const };
+    } catch (err: any) {
+      return { ok: false as const, reason: err?.message || 'network_error' };
+    }
+  };
+
+  const deleteAccount = async () => {
+    if (!sessionToken) return { ok: false as const, reason: 'no_session' };
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/users/me`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        return { ok: false as const, reason: data?.detail || `http_${resp.status}` };
+      }
+      await AsyncStorage.removeItem('session_token');
+      setSessionToken(null);
+      setUser(null);
+      return { ok: true as const };
+    } catch (err: any) {
+      return { ok: false as const, reason: err?.message || 'network_error' };
+    }
+  };
+
   const logout = async () => {
     if (sessionToken) {
       try {
@@ -204,7 +350,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, sessionToken, login, loginWithGoogle, logout, refreshUser }}>
+    <AuthContext.Provider value={{
+      user, loading, sessionToken,
+      login, loginWithGoogle, loginWithPassword, registerWithPassword,
+      requestPasswordReset, verifyOtp, resetPassword,
+      updateProfile, changePassword, deleteAccount,
+      logout, refreshUser,
+    }}>
       {children}
     </AuthContext.Provider>
   );

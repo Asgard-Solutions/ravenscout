@@ -1,19 +1,18 @@
-import React, { useEffect } from 'react';
-import {
-  View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView,
-  Dimensions, ActivityIndicator,
-} from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator, Image } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
 import { RavenSpinner } from '../src/components/RavenSpinner';
+import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 
 const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { user, loading, logout, refreshUser } = useAuth();
+  const { user, loading, refreshUser } = useAuth();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -25,9 +24,14 @@ export default function HomeScreen() {
     if (user) refreshUser();
   }, []);
 
+  // Reset scroll to top whenever this screen regains focus (e.g.
+  // coming back from /setup or /results).
+  const scrollRef = useRef<ScrollView>(null);
+  useScrollToTopOnFocus(scrollRef);
+
   if (loading || !user) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.loadingContainer}>
           <RavenSpinner size={120} />
         </View>
@@ -39,8 +43,8 @@ export default function HomeScreen() {
   const tierLabel = user.tier.toUpperCase();
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
+      <ScrollView ref={scrollRef} style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Header with account */}
         <View style={styles.header}>
           <View style={styles.brandRow}>
@@ -52,8 +56,23 @@ export default function HomeScreen() {
               <Text style={styles.tierBadgeText}>{tierLabel}</Text>
               <Ionicons name="chevron-forward" size={14} color={COLORS.accent} />
             </TouchableOpacity>
-            <TouchableOpacity testID="account-button" style={styles.accountButton} onPress={logout}>
-              <Ionicons name="log-out-outline" size={20} color={COLORS.fogGray} />
+            <TouchableOpacity
+              testID="profile-avatar-button"
+              style={styles.avatarButton}
+              onPress={() => router.push('/profile')}
+              activeOpacity={0.8}
+              accessibilityLabel="Open profile"
+              accessibilityRole="button"
+            >
+              {user.picture ? (
+                <Image source={{ uri: user.picture }} style={styles.avatarImage} />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarInitial}>
+                    {(user.name || user.email || '?').charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -159,6 +178,15 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(58, 74, 82, 0.5)',
     alignItems: 'center', justifyContent: 'center',
   },
+  avatarButton: {
+    width: 40, height: 40, borderRadius: 20, overflow: 'hidden',
+    borderWidth: 1.5, borderColor: COLORS.accent,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(200, 155, 60, 0.12)',
+  },
+  avatarImage: { width: '100%', height: '100%', borderRadius: 20 },
+  avatarFallback: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+  avatarInitial: { color: COLORS.accent, fontSize: 16, fontWeight: '900' },
   // Usage
   usageCard: {
     backgroundColor: 'rgba(58, 74, 82, 0.4)', borderRadius: 14, padding: 16,

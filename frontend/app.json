@@ -56,7 +56,8 @@
         {
           "iosUrlScheme": "com.googleusercontent.apps.placeholder-not-used-on-android"
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true

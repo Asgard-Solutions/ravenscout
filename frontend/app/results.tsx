@@ -1,21 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-  ScrollView,
-  Image,
-  Dimensions,
-  PanResponder,
-  Alert,
-  Modal,
-  FlatList,
-  ActivityIndicator,
-  Animated,
-  Easing,
-} from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, PanResponder, Alert, Modal, FlatList, ActivityIndicator, Animated, Easing } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -27,6 +12,7 @@ import { AnalysisSummaryCard, TopSetupsSection, WindAnalysisCard, MapObservation
 import { useMapFocus, resolveLocalOverlayForFocus } from '../src/utils/mapFocus';
 import { loadHunt as loadHuntFromStore, finalizeProvisionalHunt } from '../src/media/huntPersistence';
 import { RavenSpinner } from '../src/components/RavenSpinner';
+import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 import { ImageOverlayCanvas } from '../src/components/ImageOverlayCanvas';
@@ -147,6 +133,7 @@ export default function ResultsScreen() {
   const [currentMapIndex, setCurrentMapIndex] = useState(0);
   const mapScrollRef = useRef<ScrollView>(null);
   const rootScrollRef = useRef<ScrollView>(null);
+  useScrollToTopOnFocus(rootScrollRef);
   const [loadFailed, setLoadFailed] = useState(false);
   const [persistWarning, setPersistWarning] = useState<string | null>(null);
   // Frozen analysis basis — the exact image + GPS the overlays were
@@ -568,7 +555,7 @@ export default function ResultsScreen() {
 
   if (!hunt) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.emptyState}>
           {loadFailed ? (
             <>
@@ -609,7 +596,7 @@ export default function ResultsScreen() {
   const result = hunt.result;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       {/* Offline Banner */}
       {!isConnected && (
         <View testID="offline-banner" style={styles.offlineBanner}>
