@@ -367,6 +367,11 @@ def build_password_auth_router(db, get_current_user):
                 expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
             except Exception:
                 expires_at = None
+        # Motor/PyMongo returns BSON Date as a tz-naive datetime even when
+        # we insert it as tz-aware. Normalize back to UTC so the comparison
+        # below doesn't blow up with TypeError.
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
         if not expires_at or expires_at < datetime.now(timezone.utc):
             await db.password_reset_otps.delete_many({"email": email})
             raise HTTPException(status_code=400, detail="Code expired. Request a new one.")
@@ -403,6 +408,9 @@ def build_password_auth_router(db, get_current_user):
                 expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
             except Exception:
                 expires_at = None
+        # Normalize tz-naive datetimes returned by motor to UTC.
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
         if not expires_at or expires_at < datetime.now(timezone.utc):
             await db.password_reset_tokens.delete_many({"token": body.reset_token})
             raise HTTPException(status_code=400, detail="Reset link expired.")

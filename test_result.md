@@ -741,10 +741,8 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Password reset OTP flow (request-password-reset, verify-otp, reset-password)"
-  stuck_tasks:
-    - "Password reset OTP flow (request-password-reset, verify-otp, reset-password)"
+  current_focus: []
+  stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
@@ -820,11 +818,11 @@ password_auth:
 
   - task: "Password reset OTP flow (request-password-reset, verify-otp, reset-password)"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/password_auth.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
@@ -924,6 +922,58 @@ password_auth:
           and ready (verify-otp 401/200/429, reset-password 200 with
           new session_token, old pw -> 401, new pw -> 200, old-session
           invalidation).
+      - working: true
+        agent: "testing"
+        comment: |
+          RE-RUN after main-agent tz-naive fix — tz normalization added
+          at password_auth.py L373-374 (verify_otp) and L412-413
+          (reset_password). Focused harness: /app/password_auth_s5s6_test.py.
+          19/19 substantive assertions PASS. Zero 500s during the run
+          (log-scraped invariant also asserted).
+
+          === SCENARIO 5 — POST /api/auth/verify-otp ===
+          Setup: registered pwtest_<hex>@example.com / StrongPass1! ;
+          request-password-reset -> 200; OTP "026842" scraped from
+          ConsoleMailer entry in /var/log/supervisor/backend.err.log
+          (confirmed: the Python logger writes to stderr in this env,
+          so err.log is the correct source in dev).
+
+          ✅ wrong OTP "000000" -> 401 "Invalid code."   (was 500)
+          ✅ real OTP "026842" -> 200 with
+             {"reset_token": "rst_<urlsafe-base64>"}    (was 500)
+          ✅ reset_token begins with "rst_"
+          ✅ 6 consecutive wrong attempts after a FRESH request:
+                status sequence == [401,401,401,401,401,429]
+             Cross-verified in supervisor access log:
+               verify-otp 401 x5 then 429 Too Many Requests.
+          ✅ After the 429 purge, the next verify-otp call returns
+             400 "No active reset code. Request a new one."
+
+          === SCENARIO 6 — POST /api/auth/reset-password ===
+          ✅ Valid reset_token + new_password "AnotherStrong2@" -> 200
+             {"ok": true, "session_token": "rs_<hex>"}.  (was 500)
+          ✅ POST /api/auth/login with OLD password "StrongPass1!"
+             -> 401 (old pw truly invalidated).
+          ✅ GET /api/auth/me with the new session_token -> 200,
+             email echoed correctly.
+          ✅ POST /api/auth/login with NEW password "AnotherStrong2@"
+             -> 200 (user can sign in fresh).
+          ✅ Re-use of the SAME reset_token on a second
+             /api/auth/reset-password -> 400 with
+             detail="Reset link invalid or expired."
+             (single-use enforced; the token is purged on first use
+             at password_auth.py L422).
+
+          === ZERO 500s INVARIANT ===
+          ✅ Zero new "Internal Server Error" and zero new
+             "TypeError: can't compare offset-naive and offset-aware"
+             tracebacks in backend.err.log / backend.out.log between
+             run-start and run-end offsets. The tz-naive bug is fully
+             fixed end-to-end.
+
+          Password-reset OTP flow is production-ready. No source
+          modifications by testing. Stuck count reset to 0,
+          needs_retesting=false, working=true.
 
   - task: "Profile endpoints — PATCH /api/users/me + DELETE /api/users/me"
     implemented: true
@@ -1589,4 +1639,53 @@ agent_communication:
       370) + reset_password (line 406) tz-comparison TypeError.
       Please apply the suggested fix above and re-call the testing
       agent — the harness will re-run scenarios 5 and 6 end-to-end.
+
+
+  - agent: "testing"
+    message: |
+      CONFIRMATION — password-reset OTP flow re-run after main-agent's
+      tz-naive datetime fix in /app/backend/password_auth.py
+      (verify_otp L373-374 and reset_password L412-413 now normalize
+      `expires_at.tzinfo = timezone.utc` before comparing).
+
+      Focused harness: /app/password_auth_s5s6_test.py — re-runs ONLY
+      scenarios 5 (verify-otp) and 6 (reset-password) as requested.
+      Result: 19/19 substantive assertions PASS. ZERO 500s during
+      the run (log-scraped invariant also asserted).
+
+      Scenario 5 — POST /api/auth/verify-otp (against preview URL)
+      ✅ wrong OTP "000000" -> 401 "Invalid code."        (was 500)
+      ✅ real OTP (scraped from ConsoleMailer log at
+         /var/log/supervisor/backend.err.log) -> 200 with
+         {"reset_token": "rst_<urlsafe>"}                 (was 500)
+      ✅ 6 consecutive wrong attempts after a FRESH reset request
+         yielded exact sequence [401,401,401,401,401,429] — matches
+         spec and cross-verified in supervisor access log.
+      ✅ After 429 purge, next verify-otp -> 400
+         "No active reset code. Request a new one."
+
+      Scenario 6 — POST /api/auth/reset-password
+      ✅ Valid reset_token + new strong password "AnotherStrong2@"
+         -> 200 {"ok":true, "session_token":"rs_<hex>"}   (was 500)
+      ✅ POST /api/auth/login with OLD password -> 401 (old pw
+         truly invalidated).
+      ✅ GET /api/auth/me with the new session_token -> 200, email
+         echoed correctly.
+      ✅ POST /api/auth/login with NEW password -> 200.
+      ✅ Re-use of SAME reset_token on a second /reset-password
+         -> 400 detail="Reset link invalid or expired." (single-use
+         enforced via delete_many on the reset-tokens collection
+         after first use at password_auth.py L422).
+
+      Zero 500s invariant
+      ✅ Zero new "Internal Server Error" and zero new
+         "TypeError: can't compare offset-naive and offset-aware"
+         tracebacks in backend.err.log / backend.out.log between
+         run-start and run-end offsets.
+
+      test_result.md password_auth statuses updated to working=true,
+      needs_retesting=false, stuck_count=0. test_plan.current_focus
+      and stuck_tasks cleared. Scenarios 1-4 and 7-9 were NOT retested
+      (already passing per prior run). Main agent: please summarise
+      and finish — password-reset OTP flow is production-ready.
 
