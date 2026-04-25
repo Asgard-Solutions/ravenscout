@@ -191,6 +191,28 @@ ANTELOPE_PACK = SpeciesPromptPack(
                 "Emphasize coulee / draw approach, head-down timing, and terrain-break stalk finals.",
             ),
         ),
+        "public_land": HuntStyleModifier(
+            style_id="public_land",
+            name="Public Land (Pronghorn)",
+            behavior_adjustments=(
+                "Western public-land pronghorn country is the BLM / state-trust checkerboard \u2014 access geometry constrains real approach options at the section-line scale.",
+                "Pressured pronghorn shift toward private-only sections, posted ground, and roadless interior fast (within 2-3 days of opener).",
+                "Glass-and-truck patrolling on county roads is the classic pressure pattern; smart bucks deconflict from the road network.",
+            ),
+            tactical_adjustments=(
+                "Plan stalks that respect section lines \u2014 know where private starts before committing to an approach.",
+                "Hike-in to road-distant interior public ground; this is where pressured bucks and unmolested groups concentrate after day 2.",
+                "Glass from elevation 1+ mile from access roads \u2014 truck-glassed country is heavily worked already.",
+                "Use OnX-grade boundary awareness in the planning phase \u2014 fence-crossings into private negate the stalk.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend a stalk that crosses a fence into private without clear permission \u2014 flag access in caution_notes.",
+                "Do NOT assume road-accessible glassing produces results past day 1.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize boundary-aware planning, hike-in interior access, and section-line reading.",
+            ),
+        ),
     },
     regional_modifiers={
         "plains": RegionalModifier(

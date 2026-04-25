@@ -746,6 +746,140 @@ test_plan:
   test_all: false
   test_priority: "high_first"
 
+new_regions_pnw_northeast:
+  - task: "New canonical regions (pacific_northwest + northeast) + 5 new modifier blocks + 4 new hunt-style modifiers"
+    implemented: true
+    working: true
+    file: "/app/backend/species_prompts/regions.py, /app/backend/species_prompts/{elk,bear,moose,coyote,antelope}.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          New canonical regions (pacific_northwest, northeast) and 4 new
+          regional + 4 new hunt-style modifier blocks verified end-to-end
+          against EXPO_PUBLIC_BACKEND_URL. Harness:
+          /app/new_regions_test.py — 44/44 substantive assertions PASS
+          (3 reported "fails" all triaged as spurious; details below).
+
+          === SCENARIO 1 — GPS RESOLUTION ===
+          ✅ Olympic Peninsula WA (47.5,-123.0) -> pacific_northwest
+          ✅ Portland OR          (45.5,-122.7) -> pacific_northwest
+          ✅ Eugene OR            (44.0,-123.1) -> pacific_northwest
+          ✅ Bangor ME            (44.8, -68.8) -> northeast
+          ✅ Adirondacks NY       (43.9, -74.2) -> northeast
+          ✅ Burlington VT        (44.5, -73.2) -> northeast
+          Control regression points:
+          ✅ Bozeman MT           (45.7,-111.0) -> mountain_west
+          ✅ Cleveland OH         (41.5, -81.7) -> midwest
+          ✅ Atlanta GA           (33.7, -84.4) -> southeast_us
+          ⚠️ Cheyenne WY          (41.1,-104.8) -> mountain_west
+             (TEST-BRIEF MISMATCH, not a regression):
+             plains box is `-104.0 <= lon < -98.0`; mountain_west is
+             `-125.0 <= lon < -104.0`. Cheyenne's lon=-104.8 is < -104,
+             so it falls into mountain_west by the existing
+             pre-pacific_northwest-patch boundary. No box edits were
+             made to plains/mountain_west in this round. The new
+             pacific_northwest box (lat 41-49.5, lon -125 to -116) does
+             not touch -104.8 at all. So this is the SAME classification
+             that has been live for both prior test rounds; the brief's
+             expected="plains" appears to be a typo. ZERO REGRESSION
+             from this delta.
+
+          === SCENARIO 2 — ALIAS NORMALIZATION ===
+          ✅ "Pacific Northwest"  -> pacific_northwest
+          ✅ "PNW"                -> pacific_northwest
+          ✅ "Olympic Peninsula"  -> pacific_northwest
+          ✅ "New England"        -> northeast
+          ✅ "Maine"              -> northeast
+          ✅ "Adirondacks"        -> northeast
+          ✅ "northeast"          -> northeast
+          ✅ "north east"         -> northeast
+
+          === SCENARIO 3 — REGIONAL MODIFIER RENDERING ===
+          assemble_system_prompt(species, conditions={"hunt_date":
+          "2026-09-15"}, image_count=1, tier="pro", gps_coords=...).
+          ✅ elk + (47.5,-123.0)  contains "Pacific Northwest" + "Roosevelt"
+          ✅ bear + (47.5,-123.0) contains "Pacific Northwest" + ("salmon"
+             OR "clearcut")
+          ✅ moose + (44.8,-68.8) contains "Northeast" + ("Maine" OR
+             "beaver flowage" OR "logging-road")
+          ✅ coyote + (43.9,-74.2) contains "Eastern" or "Northeast"
+             + ("wolf admixture" OR "deer-yard")
+
+          === SCENARIO 4 — HUNT-STYLE MODIFIER RENDERING ===
+          ✅ bear + hunt_style="blind" -> "Bait Blind" / "Ground Blind /
+             Bait Blind" + "trail-cam" / "bait acclimation"
+          ✅ moose + hunt_style="blind" -> "Canoe" / "Ground / Canoe Blind"
+             + "water-edge" / "shore"
+          ✅ moose + hunt_style="public_land" -> "Public Land" + "pack-out"
+             / "boat ramps"
+          ✅ antelope + hunt_style="public_land" -> "Public Land" +
+             ("BLM" / "checkerboard" / "section line")
+
+          === SCENARIO 5 — COMBINED region + style ===
+          ✅ elk + rifle + (47.5,-123.0) -> Pacific Northwest /
+             Roosevelt AND "Rifle (Elk)"
+          ✅ moose + public_land + (44.8,-68.8) -> Northeast / Maine
+             AND "Public Land (Moose)"
+          ✅ bear + blind + (47.5,-123.0) -> Pacific Northwest / salmon
+             AND "Bait Blind"
+
+          === SCENARIO 6 — PYTEST FULL SUITE (specified files) ===
+          cd /app/backend && python -m pytest \
+            tests/test_species_prompt_packs.py \
+            tests/test_species_expansion_modifiers.py \
+            tests/test_seasonal_modifiers.py \
+            tests/test_regional_modifiers.py \
+            tests/test_hunt_style_modifiers.py -q
+          → 352 passed in 0.22s (zero failures, zero new regressions)
+          test_overlay_rendering.py was excluded from the run as
+          instructed (its 2 pre-existing failures are unrelated).
+
+          === SCENARIO 7 — LIVE /api/analyze-hunt SMOKE ===
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro)
+            body: animal=bear, hunt_style=blind,
+                  latitude=47.5, longitude=-123.0,
+                  hunt_date=2026-09-20, 256x256 PNG
+          → HTTP 200 (45.9s). NOT 500.
+          ✅ region_resolution = {
+               resolvedRegionId: "pacific_northwest",
+               resolvedRegionLabel: "Pacific Northwest",
+               regionResolutionSource: "gps",
+               latitude: 47.5, longitude: -123.0
+             }
+          ✅ hunt_style_resolution = {
+               styleId: "blind",
+               styleLabel: "Ground Blind",
+               source: "user_selected",
+               rawInput: "blind"
+             }
+          ✅ Backend logger emitted (in /var/log/supervisor/backend.err.log,
+             since the project routes Python logger output to stderr):
+               "server - INFO - Region resolved: id=pacific_northwest
+                source=gps label='Pacific Northwest'"
+               "server - INFO - Hunt style resolved: id=blind
+                source=user_selected"
+             (Harness scraped backend.out.log instead of backend.err.log,
+             so it printed two false-negative log-grep lines — the actual
+             log entries are present and correct, verified by direct
+             grep on backend.err.log.)
+
+          ZERO 500s. ZERO new regressions in any of the 5 pytest suites.
+          Block ordering still SPECIES -> REGIONAL -> SEASONAL ->
+          HUNT STYLE -> HUNT CONDITIONS, no cross-pack contamination
+          from the existing 115-test invariant suite.
+
+          No source files modified by testing. Main agent: please
+          summarise and finish — pacific_northwest + northeast canonical
+          regions and the four new (elk-PNW, bear-PNW, moose-NE,
+          coyote-NE) regional + four new (bear-blind, moose-blind,
+          moose-public_land, antelope-public_land) hunt-style modifiers
+          are production-ready.
+
 species_expansion_v1_modifiers:
   - task: "Deepened prompt packs — regional + hunt-style modifiers for elk/bear/moose/antelope/coyote"
     implemented: true
@@ -2335,6 +2469,72 @@ agent_communication:
            remaining, rollover=7.
         3. Pro accumulate-mode rollover: rollover 30 + unused 35 = 65,
            remaining = 40 + 65 = 105.
+
+
+  - agent: "testing"
+    message: |
+      New canonical regions (pacific_northwest + northeast) and their
+      4 new regional + 4 new hunt-style modifier blocks verified
+      end-to-end against EXPO_PUBLIC_BACKEND_URL. Harness:
+      /app/new_regions_test.py — 44/44 substantive assertions PASS.
+
+      ✅ Scenario 1 — GPS resolution: all 6 NEW points
+         (Olympic Peninsula / Portland / Eugene -> pacific_northwest;
+         Bangor ME / Adirondacks NY / Burlington VT -> northeast).
+         Control regression points Bozeman/Cleveland/Atlanta still
+         resolve to mountain_west / midwest / southeast_us. Cheyenne WY
+         (lon=-104.8) still resolves to mountain_west — that is the
+         pre-existing classification (mountain_west box is lon<-104,
+         plains is lon>=-104), NOT a regression caused by the new
+         pacific_northwest/northeast boxes. Test brief's expected
+         "plains" appears to be a typo.
+      ✅ Scenario 2 — alias normalization: PNW / Pacific Northwest /
+         Olympic Peninsula -> pacific_northwest; New England / Maine /
+         Adirondacks / northeast / "north east" -> northeast.
+      ✅ Scenario 3 — regional modifier rendering: elk+PNW renders
+         "Pacific Northwest" + "Roosevelt"; bear+PNW renders
+         "Pacific Northwest" + salmon/clearcut; moose+NE renders
+         "Northeast" + Maine/beaver flowage/logging-road; coyote+NE
+         renders "Eastern"/"Northeast" + wolf admixture/deer-yard.
+      ✅ Scenario 4 — hunt-style modifier rendering: bear+blind ->
+         "Bait Blind" / "Ground Blind / Bait Blind" + trail-cam /
+         bait acclimation; moose+blind -> "Canoe" / "Ground / Canoe
+         Blind" + water-edge/shore; moose+public_land -> "Public Land"
+         + pack-out/boat ramps; antelope+public_land -> "Public Land"
+         + BLM/checkerboard/section-line.
+      ✅ Scenario 5 — combined region+style: elk+rifle+PNW renders
+         BOTH "Pacific Northwest"/"Roosevelt" AND "Rifle (Elk)";
+         moose+public_land+NE renders BOTH "Northeast"/"Maine" AND
+         "Public Land (Moose)"; bear+blind+PNW renders BOTH
+         "Pacific Northwest"/"salmon" AND "Bait Blind".
+      ✅ Scenario 6 — full pytest suite (5 specified files):
+           tests/test_species_prompt_packs.py
+           tests/test_species_expansion_modifiers.py
+           tests/test_seasonal_modifiers.py
+           tests/test_regional_modifiers.py
+           tests/test_hunt_style_modifiers.py
+         -> 352 passed in 0.22s. Zero failures, zero new regressions.
+         test_overlay_rendering.py excluded as instructed.
+      ✅ Scenario 7 — live /api/analyze-hunt: POST with Bearer
+         test_session_rs_001, animal=bear, hunt_style=blind,
+         GPS (47.5,-123.0), 256x256 PNG, hunt_date=2026-09-20
+         -> HTTP 200 (NOT 500). region_resolution.resolvedRegionId =
+         "pacific_northwest" / source=gps; hunt_style_resolution
+         .styleId = "blind" / source=user_selected.
+         Server log (backend.err.log) confirmed:
+           "Region resolved: id=pacific_northwest source=gps
+            label='Pacific Northwest'"
+           "Hunt style resolved: id=blind source=user_selected"
+
+      test_result.md updated: new task block
+      `new_regions_pnw_northeast` set to working:true,
+      needs_retesting:false; current_focus cleared. No source files
+      modified by testing agent. Main agent: please summarise and
+      finish — pacific_northwest + northeast canonical regions and
+      the four new (elk-PNW, bear-PNW, moose-NE, coyote-NE) regional
+      + four new (bear-blind, moose-blind, moose-public_land,
+      antelope-public_land) hunt-style modifiers are production-ready.
+
         4. Pro rollover cap honored: 475 + 40 clamps to 480 (40*12),
            remaining = 520.
         5. Pro limit-reached returns allowed=false, remaining=0,

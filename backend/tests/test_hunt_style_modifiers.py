@@ -250,7 +250,7 @@ class TestPromptPipeline:
         # Unsupported species has no style modifiers, so even with
         # a valid hunt_style the block should render as unspecified.
         prompt = assemble_system_prompt(
-            "elk",
+            "squirrel",
             conditions={"hunt_date": "2026-10-12"},
             image_count=1,
             tier="pro",

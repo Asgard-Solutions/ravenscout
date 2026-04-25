@@ -310,7 +310,7 @@ class TestSeasonalPromptIntegration:
     def test_prompt_fallback_species_has_no_seasonal_block(self):
         # Unknown species → generic fallback pack → no seasonal modifier.
         prompt = assemble_system_prompt(
-            "elk",
+            "squirrel",
             conditions={"hunt_date": "2026-11-12"},
             image_count=1,
             tier="pro",

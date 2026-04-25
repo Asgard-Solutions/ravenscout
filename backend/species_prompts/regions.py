@@ -31,13 +31,15 @@ from typing import Callable, List, Mapping, Optional, Tuple
 # ---------- canonical labels ----------
 
 CANONICAL_REGIONS: Mapping[str, str] = {
-    "south_texas":    "South Texas",
-    "east_texas":     "East Texas",
-    "southeast_us":   "Southeast US",
-    "mountain_west":  "Mountain West",
-    "plains":         "Great Plains",
-    "midwest":        "Midwest",
-    "generic_default": "Generic (unspecified region)",
+    "south_texas":      "South Texas",
+    "east_texas":       "East Texas",
+    "southeast_us":     "Southeast US",
+    "mountain_west":    "Mountain West",
+    "plains":           "Great Plains",
+    "midwest":          "Midwest",
+    "pacific_northwest": "Pacific Northwest",
+    "northeast":        "Northeast",
+    "generic_default":  "Generic (unspecified region)",
 }
 
 GENERIC_DEFAULT = "generic_default"
@@ -69,12 +71,19 @@ _BOXES: List[_Box] = [
     _Box("east_texas",    lambda lat, lon: 29.0 <= lat <= 33.8 and  -96.5 <= lon <= -94.0),
     # Southeast US — East of -94 W (east of TX/AR border), south of ~37 N (OH-R river / KY).
     _Box("southeast_us",  lambda lat, lon: 24.0 <= lat <= 37.5 and  -94.0 <= lon <= -75.0),
-    # Mountain West — everything west of -104 W down to the coast ranges.
+    # Pacific Northwest — coastal WA / OR + Cascades / western ID. Must be
+    # checked BEFORE mountain_west since mountain_west spans -125 to -104.
+    _Box("pacific_northwest", lambda lat, lon: 41.0 <= lat <= 49.5 and -125.0 <= lon <  -116.0),
+    # Mountain West — everything west of -104 W down to the coast ranges,
+    # excluding the PNW slice carved out above.
     _Box("mountain_west", lambda lat, lon: 31.0 <= lat <= 49.5 and -125.0 <= lon <  -104.0),
     # Great Plains — high prairie band east of the Rockies.
     _Box("plains",        lambda lat, lon: 32.0 <= lat <= 49.5 and -104.0 <= lon <   -98.0),
-    # Midwest — remaining north-central band.
+    # Midwest — north-central band between the Plains and the Northeast.
     _Box("midwest",       lambda lat, lon: 37.0 <= lat <= 49.5 and  -98.0 <  lon <=  -80.0),
+    # Northeast — ME / VT / NH / upstate NY / northern PA. North of the
+    # southeast_us cap (37.5 N), east of midwest's cap (-80 W).
+    _Box("northeast",     lambda lat, lon: 37.5 <  lat <= 47.5 and  -80.0 <  lon <=  -67.0),
 ]
 
 
@@ -156,11 +165,37 @@ _ALIAS_MAP: Mapping[str, str] = {
     "upper midwest": "midwest",
     "corn belt": "midwest",
 
-    # Explicit canonical pass-through (from admin / API inputs)
+    # Pacific Northwest
+    "pacific northwest": "pacific_northwest",
+    "pnw": "pacific_northwest",
+    "pacific nw": "pacific_northwest",
+    "northwest": "pacific_northwest",
+    "western washington": "pacific_northwest",
+    "western oregon": "pacific_northwest",
+    "cascades": "pacific_northwest",
+    "olympic peninsula": "pacific_northwest",
+
+    # Northeast
+    "northeast": "northeast",
+    "north east": "northeast",
+    "new england": "northeast",
+    "maine": "northeast",
+    "vermont": "northeast",
+    "new hampshire": "northeast",
+    "upstate ny": "northeast",
+    "upstate new york": "northeast",
+    "adirondacks": "northeast",
+    "appalachian northeast": "northeast",
+
+    # Explicit canonical pass-through (from admin / API inputs).
+    # NOTE: "northeast" is intentionally NOT repeated here \u2014 the
+    # user-input alias above ("northeast" -> "northeast") already
+    # covers the canonical pass-through case.
     "south_texas": "south_texas",
     "east_texas": "east_texas",
     "southeast_us": "southeast_us",
     "mountain_west": "mountain_west",
+    "pacific_northwest": "pacific_northwest",
     "generic_default": "generic_default",
 }
 

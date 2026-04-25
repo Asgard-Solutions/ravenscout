@@ -236,5 +236,28 @@ COYOTE_PACK = SpeciesPromptPack(
                 "Emphasize thermal-aware terrain-based setups in sage / juniper / aspen country.",
             ),
         ),
+        "northeast": RegionalModifier(
+            region_id="northeast",
+            name="Northeastern (Eastern) Coyote",
+            behavior_adjustments=(
+                "Eastern coyote populations carry significant wolf admixture \u2014 larger body size, higher tolerance for cover-dense habitat, more pack-style hunting on deer.",
+                "Habitat is closed: hardwood forest, swamp edges, ag-mosaic farmland, and exurban edges.",
+                "Coyotes here are heavily nocturnal due to rifle / hound pressure, but daylight movement spikes during deer-fawning + hard winter.",
+            ),
+            tactical_adjustments=(
+                "Target deer-yarding areas, swamp edges, and ag-edge cover lines through hard winter \u2014 calorie pressure drives daylight commit.",
+                "Use distress + howl combos with longer sit times (25-40 min) \u2014 eastern coyotes commit slowly through closed cover.",
+                "Night thermal / night-vision rifle setups are increasingly common where legal \u2014 plan setup geometry around night sightlines.",
+                "Deer-down / fawn-distress sounds in May-June produce strong commitments from food-pressed adults.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply Plains daylight-commit expectations \u2014 eastern coyotes are night-shifted and pressure-shy.",
+                "Do NOT discount the size factor \u2014 eastern coyotes can exceed 50 lb and react to caller pressure differently than 30-lb plains dogs.",
+                "Do NOT overlook posted-private mosaic in farmland \u2014 access is the gating issue, not animal density.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize closed-cover, slow-commit setups with distress + howl combos and deer-yard targeting.",
+            ),
+        ),
     },
 )

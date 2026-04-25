@@ -173,6 +173,49 @@ MOOSE_PACK = SpeciesPromptPack(
                 "Emphasize shoreline-contour stalks with wind-first finals.",
             ),
         ),
+        "blind": HuntStyleModifier(
+            style_id="blind",
+            name="Ground / Canoe Blind (Moose)",
+            behavior_adjustments=(
+                "Moose blind hunting is dominantly water-edge: shore platforms, dock blinds, and canoe / boat-platform setups on pond / lake / river systems.",
+                "Moose tolerate steady-state structures (existing docks, overgrown duck blinds) better than fresh-built brush.",
+                "Calling from a fixed water-edge blind in rut produces high commit rates from cruising bulls.",
+            ),
+            tactical_adjustments=(
+                "Set up brushed-in shore blinds 50-100 yards along willow / pond edges where bulls travel between feeding pockets.",
+                "Canoe-platform blinds enable quiet approach to remote pond complexes \u2014 plan paddle-in and brush-in the day prior.",
+                "Pre-cleared 30-yard archery lanes on water-edge willow trails are the dominant blind-and-bow play.",
+            ),
+            caution_adjustments=(
+                "Do NOT build / brush a blind during the morning of the sit \u2014 moose detect fresh disturbance.",
+                "Do NOT shoot toward open water on rut bulls \u2014 a swimming moose is not recoverable.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize water-edge brushed blind + willow-corridor lane geometry.",
+            ),
+        ),
+        "public_land": HuntStyleModifier(
+            style_id="public_land",
+            name="Public Land (Moose)",
+            behavior_adjustments=(
+                "Most North American moose hunting is on public land or by drawing public-allocation tags \u2014 access is structurally constrained.",
+                "Pressure rapidly pushes moose off accessible water systems and into back-of-beyond drainages within 1-2 days of opener.",
+                "Vocalization patterns flatten quickly under repeated calling pressure.",
+            ),
+            tactical_adjustments=(
+                "Plan setups 2-5+ miles from boat ramps / road accesses \u2014 first-day shore moose are gone fast.",
+                "Target backcountry pond chains, hike-in muskegs, and untrailed willow bottoms.",
+                "Pack-out logistics dominate setup choice \u2014 a moose down 6 miles in is a multi-day evolution.",
+                "Calling discipline matters \u2014 do not over-call pressured moose; expect fewer answers and longer commits.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend road-proximate or first-mile shoreline setups in pressured public country.",
+                "Do NOT shoot a bull you cannot pack out \u2014 the constraint is real and ethical.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize distance-from-access setups with explicit pack-out feasibility.",
+            ),
+        ),
     },
     regional_modifiers={
         "mountain_west": RegionalModifier(
@@ -213,6 +256,29 @@ MOOSE_PACK = SpeciesPromptPack(
             ),
             species_tips_adjustments=(
                 "Emphasize water / cut-edge targeting and canoe-access thinking.",
+            ),
+        ),
+        "northeast": RegionalModifier(
+            region_id="northeast",
+            name="Northeast (Maine / VT / NH / Adirondacks Moose)",
+            behavior_adjustments=(
+                "Northeast moose country \u2014 northern Maine, Vermont, New Hampshire, Adirondacks \u2014 mixed hardwood / softwood forest, mountainous, beaver flowage networks, logging-road access.",
+                "Densest moose populations in the lower 48; rut activity (Sept/Oct) is reliable in undisturbed back country.",
+                "Tick load and climate stress lower density compared to Canada but produce respectable bulls in good country.",
+            ),
+            tactical_adjustments=(
+                "Target beaver flowages, recent logging cuts, and softwood-hardwood transitions adjacent to water.",
+                "Logging-road systems set the access geometry \u2014 hike or ATV in 1-3 miles to find unpressured ponds.",
+                "Calling sequences (cow-call + raking) are more responsive than US west country \u2014 dense bull populations support call-in tactics well.",
+                "Glass burned-off slash piles, recent cuts, and beaver dam complexes from elevation when available.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend road-edge setups in opener week \u2014 first-mile country is heavily pressured.",
+                "Do NOT discount tick-load impacts on bull body condition / behavior post-rut.",
+                "Do NOT overlook private timber / paper company access rules \u2014 flag as key_assumption.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize beaver-flowage + cut-edge targeting with logging-road access realism.",
             ),
         ),
     },

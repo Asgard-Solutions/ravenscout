@@ -241,5 +241,28 @@ ELK_PACK = SpeciesPromptPack(
                 "Emphasize coulee-and-cottonwood targeting with long-range glassing-first approaches.",
             ),
         ),
+        "pacific_northwest": RegionalModifier(
+            region_id="pacific_northwest",
+            name="Pacific Northwest (Roosevelt Elk)",
+            behavior_adjustments=(
+                "Roosevelt elk country \u2014 coastal Washington and Oregon rainforest, dense old-growth + clearcuts, low elevation, year-round wet conditions.",
+                "Roosevelt bulls are larger-bodied and use thicker cover than Rocky Mountain elk; daylight movement is heavily structured around clearcut / mature-timber edges.",
+                "Vocalization is more subdued than RM elk; bugles are quieter and less reliable as locator tools.",
+            ),
+            tactical_adjustments=(
+                "Target clearcut edges, replant transitions, and old-growth dark timber benches \u2014 NOT alpine parks.",
+                "Glass cuts and clearings at very first / last light; expect close-cover work the rest of the day.",
+                "Plan setups in the 50-200 yard range \u2014 visibility is short, shots come quick.",
+                "Logging-road systems define access \u2014 plan kill / pack-out logistics around them.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply Rocky Mountain bugle / call-and-stalk tactics directly \u2014 Roosevelt bulls are quieter and less call-responsive.",
+                "Do NOT recommend high-alpine setups \u2014 Roosevelt elk are coastal lowland animals.",
+                "Do NOT ignore the wet weather impact \u2014 thermal patterns, scent dispersion, and quiet ground all change in heavy rain.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize clearcut / replant edges and dense old-growth tactics with road-access pack-out planning.",
+            ),
+        ),
     },
 )

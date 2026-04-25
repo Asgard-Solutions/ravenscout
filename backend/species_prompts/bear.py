@@ -173,6 +173,29 @@ BEAR_PACK = SpeciesPromptPack(
                 "Emphasize heads-down stalk windows, wind-first approach geometry, and controlled abort criteria.",
             ),
         ),
+        "blind": HuntStyleModifier(
+            style_id="blind",
+            name="Ground Blind / Bait Blind (Black Bear)",
+            behavior_adjustments=(
+                "Where legal, bait setups are the dominant black bear tactic in much of the Upper Midwest, Canada, and parts of the West \u2014 bears acclimate to bait sites and pattern visits.",
+                "Bears tolerate established blinds at bait better than ungulates \u2014 if the blind has been in place a week or longer, structure is part of the landscape.",
+                "Hit times drift with food density and pressure; trail-cam intel is how the actual sit time gets selected, not gut feel.",
+            ),
+            tactical_adjustments=(
+                "Position blind 18-25 yards downwind / crosswind of the bait with a clean broadside shot lane.",
+                "Bait freshness, bait diversity (bread + grease + sweets layered), and check rhythm drive consistent visits \u2014 plan logistics with the setup.",
+                "Use a high-cover blind (treestand or saddle if safer; ground blind brushed in heavily) \u2014 bears CAN look up, but vertical movement is harder for them to track.",
+                "Run trail-cams on the bait for 7-10 days minimum before sitting; weight the actual visit times heavily.",
+            ),
+            caution_adjustments=(
+                "Do NOT sit a fresh-set bait the same day it's placed \u2014 bears need acclimation time.",
+                "Do NOT assume a small bear at the bait is the only visitor \u2014 dominant boars often run off smaller bears and arrive last; sit longer.",
+                "Do NOT ignore state-specific bait law \u2014 timing, bait type, and registration vary widely; flag as key_assumption.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize trail-cam-led sit timing, wind-disciplined blind placement, and bait acclimation realism.",
+            ),
+        ),
     },
     regional_modifiers={
         "mountain_west": RegionalModifier(
@@ -233,6 +256,29 @@ BEAR_PACK = SpeciesPromptPack(
             ),
             species_tips_adjustments=(
                 "Emphasize bait or natural-food edge targeting with trail-cam-grade intel.",
+            ),
+        ),
+        "pacific_northwest": RegionalModifier(
+            region_id="pacific_northwest",
+            name="Pacific Northwest Black Bear",
+            behavior_adjustments=(
+                "Pacific Northwest \u2014 highest density of black bears in the lower 48; coastal rainforest, clearcuts, salmon streams, mountain transition zones.",
+                "Salmon runs (Aug-Oct) override every other food source where streams are accessible \u2014 a salmon-streaming bear is a salmon-streaming bear, period.",
+                "Coastal bears reach record sizes; size discrimination matters more than in eastern states.",
+            ),
+            tactical_adjustments=(
+                "Glass clearcuts, replant edges, and burn scars from elevated knob positions in spring; pivot to salmon streams in fall.",
+                "Spot-and-stalk on clearcut bears at 100-400 yards with rifle is the dominant non-bait method.",
+                "Where bait is legal (private timber lands), wind + lane geometry on cleared 25-yard archery lanes is the play.",
+                "Active fishing-on-stream bears are predictable patterners \u2014 plan multi-day setup with a confirmed stream.",
+            ),
+            caution_adjustments=(
+                "Do NOT ignore the salmon factor in fall \u2014 attempting general food-concentration logic in a salmon zone misses the obvious.",
+                "Do NOT confuse a small salmon-fattened young bear with a mature dry-land bear \u2014 size-on-stream is misleading.",
+                "Do NOT ignore wet-weather scent dispersion impacts on stand placement.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize salmon-stream and clearcut targeting with size-discrimination discipline.",
             ),
         ),
     },
