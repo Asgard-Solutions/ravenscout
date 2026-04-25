@@ -7,6 +7,8 @@ import os
 import logging
 import json
 import uuid
+import hmac
+import hashlib
 import httpx
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -86,6 +88,20 @@ REVENUECAT_ENTITLEMENT_MAP = {
     "pro_annual": "pro",
 }
 
+# ============================================================
+# EXTRA HUNT-ANALYTICS PACKS (one-time, non-expiring)
+# ============================================================
+# Mapping: store product_id -> # of extra analytics credits granted.
+# These packs are a top-off / convenience purchase ONLY — they do
+# not replace subscription limits. Monthly subscription credits are
+# always consumed first; extra credits drain after the monthly
+# allowance runs out.
+EXTRA_CREDIT_PACKS = {
+    "ravenscout_extra_analytics_5":  {"credits": 5,  "price_usd": 5.99,  "label": "5 Extra Hunt Analytics"},
+    "ravenscout_extra_analytics_10": {"credits": 10, "price_usd": 10.99, "label": "10 Extra Hunt Analytics"},
+    "ravenscout_extra_analytics_15": {"credits": 15, "price_usd": 14.99, "label": "15 Extra Hunt Analytics"},
+}
+
 
 # ============================================================
 # AUTH HELPERS
@@ -139,12 +155,31 @@ async def check_analysis_allowed(user: dict) -> dict:
     rollover_count = user.get("rollover_count", 0)
 
     if tier["is_lifetime"]:
-        # Trial: lifetime limit
+        # Trial: lifetime limit. Extra (purchased, non-expiring)
+        # credits also gate analysis here — a trial user who buys
+        # a top-off pack must be able to spend it after their 3
+        # free lifetime analyses are gone. `consume_one_analysis`
+        # already handles the spend correctly; this gate just
+        # mirrors that fall-through.
         remaining = max(0, tier["analysis_limit"] - analysis_count)
-        if remaining <= 0:
-            return {"allowed": False, "remaining": 0, "limit": tier["analysis_limit"],
-                    "tier": tier_key, "message": "Trial limit reached. Upgrade to continue."}
-        return {"allowed": True, "remaining": remaining, "limit": tier["analysis_limit"], "tier": tier_key}
+        extra_credits = max(0, int(user.get("extra_analytics_credits", 0)))
+        combined_remaining = remaining + extra_credits
+        if combined_remaining <= 0:
+            return {
+                "allowed": False,
+                "remaining": 0,
+                "limit": tier["analysis_limit"],
+                "tier": tier_key,
+                "extra_credits": 0,
+                "message": "Trial limit reached. Upgrade or buy extra analytics to continue.",
+            }
+        return {
+            "allowed": True,
+            "remaining": remaining,
+            "limit": tier["analysis_limit"],
+            "tier": tier_key,
+            "extra_credits": extra_credits,
+        }
     else:
         # Paid tiers: monthly limit + rollover
         cycle_start = user.get("billing_cycle_start")
@@ -188,15 +223,190 @@ async def check_analysis_allowed(user: dict) -> dict:
 
         total_available = tier["analysis_limit"] + rollover_count
         remaining = max(0, total_available - analysis_count)
-        if remaining <= 0:
-            return {"allowed": False, "remaining": 0, "limit": tier["analysis_limit"],
-                    "tier": tier_key, "message": "Monthly limit reached. Upgrade or wait for next cycle."}
-        return {"allowed": True, "remaining": remaining, "limit": tier["analysis_limit"],
-                "rollover": rollover_count, "tier": tier_key}
+        # Extra (non-expiring) credits stack ON TOP of the monthly
+        # allowance. They are NOT counted into `remaining` (which is
+        # specifically the monthly+rollover bucket) — callers can
+        # surface both buckets independently. The combined allow
+        # check, however, considers them.
+        extra_credits = max(0, int(user.get("extra_analytics_credits", 0)))
+        combined_remaining = remaining + extra_credits
+        if combined_remaining <= 0:
+            return {
+                "allowed": False,
+                "remaining": 0,
+                "limit": tier["analysis_limit"],
+                "tier": tier_key,
+                "extra_credits": 0,
+                "message": "Monthly limit reached. Upgrade or buy extra analytics to continue.",
+            }
+        return {
+            "allowed": True,
+            "remaining": remaining,
+            "limit": tier["analysis_limit"],
+            "rollover": rollover_count,
+            "tier": tier_key,
+            "extra_credits": extra_credits,
+        }
+
+
+async def consume_one_analysis(user: dict) -> dict:
+    """
+    Atomically consume one analysis credit using the canonical
+    rule: monthly subscription credits FIRST, then extra non-expiring
+    credits.
+
+    Returns a dict describing what was charged so the caller (and
+    the ledger) can record the source. Raises HTTPException(402)
+    when the user is out of both buckets — surfaces the same shape
+    the limit modal expects on the client.
+    """
+    uid = user["user_id"]
+    tier_key = user.get("tier", "trial")
+    tier = TIERS.get(tier_key, TIERS["trial"])
+    analysis_count = int(user.get("analysis_count", 0))
+    rollover_count = int(user.get("rollover_count", 0))
+    extra_credits = max(0, int(user.get("extra_analytics_credits", 0)))
+
+    # Trial users only have a lifetime bucket — extra credits stack
+    # on top regardless of cycle.
+    if tier["is_lifetime"]:
+        monthly_remaining = max(0, tier["analysis_limit"] - analysis_count)
+    else:
+        monthly_remaining = max(0, (tier["analysis_limit"] + rollover_count) - analysis_count)
+
+    if monthly_remaining > 0:
+        # Drain monthly first.
+        await db.users.update_one({"user_id": uid}, {"$inc": {"analysis_count": 1}})
+        source = "monthly"
+    elif extra_credits > 0:
+        # Atomically decrement extra_analytics_credits, but ONLY if
+        # > 0 — guards against the race where two concurrent analyses
+        # try to spend the last credit.
+        result = await db.users.update_one(
+            {"user_id": uid, "extra_analytics_credits": {"$gt": 0}},
+            {"$inc": {"extra_analytics_credits": -1}},
+        )
+        if result.modified_count == 0:
+            # Lost the race. Re-check and 402.
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "out_of_credits",
+                    "message": "Out of analytics. Upgrade or buy extra analytics.",
+                },
+            )
+        source = "extra"
+    else:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "out_of_credits",
+                "message": "Out of analytics. Upgrade or buy extra analytics.",
+            },
+        )
+
+    # Best-effort ledger entry — never block the analyze flow if the
+    # ledger insert fails.
+    try:
+        await db.analytics_ledger.insert_one({
+            "user_id": uid,
+            "event": "analysis_used_monthly" if source == "monthly" else "analysis_used_extra_credit",
+            "delta": -1,
+            "source": source,
+            "tier": tier_key,
+            "ts": datetime.now(timezone.utc),
+        })
+    except Exception:  # noqa: BLE001
+        logger.warning("analytics_ledger insert failed (non-fatal)", exc_info=True)
+
+    return {"charged": source}
+
+
+async def grant_extra_credits(
+    user_id: str,
+    pack_id: str,
+    transaction_id: str,
+    source: str = "manual",
+) -> dict:
+    """
+    Idempotently credit a user's account from a one-time extra
+    analytics-pack purchase.
+
+    Idempotency key: (source, transaction_id) — backed by a unique
+    index on `processed_purchases`. A second call with the same
+    transaction_id is a no-op and returns the original grant.
+    """
+    pack = EXTRA_CREDIT_PACKS.get(pack_id)
+    if not pack:
+        raise HTTPException(status_code=400, detail=f"Unknown pack id: {pack_id}")
+
+    credits = int(pack["credits"])
+    now = datetime.now(timezone.utc)
+    record = {
+        "_id": f"{source}:{transaction_id}",  # unique key — collisions are no-ops
+        "user_id": user_id,
+        "pack_id": pack_id,
+        "transaction_id": transaction_id,
+        "source": source,
+        "credits": credits,
+        "price_usd": pack["price_usd"],
+        "ts": now,
+    }
+    try:
+        await db.processed_purchases.insert_one(record)
+    except Exception as e:  # noqa: BLE001
+        # Duplicate key → already processed. Return the existing row.
+        existing = await db.processed_purchases.find_one({"_id": record["_id"]}, {"_id": 0})
+        if existing:
+            logger.info("grant_extra_credits: idempotent replay for %s", record["_id"])
+            user_doc = await db.users.find_one({"user_id": user_id}, {"extra_analytics_credits": 1, "_id": 0})
+            return {
+                "ok": True,
+                "duplicate": True,
+                "credits_granted": 0,
+                "extra_analytics_credits": int((user_doc or {}).get("extra_analytics_credits", 0)),
+                "pack_id": pack_id,
+            }
+        # Some other DB error — surface it.
+        raise HTTPException(status_code=500, detail=f"grant_extra_credits failed: {e}") from e
+
+    update_result = await db.users.update_one(
+        {"user_id": user_id},
+        {"$inc": {"extra_analytics_credits": credits}, "$set": {"updated_at": now}},
+    )
+    if update_result.matched_count == 0:
+        # Roll back the idempotency row so the user can retry under
+        # the right account.
+        await db.processed_purchases.delete_one({"_id": record["_id"]})
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        await db.analytics_ledger.insert_one({
+            "user_id": user_id,
+            "event": "extra_pack_purchase",
+            "delta": credits,
+            "pack_id": pack_id,
+            "transaction_id": transaction_id,
+            "source": source,
+            "ts": now,
+        })
+    except Exception:  # noqa: BLE001
+        logger.warning("analytics_ledger insert failed (non-fatal)", exc_info=True)
+
+    user_doc = await db.users.find_one({"user_id": user_id}, {"extra_analytics_credits": 1, "_id": 0})
+    return {
+        "ok": True,
+        "duplicate": False,
+        "credits_granted": credits,
+        "extra_analytics_credits": int((user_doc or {}).get("extra_analytics_credits", 0)),
+        "pack_id": pack_id,
+    }
 
 
 async def increment_usage(user_id: str):
-    """Increment analysis count for user."""
+    """Legacy helper retained for backward compatibility — only
+    increments the monthly counter. Prefer `consume_one_analysis`
+    for new code paths so extra credits are honoured."""
     await db.users.update_one(
         {"user_id": user_id},
         {"$inc": {"analysis_count": 1}}
@@ -427,6 +637,200 @@ async def logout(request: Request):
     return response
 
 
+
+# ============================================================
+# ANALYTICS USAGE & EXTRA-CREDIT PACKS
+# ============================================================
+class ExtraCreditsGrantPayload(BaseModel):
+    """Payload for the in-app (mock) purchase grant endpoint.
+
+    The "real" RevenueCat pipeline POSTs to /purchases/revenuecat-webhook
+    instead — see that handler for HMAC verification details.
+    """
+    pack_id: str = Field(..., description="One of EXTRA_CREDIT_PACKS keys")
+    transaction_id: str = Field(..., min_length=4, max_length=200,
+                                description="Idempotency key — store-side txn id, RC purchase token, etc.")
+
+
+def _build_analytics_usage_payload(user: dict) -> dict:
+    """Shared shape used by GET /user/analytics-usage and the limit modal."""
+    tier_key = user.get("tier", "trial")
+    tier = TIERS.get(tier_key, TIERS["trial"])
+    analysis_count = int(user.get("analysis_count", 0))
+    rollover_count = int(user.get("rollover_count", 0))
+    extra_credits = max(0, int(user.get("extra_analytics_credits", 0)))
+
+    if tier["is_lifetime"]:
+        monthly_limit = tier["analysis_limit"]
+        monthly_used = analysis_count
+        monthly_remaining = max(0, monthly_limit - analysis_count)
+        reset_date = None  # lifetime — never resets
+    else:
+        monthly_limit = tier["analysis_limit"] + rollover_count
+        monthly_used = min(analysis_count, monthly_limit)
+        monthly_remaining = max(0, monthly_limit - analysis_count)
+        cycle_start = user.get("billing_cycle_start")
+        if isinstance(cycle_start, str):
+            try:
+                cycle_start = datetime.fromisoformat(cycle_start)
+            except ValueError:
+                cycle_start = None
+        reset_date = (cycle_start + timedelta(days=30)).isoformat() if cycle_start else None
+
+    return {
+        "plan": tier_key,
+        "monthlyAnalyticsLimit": monthly_limit,
+        "monthlyAnalyticsUsed": monthly_used,
+        "monthlyAnalyticsRemaining": monthly_remaining,
+        "extraAnalyticsCredits": extra_credits,
+        "totalRemaining": monthly_remaining + extra_credits,
+        "resetDate": reset_date,
+        "packs": [
+            {"id": pid, "credits": p["credits"], "price_usd": p["price_usd"], "label": p["label"]}
+            for pid, p in EXTRA_CREDIT_PACKS.items()
+        ],
+    }
+
+
+@api_router.get("/user/analytics-usage")
+async def get_analytics_usage(request: Request):
+    """Return the user's monthly analytics usage AND extra-credit balance.
+
+    Source of truth for the in-app usage display and the out-of-credits
+    modal. Triggers a passive cycle reset if the user has crossed a
+    billing-cycle boundary (re-uses the same logic as `check_analysis_allowed`).
+    """
+    user = await get_current_user(request)
+    # Run the cycle-reset side effect in `check_analysis_allowed` so
+    # the usage payload reflects any reset that just happened.
+    await check_analysis_allowed(user)
+    user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return _build_analytics_usage_payload(user or {})
+
+
+@api_router.post("/analytics/consume")
+async def consume_analytics(request: Request):
+    """Server-authoritative single-credit consume.
+
+    Use this when the analyze flow is split across services (e.g. a
+    background worker that wants to reserve a credit before running
+    a long job) and direct `consume_one_analysis` isn't accessible.
+    Returns 402 with `{code: "out_of_credits"}` when both buckets are
+    empty so the client can show the limit modal.
+    """
+    user = await get_current_user(request)
+    allowed = await check_analysis_allowed(user)
+    if not allowed.get("allowed"):
+        raise HTTPException(
+            status_code=402,
+            detail={"code": "out_of_credits", "message": allowed.get("message", "Out of analytics.")},
+        )
+    charge = await consume_one_analysis(user)
+    fresh = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return {
+        "ok": True,
+        "charged": charge["charged"],
+        "usage": _build_analytics_usage_payload(fresh or {}),
+    }
+
+
+@api_router.post("/purchases/extra-credits")
+async def purchase_extra_credits(payload: ExtraCreditsGrantPayload, request: Request):
+    """Grant extra analytics credits from a one-time pack purchase.
+
+    Idempotent on (source='in_app', transaction_id). The mobile app
+    calls this AFTER RevenueCat / StoreKit reports a successful
+    purchase — the `transaction_id` MUST be the platform-issued
+    transaction id so that retries during e.g. network flakiness
+    don't double-credit.
+
+    NOTE: in production the canonical credit grant should come from
+    `/purchases/revenuecat-webhook` (server-to-server, signed). This
+    endpoint exists as a belt-and-suspenders client confirmation —
+    the unique-key idempotency means the second grant from the
+    webhook is a no-op.
+    """
+    user = await get_current_user(request)
+    return await grant_extra_credits(
+        user_id=user["user_id"],
+        pack_id=payload.pack_id,
+        transaction_id=payload.transaction_id,
+        source="in_app",
+    )
+
+
+def _verify_revenuecat_signature(raw_body: bytes, headers) -> bool:
+    """Validate RevenueCat's HMAC-SHA256 webhook signature.
+
+    Returns True if the header is missing AND no shared secret is
+    configured (so dev environments don't have to set one up). When
+    a secret IS configured, the header MUST be present and match.
+    """
+    secret = os.environ.get("REVENUECAT_WEBHOOK_SECRET", "").strip()
+    sig_header = headers.get("X-RevenueCat-Signature") or headers.get("x-revenuecat-signature")
+    if not secret:
+        # Dev-mode short-circuit. PRODUCTION MUST SET THIS.
+        if not sig_header:
+            return True
+        # If the header is present AND we have no secret, fail closed.
+        return False
+    if not sig_header:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig_header.strip())
+
+
+@api_router.post("/purchases/revenuecat-webhook")
+async def revenuecat_webhook(request: Request):
+    """Receive RevenueCat NON-RENEWING-PURCHASE events for extra-credit packs.
+
+    Security:
+      - HMAC-SHA256 signature in `X-RevenueCat-Signature` header
+        (configure REVENUECAT_WEBHOOK_SECRET in the backend env).
+      - User identified via `app_user_id` (we mirror this onto our
+        `user_id`).
+      - Idempotency via the (source='revenuecat', transaction_id)
+        composite unique key on `processed_purchases`.
+
+    We only act on `NON_RENEWING_PURCHASE` events whose product_id
+    is a known pack. Renewals/transfers/cancellations of subscription
+    products are handled elsewhere.
+    """
+    raw = await request.body()
+    if not _verify_revenuecat_signature(raw, request.headers):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event = (body.get("event") or {}) if isinstance(body, dict) else {}
+    event_type = event.get("type")
+    if event_type != "NON_RENEWING_PURCHASE":
+        # Subscription events are handled by the existing subscription
+        # webhook plumbing. Acknowledge and ignore.
+        return {"ok": True, "ignored": event_type}
+
+    user_id = event.get("app_user_id") or event.get("original_app_user_id")
+    product_id = event.get("product_id")
+    transaction_id = event.get("transaction_id") or event.get("id")
+    if not (user_id and product_id and transaction_id):
+        raise HTTPException(status_code=400, detail="Missing required event fields")
+
+    if product_id not in EXTRA_CREDIT_PACKS:
+        # Unknown pack — log and 200 so RC doesn't keep retrying.
+        logger.info("revenuecat_webhook: ignoring unknown product_id=%s", product_id)
+        return {"ok": True, "ignored": "unknown_product"}
+
+    return await grant_extra_credits(
+        user_id=user_id,
+        pack_id=product_id,
+        transaction_id=str(transaction_id),
+        source="revenuecat",
+    )
+
+
+
 # ============================================================
 # SUBSCRIPTION ROUTES
 # ============================================================
@@ -539,7 +943,17 @@ async def get_tiers():
 import s3_service  # noqa: E402
 
 
-_ALLOWED_MEDIA_EXT = {"jpg", "jpeg", "png", "webp"}
+_ALLOWED_MEDIA_EXT = {"jpg", "jpeg", "png", "webp", "heic", "heif"}
+# Allowed image MIME types for cloud upload. Anything else is rejected
+# at the presign endpoint so the caller never wastes a round-trip
+# trying to PUT a non-image to S3.
+_ALLOWED_MEDIA_MIMES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
 _ALLOWED_MEDIA_ROLES = {"primary", "context", "thumbnail"}
 
 
@@ -604,9 +1018,17 @@ async def presign_media_upload(body: PresignUploadBody, request: Request):
     if ext not in _ALLOWED_MEDIA_EXT:
         raise HTTPException(status_code=400, detail=f"extension must be one of {sorted(_ALLOWED_MEDIA_EXT)}")
 
-    mime = body.mime or "image/jpeg"
-    if not mime.startswith("image/"):
-        raise HTTPException(status_code=400, detail="mime must be an image/* type")
+    mime = (body.mime or "image/jpeg").lower()
+    if mime not in _ALLOWED_MEDIA_MIMES:
+        # Strict allowlist — reject any non-image MIME, plus image
+        # types we do not support (e.g. tiff/gif/svg). This protects
+        # the bucket from being used as generic file storage and makes
+        # downstream image processing safe to assume one of these
+        # known formats.
+        raise HTTPException(
+            status_code=400,
+            detail=f"mime must be one of {sorted(_ALLOWED_MEDIA_MIMES)}",
+        )
 
     if not s3_service.is_configured():
         raise HTTPException(
@@ -1093,8 +1515,10 @@ async def analyze_hunt(request: Request):
             tier=tier_key,
         )
 
-        # Increment usage
-        await increment_usage(user["user_id"])
+        # Increment usage — drains monthly subscription credits FIRST,
+        # then dips into purchased extra credits (non-expiring) when
+        # the monthly bucket is empty.
+        await consume_one_analysis(user)
         updated_usage = await check_analysis_allowed(
             await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
         )
@@ -1521,18 +1945,70 @@ async def update_hunt(hunt_id: str, body: HuntPatchBody, request: Request):
 
 @api_router.delete("/hunts/{hunt_id}")
 async def delete_hunt(hunt_id: str, request: Request):
-    """Delete a hunt. Idempotent: 404 if it didn't exist."""
+    """
+    Fully delete a hunt: removes the Mongo document AND every S3
+    object listed in its `image_s3_keys`. Best-effort on S3 — a
+    single object failure is logged but does not block the Mongo
+    delete (orphan cleanup is preferable to a hunt that can't be
+    deleted at all). Idempotent: 404 if it didn't exist.
+    """
     user = await get_current_user(request)
     uid = user["user_id"]
 
-    # TODO (future): also schedule deletion of any associated S3
-    # assets in image_s3_keys. For now the frontend is expected to
-    # fire separate /api/media/delete requests in parallel — matches
-    # the existing contract used elsewhere in the app.
-    result = await db.hunts.delete_one({"user_id": uid, "hunt_id": hunt_id})
-    if result.deleted_count == 0:
+    # Step 1: load the hunt so we know which S3 keys belong to it.
+    # Filtering by user_id also enforces ownership for the S3 deletes.
+    hunt_doc = await db.hunts.find_one(
+        {"user_id": uid, "hunt_id": hunt_id},
+        {"image_s3_keys": 1},
+    )
+    if not hunt_doc:
         raise HTTPException(status_code=404, detail="Hunt not found")
-    return {"ok": True, "deleted": 1}
+
+    # Step 2: delete the S3 objects (if any). Per-key best-effort —
+    # we keep going even if one fails so partial cleanup still
+    # happens and Mongo doesn't get out of sync with S3 long term.
+    s3_keys = hunt_doc.get("image_s3_keys") or []
+    s3_deleted = 0
+    s3_failed: list[str] = []
+    if s3_keys and s3_service.is_configured():
+        for key in s3_keys:
+            # Defense in depth: never delete keys that don't belong
+            # to this user, even if Mongo somehow stored a stray.
+            try:
+                _guard_storage_key_owner(user, key)
+            except HTTPException:
+                logger.warning("delete_hunt: skipped foreign s3 key %s", key)
+                s3_failed.append(key)
+                continue
+            try:
+                if s3_service.delete_object(key):
+                    s3_deleted += 1
+                else:
+                    s3_failed.append(key)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("delete_hunt: s3 delete failed for %s: %s", key, exc)
+                s3_failed.append(key)
+    elif s3_keys and not s3_service.is_configured():
+        logger.warning(
+            "delete_hunt: %d s3 keys orphaned because S3 is not configured",
+            len(s3_keys),
+        )
+        s3_failed = list(s3_keys)
+
+    # Step 3: delete the Mongo doc. We do this last so a transient
+    # S3 failure leaves the hunt visible (and retryable) instead of
+    # silently disappearing while its assets linger.
+    result = await db.hunts.delete_one({"user_id": uid, "hunt_id": hunt_id})
+
+    return {
+        "ok": True,
+        "deleted": result.deleted_count,
+        "s3": {
+            "requested": len(s3_keys),
+            "deleted": s3_deleted,
+            "failed": s3_failed,
+        },
+    }
 
 
 

@@ -204,18 +204,37 @@ export default function TacticalMapView({
   `, [center.lat, center.lon, zoom, initialStyleSource]);
 
   // Push style changes into the live map without rebuilding the HTML.
+  // We avoid the `window.postMessage` indirection because, inside
+  // react-native-webview, a same-window postMessage from
+  // injectJavaScript is not reliably delivered to its own
+  // addEventListener('message') on Android — chip taps would silently
+  // do nothing. Instead we call the global `map` object directly.
   useEffect(() => {
     if (!useMaptiler) return;
     const cfg = resolveMapStyle(styleId);
     if (!cfg.styleUrl) return;
-    const msg = JSON.stringify({ type: 'setStyle', styleUrl: cfg.styleUrl });
     if (Platform.OS === 'web' && iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(msg, '*');
+      // Web is fine via postMessage — iframe parent->child works.
+      iframeRef.current.contentWindow.postMessage(
+        JSON.stringify({ type: 'setStyle', styleUrl: cfg.styleUrl }),
+        '*',
+      );
     } else if (webviewRef.current) {
-      // Use injectJavaScript so the message lands inside the WebView's
-      // JS execution context and triggers our window.message handler.
+      const url = JSON.stringify(cfg.styleUrl);
       webviewRef.current.injectJavaScript(`
-        window.postMessage(${JSON.stringify(msg)}, '*'); true;
+        (function() {
+          try {
+            if (!window.map) return;
+            var c = window.map.getCenter();
+            var z = window.map.getZoom();
+            var b = window.map.getBearing();
+            var p = window.map.getPitch();
+            window.map.setStyle(${url});
+            window.map.once('styledata', function() {
+              try { window.map.jumpTo({ center: c, zoom: z, bearing: b, pitch: p }); } catch(e) {}
+            });
+          } catch(e) {}
+        })(); true;
       `);
     }
   }, [styleId, useMaptiler]);
@@ -388,19 +407,19 @@ const styles = StyleSheet.create({
   },
   webview: { flex: 1, backgroundColor: COLORS.primary },
   styleSwitcher: {
-    position: 'absolute', bottom: 24, left: 10, right: 10,
+    position: 'absolute', bottom: 24, left: 8, right: 8,
     maxHeight: 36,
   },
   styleSwitcherContent: {
-    flexDirection: 'row', gap: 4,
+    flexDirection: 'row', gap: 2,
     backgroundColor: 'rgba(11, 31, 42, 0.92)',
     borderRadius: 10, padding: 3,
     borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.35)',
     alignSelf: 'flex-start',
   },
   styleButton: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 10, paddingVertical: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 7, paddingVertical: 6,
     borderRadius: 7,
   },
   styleButtonActive: {
@@ -419,7 +438,7 @@ const styles = StyleSheet.create({
   },
   styleLabel: {
     color: COLORS.fogGray, fontSize: 10, fontWeight: '800',
-    letterSpacing: 0.6,
+    letterSpacing: 0.3,
   },
   styleLabelActive: { color: COLORS.primary, fontWeight: '900' },
   tooltip: {

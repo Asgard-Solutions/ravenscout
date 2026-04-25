@@ -87,18 +87,36 @@ export default function HistoryScreen() {
   const clearAll = () => {
     Alert.alert(
       'Clear All Hunts',
-      'Delete all saved hunt plans AND any cached map images stored on this device?',
+      'Delete all saved hunt plans AND any cached map images stored on this device or in the cloud?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Clear All',
           style: 'destructive',
           onPress: async () => {
+            // Snapshot the ids BEFORE we wipe local state so we can
+            // still fan out the cloud deletes (Mongo + S3) for each.
+            const idsToWipe = hunts.map(h => h.id);
             setHunts([]);
             await AsyncStorage.removeItem('hunt_history');
             await AsyncStorage.removeItem('current_hunt');
             await AsyncStorage.removeItem('raven_analysis_v1');
             await clearAllDeviceMedia();
+            // Cloud cascade: best-effort per-hunt. The server endpoint
+            // owns the S3 + Mongo cleanup atomically. Failures are
+            // logged but don't block the local wipe.
+            if (idsToWipe.length > 0) {
+              const { deleteHuntFromCloud } = await import('../src/api/huntsApi');
+              await Promise.all(
+                idsToWipe.map(id =>
+                  deleteHuntFromCloud(id).catch((err) => {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[clearAll] cloud delete failed for ${id}:`, err);
+                    return null;
+                  }),
+                ),
+              );
+            }
           },
         },
       ],

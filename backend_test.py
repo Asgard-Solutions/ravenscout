@@ -1,372 +1,431 @@
 """
-Raven Scout backend tests — AWS S3 presign contract + regression smoke.
+Backend test for Raven Scout AWS S3 image upload pipeline (production bucket).
 
-Run:
-    python /app/backend_test.py
+Tests:
+  1) Auth + tier gating on /api/media/presign-upload
+  2) Input validation (role, extension, mime allowlists)
+  3) Response shape on success (storageKey pattern, sanitization,
+     uploadUrl format, privateDelivery, expiresIn, mime echo)
+  4) Live S3 round-trip (presign-upload -> PUT -> presign-download -> GET
+     -> /api/media/delete -> re-GET 404)
+  5) Owner guard on /api/media/presign-download and /api/media/delete
+  6) DELETE /api/hunts/{hunt_id} S3 cascade with REAL S3 keys
 
-Backend URL is taken from /app/frontend/.env (EXPO_PUBLIC_BACKEND_URL).
-AWS env is intentionally blank in this environment; we are verifying the
-*presign contract* only, not real S3 uploads.
+Backend base URL: http://localhost:8001
 """
-from __future__ import annotations
 
-import json
 import os
 import sys
-from pathlib import Path
-
+import uuid
 import requests
 
-FRONTEND_ENV = Path("/app/frontend/.env")
+BASE_URL = "http://localhost:8001/api"
+PRO_TOKEN = "test_session_rs_001"
+TRIAL_TOKEN = "test_session_trial_001"
+
+# Real 1x1 PNG (RGBA black) - well-formed bytes
+ONE_BY_ONE_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\x00\x01"
+    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+results = []
 
 
-def _load_backend_url() -> str:
-    # Prefer EXPO_PUBLIC_BACKEND_URL from the frontend .env (Kubernetes ingress).
-    if FRONTEND_ENV.exists():
-        for line in FRONTEND_ENV.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
-                val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                if val:
-                    return val.rstrip("/")
-    raise RuntimeError("EXPO_PUBLIC_BACKEND_URL not found in /app/frontend/.env")
+def record(section, name, ok, detail=""):
+    results.append((section, name, ok, detail))
+    flag = "PASS" if ok else "FAIL"
+    line = f"[{flag}] {section} :: {name}"
+    if not ok and detail:
+        line += f"  --> {detail}"
+    elif detail and ok:
+        line += f"  ({detail})"
+    print(line, flush=True)
 
 
-BASE = _load_backend_url()
-API = f"{BASE}/api"
-
-PRO_TOKEN = "test_session_rs_001"     # user_id=test-user-001, tier=pro
-TRIAL_TOKEN = "test_session_trial_001"  # user_id=test-user-trial, tier=trial
-PRO_USER_ID = "test-user-001"
-
-# ---------- tiny assertion framework ------------------------------------
-
-PASS: list[str] = []
-FAIL: list[tuple[str, str]] = []
+def auth(token):
+    return {"Authorization": f"Bearer {token}"}
 
 
-def ok(name: str, detail: str = "") -> None:
-    PASS.append(name)
-    print(f"  PASS  {name}" + (f"  ({detail})" if detail else ""))
+def post(path, *, token=None, json_body=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers.update(auth(token))
+    return requests.post(f"{BASE_URL}{path}", headers=headers, json=json_body, timeout=30)
 
 
-def fail(name: str, detail: str) -> None:
-    FAIL.append((name, detail))
-    print(f"  FAIL  {name}  :: {detail}")
+def http_delete(path, *, token=None):
+    headers = {}
+    if token:
+        headers.update(auth(token))
+    return requests.delete(f"{BASE_URL}{path}", headers=headers, timeout=30)
 
 
-def expect_status(name: str, resp: requests.Response, expected: int) -> bool:
-    body_preview = resp.text[:300].replace("\n", " ")
-    if resp.status_code == expected:
-        ok(name, f"{resp.status_code} body={body_preview}")
-        return True
-    fail(name, f"expected {expected} got {resp.status_code} body={body_preview}")
-    return False
+# ============================================================
+# SECTION 1 - Auth + tier gating on /api/media/presign-upload
+# ============================================================
+def section_1_auth_tier():
+    section = "1.AuthTier"
+    payload = {
+        "imageId": f"img_{uuid.uuid4().hex[:8]}",
+        "huntId": "hunt_test",
+        "role": "primary",
+        "mime": "image/jpeg",
+        "extension": "jpg",
+    }
+    # No bearer
+    r = post("/media/presign-upload", json_body=payload)
+    record(section, "no Bearer -> 401", r.status_code == 401,
+           f"got {r.status_code} body={r.text[:140]}")
 
-
-def expect_json(resp: requests.Response) -> dict:
+    # Trial -> 403
+    r = post("/media/presign-upload", token=TRIAL_TOKEN, json_body=payload)
+    body = {}
     try:
-        return resp.json()
+        body = r.json()
     except Exception:
-        return {}
+        pass
+    ok = r.status_code == 403 and "Pro" in (body.get("detail") or "")
+    record(section, "trial -> 403 Pro-only", ok, f"got {r.status_code} {body}")
+
+    # Pro -> 200
+    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
+    record(section, "pro -> 200", r.status_code == 200,
+           f"got {r.status_code} body={r.text[:200]}")
 
 
-# ---------- regression smoke --------------------------------------------
+# ============================================================
+# SECTION 2 - Input validation
+# ============================================================
+def section_2_validation():
+    section = "2.Validation"
+    base = {
+        "imageId": f"img_{uuid.uuid4().hex[:8]}",
+        "huntId": "hunt_test",
+        "role": "primary",
+        "mime": "image/jpeg",
+        "extension": "jpg",
+    }
 
-def test_regression_smoke() -> None:
-    print("\n[REGRESSION SMOKE]")
+    # Unknown role
+    p = {**base, "role": "hero"}
+    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
+    record(section, "unknown role 'hero' -> 400",
+           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
 
-    # /api/health
-    r = requests.get(f"{API}/health", timeout=15)
-    if expect_status("GET /api/health -> 200", r, 200):
-        if expect_json(r).get("status") == "ok":
-            ok("GET /api/health body.status == 'ok'")
-        else:
-            fail("GET /api/health body.status == 'ok'", f"body={r.text}")
+    # Unsupported extensions
+    for ext in ["tiff", "gif", "svg"]:
+        p = {**base, "extension": ext}
+        r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
+        record(section, f"ext '{ext}' -> 400",
+               r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
 
-    # /api/auth/me with Pro bearer
-    r = requests.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {PRO_TOKEN}"}, timeout=15)
-    if expect_status("GET /api/auth/me (Pro bearer) -> 200", r, 200):
-        body = expect_json(r)
-        if body.get("tier") == "pro" and body.get("user_id") == PRO_USER_ID:
-            ok("auth/me identity+tier correct", f"tier={body.get('tier')} user_id={body.get('user_id')}")
-        else:
-            fail("auth/me identity+tier correct", f"body={body}")
+    # Disallowed mimes
+    for m in ["image/gif", "image/tiff", "application/pdf", "text/plain"]:
+        p = {**base, "mime": m}
+        r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
+        record(section, f"mime '{m}' -> 400",
+               r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
 
-    # /api/subscription/tiers (public)
-    r = requests.get(f"{API}/subscription/tiers", timeout=15)
-    if expect_status("GET /api/subscription/tiers -> 200", r, 200):
-        body = expect_json(r)
-        tiers = body.get("tiers", {})
-        if {"trial", "core", "pro"}.issubset(tiers.keys()):
-            ok("subscription/tiers contains trial/core/pro")
-        else:
-            fail("subscription/tiers contains trial/core/pro", f"keys={list(tiers.keys())}")
-
-    # /api/species
-    r = requests.get(f"{API}/species", timeout=15)
-    if expect_status("GET /api/species -> 200", r, 200):
-        body = expect_json(r)
-        species_ids = {s.get("id") for s in body.get("species", [])}
-        if {"deer", "turkey", "hog"}.issubset(species_ids):
-            ok("GET /api/species includes deer/turkey/hog")
-        else:
-            fail("GET /api/species includes deer/turkey/hog", f"got={species_ids}")
-
-
-# ---------- /api/media/presign-upload -----------------------------------
-
-VALID_UPLOAD_BODY = {
-    "imageId": "img_t1",
-    "huntId": "hunt_t1",
-    "role": "primary",
-    "mime": "image/jpeg",
-    "extension": "jpg",
-}
-
-
-def test_presign_upload() -> None:
-    print("\n[POST /api/media/presign-upload]")
-    url = f"{API}/media/presign-upload"
-
-    # 1) No auth -> 401
-    r = requests.post(url, json=VALID_UPLOAD_BODY, timeout=15)
-    expect_status("no-auth -> 401", r, 401)
-
-    # 2) Trial user -> 403 Pro-gated
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {TRIAL_TOKEN}"},
-        json=VALID_UPLOAD_BODY,
-        timeout=15,
-    )
-    if expect_status("trial bearer -> 403", r, 403):
-        detail = (expect_json(r).get("detail") or "").lower()
-        if "pro" in detail:
-            ok("403 detail mentions Pro tier")
-        else:
-            fail("403 detail mentions Pro tier", f"detail={detail}")
-
-    # 3) Pro + invalid role -> 400 (must run BEFORE S3 configured check)
-    bad_role = dict(VALID_UPLOAD_BODY, role="bogus")
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json=bad_role,
-        timeout=15,
-    )
-    if expect_status("pro + invalid role 'bogus' -> 400", r, 400):
-        detail = (expect_json(r).get("detail") or "").lower()
-        if "role" in detail:
-            ok("role error detail mentions 'role'")
-        else:
-            fail("role error detail mentions 'role'", f"detail={detail}")
-
-    # 4) Pro + invalid extension -> 400
-    bad_ext = dict(VALID_UPLOAD_BODY, extension="exe")
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json=bad_ext,
-        timeout=15,
-    )
-    if expect_status("pro + invalid extension 'exe' -> 400", r, 400):
-        detail = (expect_json(r).get("detail") or "").lower()
-        if "extension" in detail:
-            ok("extension error detail mentions 'extension'")
-        else:
-            fail("extension error detail mentions 'extension'", f"detail={detail}")
-
-    # 5) Pro + non-image mime -> 400
-    bad_mime = dict(VALID_UPLOAD_BODY, mime="application/octet-stream")
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json=bad_mime,
-        timeout=15,
-    )
-    expect_status("pro + non-image mime -> 400", r, 400)
-
-    # 6) Pro + valid body -> 503 (AWS intentionally not configured)
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json=VALID_UPLOAD_BODY,
-        timeout=15,
-    )
-    if expect_status("pro + valid payload -> 503 (S3 not configured)", r, 503):
-        detail = (expect_json(r).get("detail") or "").lower()
-        if "not configured" in detail or "cloud media" in detail:
-            ok("503 detail mentions not-configured")
-        else:
-            fail("503 detail mentions not-configured", f"detail={detail}")
+    # Allowed mime+ext combos -> 200
+    combos = [
+        ("image/jpeg", "jpg"),
+        ("image/jpeg", "jpeg"),
+        ("image/png", "png"),
+        ("image/webp", "webp"),
+        ("image/heic", "heic"),
+        ("image/heif", "heif"),
+    ]
+    for mime, ext in combos:
+        p = {**base, "imageId": f"img_{uuid.uuid4().hex[:8]}",
+             "mime": mime, "extension": ext}
+        r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
+        ok = r.status_code == 200
+        detail = f"got {r.status_code}"
+        if ok and ext == "jpeg":
+            j = r.json()
+            key = j.get("storageKey", "")
+            normalised = key.endswith(".jpg") and not key.endswith(".jpeg")
+            ok = ok and normalised
+            detail += f" key_ends={key[-8:]} normalised={normalised}"
+        elif not ok:
+            detail += f" body={r.text[:160]}"
+        record(section, f"allowed {mime}+{ext} -> 200", ok, detail)
 
 
-# ---------- /api/media/presign-download ---------------------------------
+# ============================================================
+# SECTION 3 - Response shape on success
+# ============================================================
+def section_3_response_shape():
+    section = "3.ResponseShape"
+    image_id = "hello world?"
+    payload = {
+        "imageId": image_id,
+        "huntId": None,
+        "role": "primary",
+        "mime": "image/png",
+        "extension": "png",
+    }
+    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
+    if r.status_code != 200:
+        record(section, "presign 200", False, f"got {r.status_code} body={r.text[:200]}")
+        return
+    j = r.json()
 
-def test_presign_download() -> None:
-    print("\n[POST /api/media/presign-download]")
-    url = f"{API}/media/presign-download"
+    key = j.get("storageKey", "")
+    expected_prefix = "hunts/test-user-001/_unassigned/primary/"
+    record(section, "storageKey starts with expected prefix",
+           key.startswith(expected_prefix), f"key={key}")
+    record(section, "storageKey is sanitised (no space/?)",
+           " " not in key and "?" not in key, f"key={key}")
+    record(section, "storageKey ends in .png",
+           key.endswith(".png"), f"key={key}")
+    last_seg = key.rsplit("/", 1)[-1]
+    record(section, "imageId portion sanitised",
+           "_" in last_seg and "hello" in last_seg,
+           f"last_seg={last_seg}")
 
-    own_key = f"hunts/{PRO_USER_ID}/h1/primary/img.jpg"
-    other_key = "hunts/ANOTHER_USER/h1/primary/img.jpg"
-
-    # 1) No auth -> 401
-    r = requests.post(url, json={"storageKey": own_key}, timeout=15)
-    expect_status("no-auth -> 401", r, 401)
-
-    # 2) Trial user -> 403 Pro-gated
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {TRIAL_TOKEN}"},
-        json={"storageKey": own_key},
-        timeout=15,
-    )
-    expect_status("trial bearer -> 403", r, 403)
-
-    # 3) Path-traversal storageKey containing '..' -> 400
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": f"hunts/{PRO_USER_ID}/../evil/img.jpg"},
-        timeout=15,
-    )
-    expect_status("pro + key containing '..' -> 400", r, 400)
-
-    # 4) storageKey starting with '/' -> 400
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": f"/hunts/{PRO_USER_ID}/h1/primary/img.jpg"},
-        timeout=15,
-    )
-    expect_status("pro + key starting with '/' -> 400", r, 400)
-
-    # 4b) Key not starting with 'hunts/' -> 400
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": "uploads/foo/bar.jpg"},
-        timeout=15,
-    )
-    expect_status("pro + non-'hunts/' prefix -> 400", r, 400)
-
-    # 5) Ownership mismatch -> 403 (must run BEFORE S3 configured check)
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": other_key},
-        timeout=15,
-    )
-    if expect_status("pro + cross-user key -> 403", r, 403):
-        detail = (expect_json(r).get("detail") or "").lower()
-        if "does not belong" in detail or "caller" in detail:
-            ok("403 detail names ownership violation")
-        else:
-            fail("403 detail names ownership violation", f"detail={detail}")
-
-    # 6) Pro + own valid key -> 503 (S3 not configured)
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": own_key},
-        timeout=15,
-    )
-    if expect_status("pro + own key -> 503 (S3 not configured)", r, 503):
-        detail = (expect_json(r).get("detail") or "").lower()
-        if "not configured" in detail:
-            ok("503 detail mentions not-configured")
-        else:
-            fail("503 detail mentions not-configured", f"detail={detail}")
+    upload_url = j.get("uploadUrl", "")
+    region = "us-east-2"
+    bucket = "ravenscout-media-prod"
+    expected_host = f"https://{bucket}.s3.{region}.amazonaws.com"
+    record(section, f"uploadUrl host = {expected_host}",
+           upload_url.startswith(expected_host),
+           f"upload_url={upload_url[:160]}")
+    record(section, "uploadUrl contains X-Amz-Signature",
+           "X-Amz-Signature" in upload_url, "")
+    record(section, "privateDelivery == true",
+           j.get("privateDelivery") is True,
+           f"got {j.get('privateDelivery')}")
+    record(section, "expiresIn == 900",
+           j.get("expiresIn") == 900, f"got {j.get('expiresIn')}")
+    record(section, "mime echoes input",
+           j.get("mime") == "image/png", f"got {j.get('mime')}")
 
 
-# ---------- /api/media/delete -------------------------------------------
+# ============================================================
+# SECTION 4 - Live S3 round trip
+# ============================================================
+def section_4_live_s3():
+    section = "4.LiveS3"
+    payload = {
+        "imageId": f"smoke_{uuid.uuid4().hex[:8]}",
+        "huntId": f"hunt_{uuid.uuid4().hex[:6]}",
+        "role": "primary",
+        "mime": "image/png",
+        "extension": "png",
+    }
+    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
+    if r.status_code != 200:
+        record(section, "presign-upload 200", False,
+               f"got {r.status_code} body={r.text[:160]}")
+        return
+    j = r.json()
+    record(section, "presign-upload 200", True, "")
+    storage_key = j["storageKey"]
+    upload_url = j["uploadUrl"]
 
-def test_media_delete() -> None:
-    print("\n[POST /api/media/delete]")
-    url = f"{API}/media/delete"
+    put = requests.put(upload_url, data=ONE_BY_ONE_PNG,
+                       headers={"Content-Type": "image/png"}, timeout=30)
+    record(section, "PUT bytes to S3 -> 200",
+           put.status_code == 200,
+           f"got {put.status_code} body={put.text[:200]}")
+    if put.status_code != 200:
+        return
 
-    own_key = f"hunts/{PRO_USER_ID}/h1/primary/img.jpg"
-    other_key = "hunts/ANOTHER_USER/h1/primary/img.jpg"
+    rd = post("/media/presign-download", token=PRO_TOKEN,
+              json_body={"storageKey": storage_key})
+    record(section, "presign-download 200",
+           rd.status_code == 200,
+           f"got {rd.status_code} body={rd.text[:200]}")
+    if rd.status_code != 200:
+        return
+    download_url = rd.json()["downloadUrl"]
 
-    # 1) No auth -> 401
-    r = requests.post(url, json={"storageKey": own_key}, timeout=15)
-    expect_status("no-auth -> 401", r, 401)
+    g = requests.get(download_url, timeout=30)
+    bytes_match = g.status_code == 200 and g.content == ONE_BY_ONE_PNG
+    record(section, "GET downloadUrl returns same bytes",
+           bytes_match,
+           f"status={g.status_code} len={len(g.content)} expected={len(ONE_BY_ONE_PNG)}")
 
-    # 2) Trial -> 403 Pro-gated
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {TRIAL_TOKEN}"},
-        json={"storageKey": own_key},
-        timeout=15,
-    )
-    expect_status("trial bearer -> 403", r, 403)
-
-    # 3) Path traversal -> 400
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": f"hunts/{PRO_USER_ID}/../evil/img.jpg"},
-        timeout=15,
-    )
-    expect_status("pro + '..' key -> 400", r, 400)
-
-    # 4) Starts with '/' -> 400
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": f"/hunts/{PRO_USER_ID}/h1/primary/img.jpg"},
-        timeout=15,
-    )
-    expect_status("pro + '/' prefix key -> 400", r, 400)
-
-    # 5) Ownership mismatch -> 403 (before S3-config check)
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": other_key},
-        timeout=15,
-    )
-    expect_status("pro + cross-user key -> 403", r, 403)
-
-    # 6) Pro + own valid key -> 200 with {success:false, reason:"S3 not configured"}
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {PRO_TOKEN}"},
-        json={"storageKey": own_key},
-        timeout=15,
-    )
-    if expect_status("pro + own key -> 200 soft-fail", r, 200):
-        body = expect_json(r)
-        if body.get("success") is False and "not configured" in (body.get("reason") or "").lower():
-            ok("delete body = {success:false, reason:'S3 not configured'}", f"body={body}")
-        else:
-            fail(
-                "delete body = {success:false, reason:'S3 not configured'}",
-                f"got={body}",
-            )
-
-
-# ---------- main --------------------------------------------------------
-
-def main() -> int:
-    print(f"Using API base: {API}")
+    rdl = post("/media/delete", token=PRO_TOKEN,
+               json_body={"storageKey": storage_key})
+    body = {}
     try:
-        test_regression_smoke()
-        test_presign_upload()
-        test_presign_download()
-        test_media_delete()
-    except requests.RequestException as e:
-        print(f"\nNETWORK ERROR: {e}")
-        return 2
+        body = rdl.json()
+    except Exception:
+        pass
+    record(section, "DELETE -> {success: true}",
+           rdl.status_code == 200 and body.get("success") is True,
+           f"got {rdl.status_code} {body}")
 
-    print("\n============================================================")
-    print(f"PASS: {len(PASS)}")
-    print(f"FAIL: {len(FAIL)}")
-    for name, why in FAIL:
-        print(f"  - {name}: {why}")
-    print("============================================================")
-    return 0 if not FAIL else 1
+    rd2 = post("/media/presign-download", token=PRO_TOKEN,
+               json_body={"storageKey": storage_key})
+    if rd2.status_code != 200:
+        record(section, "re-presign-download after delete 200",
+               False, f"got {rd2.status_code} {rd2.text[:160]}")
+        return
+    durl2 = rd2.json()["downloadUrl"]
+    g2 = requests.get(durl2, timeout=30)
+    record(section, "re-GET after delete -> 404",
+           g2.status_code == 404, f"got {g2.status_code}")
+
+
+# ============================================================
+# SECTION 5 - Owner guard
+# ============================================================
+def section_5_owner_guard():
+    section = "5.OwnerGuard"
+    foreign = "hunts/SOMEONE_ELSE/h1/primary/img.jpg"
+    bad_no_prefix = "users/test-user-001/foo.jpg"
+    bad_traversal = "hunts/test-user-001/../whoops.jpg"
+
+    r = post("/media/presign-download", token=PRO_TOKEN,
+             json_body={"storageKey": foreign})
+    record(section, "download foreign -> 403",
+           r.status_code == 403, f"got {r.status_code} {r.text[:140]}")
+
+    r = post("/media/presign-download", token=PRO_TOKEN,
+             json_body={"storageKey": bad_no_prefix})
+    record(section, "download non-hunts prefix -> 400",
+           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
+
+    r = post("/media/presign-download", token=PRO_TOKEN,
+             json_body={"storageKey": bad_traversal})
+    record(section, "download '..' traversal -> 400",
+           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
+
+    r = post("/media/delete", token=PRO_TOKEN,
+             json_body={"storageKey": foreign})
+    record(section, "delete foreign -> 403",
+           r.status_code == 403, f"got {r.status_code} {r.text[:140]}")
+
+    r = post("/media/delete", token=PRO_TOKEN,
+             json_body={"storageKey": bad_no_prefix})
+    record(section, "delete non-hunts prefix -> 400",
+           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
+
+    r = post("/media/delete", token=PRO_TOKEN,
+             json_body={"storageKey": bad_traversal})
+    record(section, "delete '..' traversal -> 400",
+           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
+
+
+# ============================================================
+# SECTION 6 - DELETE /api/hunts/{hunt_id} cascade with REAL S3
+# ============================================================
+def section_6_hunt_cascade():
+    section = "6.HuntCascade"
+    image_id = f"casc_{uuid.uuid4().hex[:8]}"
+    hunt_id = f"rs-cascade-{uuid.uuid4().hex[:8]}"
+
+    payload = {
+        "imageId": image_id, "huntId": hunt_id,
+        "role": "primary", "mime": "image/png", "extension": "png",
+    }
+    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
+    if r.status_code != 200:
+        record(section, "presign-upload for cascade",
+               False, f"got {r.status_code} {r.text[:160]}")
+        return
+    j = r.json()
+    storage_key = j["storageKey"]
+    upload_url = j["uploadUrl"]
+
+    put = requests.put(upload_url, data=ONE_BY_ONE_PNG,
+                       headers={"Content-Type": "image/png"}, timeout=30)
+    if put.status_code != 200:
+        record(section, "PUT bytes to S3 (cascade)",
+               False, f"got {put.status_code}")
+        return
+    record(section, "Real S3 object created", True, f"key={storage_key}")
+
+    hunt_body = {
+        "hunt_id": hunt_id,
+        "metadata": {
+            "species": "deer", "speciesName": "Whitetail Deer",
+            "date": "2026-02-15", "timeWindow": "morning",
+            "windDirection": "NW", "temperature": "38F",
+            "propertyType": "private", "region": "East Texas",
+            "huntStyle": "archery",
+        },
+        "analysis": {"summary": "cascade test", "overlays": []},
+        "analysis_context": {"prompt_version": "v2"},
+        "media_refs": [storage_key],
+        "primary_media_ref": storage_key,
+        "image_s3_keys": [storage_key],
+        "storage_strategy": "cloud-first",
+        "extra": {},
+    }
+    r = post("/hunts", token=PRO_TOKEN, json_body=hunt_body)
+    record(section, "POST /api/hunts seed -> 200",
+           r.status_code == 200, f"got {r.status_code} {r.text[:160]}")
+
+    rd = http_delete(f"/hunts/{hunt_id}", token=PRO_TOKEN)
+    body = {}
+    try:
+        body = rd.json()
+    except Exception:
+        pass
+    s3 = body.get("s3", {}) if isinstance(body, dict) else {}
+    ok_status = rd.status_code == 200
+    ok_top = body.get("ok") is True and body.get("deleted") == 1
+    ok_s3 = (s3.get("requested") == 1 and s3.get("deleted") == 1
+             and s3.get("failed") == [])
+    record(section, "DELETE /api/hunts cascade response shape",
+           ok_status and ok_top and ok_s3,
+           f"status={rd.status_code} body={body}")
+
+    # Final: GET via fresh download URL should 404
+    rd2 = post("/media/presign-download", token=PRO_TOKEN,
+               json_body={"storageKey": storage_key})
+    if rd2.status_code != 200:
+        record(section, "post-cascade presign-download",
+               False, f"got {rd2.status_code} {rd2.text[:160]}")
+        return
+    durl = rd2.json()["downloadUrl"]
+    g = requests.get(durl, timeout=30)
+    record(section, "post-cascade GET -> 404",
+           g.status_code == 404, f"got {g.status_code}")
+
+
+def main():
+    print("=" * 78)
+    print("Raven Scout - AWS S3 production bucket end-to-end test")
+    print("Bucket: ravenscout-media-prod  Region: us-east-2")
+    print(f"Backend: {BASE_URL}")
+    print("=" * 78)
+
+    section_1_auth_tier()
+    section_2_validation()
+    section_3_response_shape()
+    section_4_live_s3()
+    section_5_owner_guard()
+    section_6_hunt_cascade()
+
+    print()
+    print("=" * 78)
+    print("SUMMARY")
+    print("=" * 78)
+    by_section = {}
+    for sec, name, ok, detail in results:
+        by_section.setdefault(sec, []).append((name, ok, detail))
+    total_ok = 0
+    total = 0
+    for sec, items in by_section.items():
+        sec_ok = sum(1 for _, ok, _ in items if ok)
+        sec_total = len(items)
+        total_ok += sec_ok
+        total += sec_total
+        verdict = "PASS" if sec_ok == sec_total else "FAIL"
+        print(f"[{verdict}] {sec}: {sec_ok}/{sec_total}")
+        for name, ok, detail in items:
+            if not ok:
+                print(f"      X {name} :: {detail}")
+    print()
+    print(f"OVERALL: {total_ok}/{total} assertions passed")
+    return 0 if total_ok == total else 1
 
 
 if __name__ == "__main__":

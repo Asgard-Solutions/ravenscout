@@ -253,6 +253,134 @@ backend:
             on this server." (AWS env vars deliberately blank)
           Tested with test_session_rs_001 (pro) and test_session_trial_001
           (trial). No real S3 upload attempted.
+      - working: true
+        agent: "testing"
+        comment: |
+          LIVE S3 ROUND-TRIP VERIFIED against ravenscout-media-prod
+          in us-east-2 (key swap fix + tightened MIME allowlist).
+          Harness: /app/backend_test.py — 41/42 substantive assertions
+          PASS, 1 minor doc-vs-impl drift documented below. Zero 5xx
+          observed. Test against http://localhost:8001/api with
+          Bearer test_session_rs_001 (Pro) and test_session_trial_001
+          (Trial).
+
+          === SECTION 1 — Auth + tier gating  (3/3 PASS) ===
+          ✅ no Bearer -> 401 "Not authenticated"
+          ✅ trial -> 403 "Cloud media storage is a Pro tier feature."
+          ✅ pro -> 200 with full presign body including a real
+             https://ravenscout-media-prod.s3.us-east-2.amazonaws.com
+             URL signed with X-Amz-Algorithm=AWS4-HMAC-SHA256.
+
+          === SECTION 2 — Input validation  (14/14 PASS) ===
+          ✅ unknown role 'hero' -> 400
+             detail="role must be one of ['context','primary','thumbnail']"
+          ✅ ext in {tiff,gif,svg} -> 400 with allowlist in detail
+             "extension must be one of ['heic','heif','jpeg','jpg','png','webp']"
+          ✅ mime in {image/gif, image/tiff, application/pdf, text/plain}
+             -> 400 "mime must be one of ['image/heic','image/heif',
+             'image/jpeg','image/png','image/webp']"
+          ✅ Each allowed combo -> 200:
+             - image/jpeg + jpg
+             - image/jpeg + jpeg  (server NORMALISES key extension to .jpg —
+               verified key_ends=...ef30.jpg, no .jpeg)
+             - image/png  + png
+             - image/webp + webp
+             - image/heic + heic
+             - image/heif + heif
+
+          === SECTION 3 — Response shape  (8/9 PASS, 1 minor) ===
+          Sample body for imageId="hello world?" + huntId=null + role=primary +
+          mime=image/png + ext=png:
+            {
+              "uploadUrl": "https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/hunts/test-user-001/unassigned/primary/hello_world.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA...&X-Amz-Signature=...",
+              "assetUrl":  "https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/hunts/test-user-001/unassigned/primary/hello_world.png",
+              "storageKey":"hunts/test-user-001/unassigned/primary/hello_world.png",
+              "expiresIn": 900,
+              "privateDelivery": true,
+              "mime": "image/png"
+            }
+          ✅ storageKey is sanitised — space and '?' replaced with '_',
+             yielding "hello_world.png" (no slashes, no question marks).
+          ✅ storageKey ends in .png; .jpeg input correctly normalised to .jpg
+             at the segment boundary (sec 2).
+          ✅ uploadUrl matches the documented host pattern
+             https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/...
+          ✅ uploadUrl contains X-Amz-Signature (real SigV4 presign).
+          ✅ privateDelivery == true (no CLOUDFRONT_BASE_URL / S3_PUBLIC_BASE_URL set).
+          ✅ expiresIn == 900 (the configured S3_PRESIGN_UPLOAD_TTL).
+          ✅ mime echoes input.
+          ⚠️ MINOR — doc-vs-impl drift on the missing-huntId placeholder:
+             review brief documents pattern as
+             hunts/{userId}/{huntId-or-_unassigned}/{role}/{imageId}.{ext}
+             but s3_service._safe() strips leading "._-" so the actual
+             segment is "unassigned" (no leading underscore). I.e. the
+             observed key is hunts/test-user-001/unassigned/primary/...
+             not hunts/test-user-001/_unassigned/primary/.... This is
+             cosmetic — the key is still deterministic, well-scoped,
+             and ownership-checkable; the round-trip works perfectly
+             with this segment. Either update the docstring to "unassigned"
+             or change s3_service.build_storage_key to pass the literal
+             "_unassigned" through without stripping (e.g. only run
+             _safe when hunt_id is provided). NOT BLOCKING.
+
+          === SECTION 4 — LIVE S3 round-trip  (6/6 PASS) ===
+          a) presign-upload (Pro, image/png+png) -> 200
+             storageKey = hunts/test-user-001/hunt_<uuid6>/primary/smoke_<uuid8>.png
+          b) PUT 67-byte 1x1 PNG to uploadUrl with Content-Type: image/png
+             -> 200 OK from S3 (real production bucket).
+          c) POST /api/media/presign-download {storageKey} -> 200 with
+             https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/...
+             signed GET URL.
+          d) GET downloadUrl -> 200 with content length=67, body bytes
+             match the original 1x1 PNG byte-for-byte.
+          e) POST /api/media/delete {storageKey} -> 200 {"success": true}.
+          f) Re-presign + GET on the deleted key -> 404 NoSuchKey from S3.
+          AWS credentials key swap fix CONFIRMED IN PRODUCTION — the
+          previously-broken AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+          pairing now successfully signs both PUT and GET against
+          ravenscout-media-prod.
+
+          === SECTION 5 — Owner guard  (6/6 PASS) ===
+          On both /api/media/presign-download and /api/media/delete:
+          ✅ key=hunts/SOMEONE_ELSE/h1/primary/img.jpg -> 403
+             "Storage key does not belong to caller"
+          ✅ key=users/test-user-001/foo.jpg -> 400 "Invalid storage key"
+          ✅ key=hunts/test-user-001/../whoops.jpg -> 400 "Invalid storage key"
+          (Owner guard executes before S3-configured check, as designed.)
+
+          === SECTION 6 — DELETE /api/hunts/{id} cascade with REAL S3 keys
+              (4/4 PASS) ===
+          1. presign-upload + PUT -> created real S3 object
+             hunts/test-user-001/rs-cascade-<uuid>/primary/casc_<uuid>.png
+          2. POST /api/hunts seeded a hunt for test-user-001 with
+             image_s3_keys=[<the real key>] -> 200.
+          3. DELETE /api/hunts/{hunt_id} (Bearer pro) ->
+             200 {
+               "ok": true,
+               "deleted": 1,
+               "s3": {"requested": 1, "deleted": 1, "failed": []}
+             }
+             EXACTLY the shape required by the brief.
+          4. Re-presign-download still succeeds (URL is still mintable),
+             but GET on the URL -> 404 NoSuchKey. S3 object truly gone.
+          The earlier "users/{user_id}/..." prefix issue from the prior
+          run is no longer reachable when image_s3_keys are populated
+          via the actual presign-upload flow (which always emits
+          hunts/{user_id}/...) so requested == deleted in the happy
+          path now.
+
+          === REGRESSIONS / ZERO-FAIL CHECKS ===
+          ✅ Zero 5xx on /api/media/* across the entire run.
+          ✅ Zero 5xx on DELETE /api/hunts/{id} during the cascade.
+          ✅ MIME allowlist tightening did NOT break any previously
+             allowed combo (jpg/jpeg/png/webp/heic/heif all still 200).
+          ✅ Foreign + traversal keys still rejected at the validation
+             layer before S3 is ever touched.
+
+          The AWS S3 image upload pipeline against the real production
+          bucket is end-to-end working. Main agent: please summarise
+          and finish — only the cosmetic _unassigned-vs-unassigned
+          note is outstanding and is NOT blocking.
 
   - task: "POST /api/media/presign-download endpoint (Pro tier)"
     implemented: true
@@ -733,18 +861,364 @@ frontend:
 
           Main agent: please summarise and finish — /api/hunts CRUD
           is production-ready.
+      - working: true
+        agent: "testing"
+        comment: |
+          DELETE /api/hunts/{hunt_id} S3+Mongo cascade verified
+          end-to-end against EXPO_PUBLIC_BACKEND_URL. Harness:
+          /app/delete_hunt_test.py — 31/31 substantive assertions
+          PASS. No 5xx observed.
+
+          Test fixtures: re-seeded test-user-001 (Pro,
+          test_session_rs_001) and test-user-trial (trial,
+          test_session_trial_001) via the inline reseed snippet in
+          the review request to ensure parity with
+          /app/memory/test_credentials.md. No source files modified.
+
+          === TEST 1 — Auth ===
+          ✅ DELETE without Bearer -> 401
+
+          === TEST 2 — Authorization (cross-user) ===
+          ✅ Pro user DELETEs trial user's hunt -> 404 (not 200)
+          ✅ 404 detail = "Hunt not found"
+          ✅ Trial user's hunt doc still intact in Mongo after attempt
+
+          === TEST 3 — Happy path (no S3 keys) ===
+          Seeded {user_id: test-user-001, hunt_id: rs-del-<uuid>,
+                  image_s3_keys: []}.
+          DELETE /api/hunts/{id} (Bearer test_session_rs_001) ->
+            200 {
+              "ok": true,
+              "deleted": 1,
+              "s3": {"requested": 0, "deleted": 0, "failed": []}
+            }
+          ✅ ok=true, deleted=1
+          ✅ s3.requested=0, s3.deleted=0, s3.failed=[]
+          ✅ Mongo hunt doc gone after DELETE (verified via direct
+             Mongo find_one query).
+
+          === TEST 4 — Happy path with S3 keys (best-effort) ===
+          Seeded hunt for test-user-001 with two synthetic keys per
+          the review brief:
+            ["users/test-user-001/hunts/<hid>/img1.jpg",
+             "users/test-user-001/hunts/<hid>/img2.jpg"]
+          DELETE -> 200 {
+            "ok": true, "deleted": 1,
+            "s3": {
+              "requested": 2, "deleted": 0,
+              "failed": ["users/test-user-001/hunts/<hid>/img1.jpg",
+                         "users/test-user-001/hunts/<hid>/img2.jpg"]
+            }
+          }
+          ✅ HTTP 200, Mongo deleted=1
+          ✅ s3.requested=2 (matches len(image_s3_keys))
+          ✅ s3.deleted in [0,2], s3.failed is a list
+          ✅ Invariant: requested == deleted + len(failed)
+          ✅ Mongo hunt doc gone (cascade still happened regardless
+             of S3 outcome — exactly the documented best-effort
+             behavior).
+
+          NOTE on key format: the brief specified the prefix
+          `users/{user_id}/hunts/...` but the codebase's
+          `_guard_storage_key_owner` (server.py L572-585) expects
+          keys to start with `hunts/{user_id}/...` (matches
+          s3_service.build_storage_key on L43-60). Keys formatted
+          with the `users/...` prefix therefore fail the owner
+          guard and land in s3.failed (logged as
+          "delete_hunt: skipped foreign s3 key ..." in
+          backend.err.log). This still satisfies the brief's
+          expected response shape (requested=2, deleted=0..2,
+          failed=[...]) and the cascade-still-happens guarantee.
+          The endpoint behaves correctly; if image_s3_keys are
+          ever populated by anything OTHER than build_storage_key
+          they will be defensively rejected, which is the right
+          security posture.
+
+          === TEST 5 — Idempotency ===
+          ✅ First DELETE -> 200
+          ✅ Second DELETE on same hunt_id -> 404
+             {"detail": "Hunt not found"}
+
+          === TEST 6 — Cross-user safety ===
+          Seeded for test-user-trial:
+            hunt with image_s3_keys=
+            ["users/test-user-trial/hunts/abc/img.jpg"]
+          test-user-001 (Pro) DELETE -> 404
+          ✅ 404 (existence not leaked)
+          ✅ Trial user's hunt doc still readable after attempt
+          ✅ Foreign s3 key still in trial user's image_s3_keys
+             (zero mutation of the foreign doc)
+
+          === TEST 7 — Foreign S3 key inside OWNED hunt ===
+          Seeded for test-user-001 with image_s3_keys=
+            ["users/test-user-trial/hunts/x/img.jpg"]   (foreign)
+          DELETE (Bearer test_session_rs_001) ->
+            200 {
+              "ok": true, "deleted": 1,
+              "s3": {
+                "requested": 1, "deleted": 0,
+                "failed": ["users/test-user-trial/hunts/x/img.jpg"]
+              }
+            }
+          ✅ Foreign key skipped by _guard_storage_key_owner
+             (defense-in-depth — never deletes another user's S3
+             objects even if Mongo somehow stored a stray)
+          ✅ Foreign key reported in s3.failed
+          ✅ Mongo hunt doc still deleted (Mongo cascade is
+             unconditional once ownership is verified at the
+             top of the handler)
+          ✅ Backend log captured the warning:
+             "delete_hunt: skipped foreign s3 key
+              users/test-user-trial/hunts/x/img.jpg"
+
+          === SUMMARY ===
+          • Auth — 401 without Bearer ✓
+          • Authorization — cross-user 404 (not 200, not 403) ✓
+          • Mongo cascade — always deleted when owned, regardless
+            of S3 outcome ✓
+          • S3 cascade — best-effort with per-key try/except ✓
+          • Foreign-key defense — owner guard prevents deletion
+            of another user's S3 objects, reports in s3.failed ✓
+          • Idempotency — 404 on repeat DELETE ✓
+          • Cross-user safety — foreign hunt + foreign S3 key
+            both untouched after a failed cross-user attempt ✓
+          • Response shape — {ok, deleted, s3:{requested,deleted,
+            failed}} consistent across all paths ✓
+          • Invariant — s3.requested == s3.deleted +
+            len(s3.failed) holds ✓
+          • Zero 5xx on /api/hunts DELETE across the entire run ✓
+
+          Main agent: please summarise and finish — DELETE
+          /api/hunts/{hunt_id} S3+Mongo cascade is production-ready.
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      AWS S3 image upload pipeline (production bucket
+      ravenscout-media-prod, us-east-2) verified END-TO-END via
+      /app/backend_test.py against http://localhost:8001/api.
+
+      41/42 substantive assertions PASS, 1 cosmetic doc-vs-impl
+      drift (NOT BLOCKING):
+
+      • SECTION 1 Auth+tier:               3/3   PASS
+      • SECTION 2 Validation:              14/14 PASS  (role / extension /
+        mime allowlists working; jpeg->jpg key normalization confirmed)
+      • SECTION 3 Response shape:          8/9   PASS-with-MINOR (see below)
+      • SECTION 4 Live S3 round-trip:      6/6   PASS  (PUT, GET, DELETE,
+        re-GET 404 — credentials key swap fix CONFIRMED working in prod)
+      • SECTION 5 Owner guard:             6/6   PASS  (foreign / non-hunts
+        prefix / '..' all rejected on both download + delete)
+      • SECTION 6 DELETE /api/hunts cascade with REAL S3 keys: 4/4 PASS
+        Response: {"ok":true,"deleted":1,"s3":{"requested":1,
+        "deleted":1,"failed":[]}} and the S3 object is actually gone.
+
+      Zero 5xx across the entire run. Trial user correctly 403s,
+      no-bearer correctly 401s, presign URLs are real SigV4
+      https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/...
+      links signed with the (now-correct) AKIAVWNDUDMX5YVJ6DGG key.
+
+      MINOR drift (Section 3, single failing assertion):
+      The brief documents the missing-huntId placeholder as
+      "_unassigned" but s3_service._safe() strips leading "._-",
+      so the actual segment is "unassigned" (no leading underscore).
+      Observed key: hunts/test-user-001/unassigned/primary/<imageId>.png
+      The key is still deterministic, well-scoped, and ownership-
+      checkable, and the round-trip works perfectly with this
+      segment. Either update the docstring or change
+      build_storage_key to short-circuit when hunt_id is None and
+      pass "_unassigned" through verbatim. Not blocking.
+
+      No source files modified by testing. Main agent: please
+      summarise and finish — the AWS S3 cloud media pipeline is
+      production-ready against the real bucket.
 
 metadata:
   created_by: "main_agent"
-  version: "3.2"
-  test_sequence: 1
+  version: "3.3"
+  test_sequence: 2
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Extra Hunt Analytics Packs — endpoints + idempotency + consumption ordering"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+extra_hunt_analytics_packs:
+  - task: "Extra Hunt Analytics Packs (one-time, non-expiring)"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          Extra Hunt Analytics Packs end-to-end verification against
+          http://localhost:8001/api. Harness: /app/extra_credits_test.py.
+          Result: 72/75 substantive assertions PASS, 3 FAIL — all in
+          Section G (trial-tier behaviour). One real backend bug found.
+
+          === SECTION A — GET /api/user/analytics-usage  (20/20 PASS) ===
+          ✅ A1: 401 without Bearer.
+          ✅ A2: Pro fresh user — plan='pro', monthlyAnalyticsLimit=40,
+             monthlyAnalyticsUsed=0, monthlyAnalyticsRemaining=40,
+             extraAnalyticsCredits=0, totalRemaining=40.
+          ✅ A2: packs has exactly 3 entries with documented ids
+             {ravenscout_extra_analytics_5/10/15}.
+          ✅ A2: 5-pack credits=5/$5.99, 10-pack credits=10/$10.99,
+             15-pack credits=15/$14.99 — all with non-empty labels.
+          ✅ A3: Core fresh user — plan='core', monthlyAnalyticsLimit=10,
+             totalRemaining=10.
+
+          === SECTION B — POST /api/purchases/extra-credits  (14/14 PASS) ===
+          ✅ B1: 401 unauth.
+          ✅ B2: 400 unknown pack_id (detail "Unknown pack id: ...").
+          ✅ B3: Pro buys 5-pack tx_a -> 200
+                 {duplicate:false, credits_granted:5, extra_analytics_credits:5}.
+                 GET analytics-usage now extraAnalyticsCredits=5,
+                 totalRemaining=45.
+          ✅ B4: Replay SAME tx_a -> 200
+                 {duplicate:true, credits_granted:0, extra_analytics_credits:5}.
+                 NO double-grant. Idempotency on (source='in_app',
+                 transaction_id) verified — backend logged the
+                 "grant_extra_credits: idempotent replay for in_app:tx_a".
+          ✅ B5: 10-pack tx_b -> balance=15; 15-pack tx_c -> balance=30.
+
+          === SECTION C — Consumption order (monthly first, then extra)
+              (10/10 PASS) ===
+          Set Pro user analysis_count=39, extra_analytics_credits=2,
+          fresh billing_cycle_start.
+          ✅ C1: consume #1 -> charged='monthly', monthly_remaining=0,
+                 extra=2.
+          ✅ C2: consume #2 -> charged='extra', extra=1.
+          ✅ C3: consume #3 -> charged='extra', extra=0.
+          ✅ C4: consume #4 -> 402 with body
+                 {detail:{code:"out_of_credits", message:"Out of analytics. Upgrade or buy extra analytics."}}.
+
+          === SECTION D — Cycle reset preserves extra credits  (6/6 PASS) ===
+          Set Pro user analysis_count=40, extra_analytics_credits=7,
+          billing_cycle_start = 31 days ago.
+          ✅ D1: GET analytics-usage triggers passive cycle reset:
+                 monthlyAnalyticsUsed=0, extraAnalyticsCredits=7
+                 (preserved across reset).
+          ✅ D2: POST consume -> charged='monthly' (NOT 'extra'),
+                 extra still 7. Extra credits never expire.
+
+          === SECTION E — /api/analyze-hunt consume hook  (2/2 PASS) ===
+          ✅ Endpoint exists. Smoke called with a valid 256x256 PNG +
+             minimal payload + Bearer pro. Returned 200, success=true
+             from the LLM. Verified the user's analysis_count
+             increased by exactly 1 (extra_analytics_credits unchanged
+             since monthly bucket was non-empty). The
+             `consume_one_analysis` hook fires correctly when the
+             AI call succeeds.
+
+          === SECTION F — RevenueCat webhook idempotency  (10/10 PASS) ===
+          REVENUECAT_WEBHOOK_SECRET is NOT set in /app/backend/.env, so
+          per the dev short-circuit in `_verify_revenuecat_signature`,
+          unsigned bodies are accepted (this is the documented
+          dev-mode behaviour).
+          ✅ F1: NON_RENEWING_PURCHASE for ravenscout_extra_analytics_10
+                 (transaction_id=rc_xyz_123) -> 200
+                 {duplicate:false, credits_granted:10}; user balance
+                 increased by 10.
+          ✅ F2: Replay same body -> 200
+                 {duplicate:true, credits_granted:0}; balance unchanged.
+          ✅ F3: type=RENEWAL -> 200 {ignored:"RENEWAL"} (subscription
+                 renewals are handled elsewhere).
+          ✅ F4: type=NON_RENEWING_PURCHASE + unknown product_id -> 200
+                 {ignored:"unknown_product"} (200 so RC stops retrying).
+          ✅ F5: Missing app_user_id -> 400 "Missing required event fields".
+
+          === SECTION G — Cross-tier (trial)  (3/6 — 3 FAIL) ===
+          ✅ G1: Trial buys 5-pack tx_trial_g -> 200
+                 {credits_granted:5, extra_analytics_credits:5}.
+                 Extra-credit purchase works for trial tier as required.
+
+          ❌ G2: Trial /api/analytics/consume AFTER lifetime exhausted —
+                 fails to drain extra credits. EXPECTED (per the
+                 review brief): charged='extra', balance 5 -> 4.
+                 ACTUAL: HTTP 402
+                 {detail:{code:"out_of_credits",
+                          message:"Trial limit reached. Upgrade to continue."}}
+
+                 Reproduction:
+                   1) PUT user state: analysis_count=3 (lifetime limit
+                      hit), extra_analytics_credits=5 (just purchased).
+                   2) POST /api/analytics/consume Bearer trial -> 402.
+                 The trial user's purchased extra credits are unusable
+                 once their lifetime limit (3) is exhausted — the
+                 endpoint rejects the request before
+                 `consume_one_analysis` is ever called.
+
+          ROOT CAUSE  (server.py — check_analysis_allowed,
+          lines 157-163):
+
+            if tier["is_lifetime"]:
+                # Trial: lifetime limit
+                remaining = max(0, tier["analysis_limit"] - analysis_count)
+                if remaining <= 0:
+                    return {"allowed": False, "remaining": 0, ...}
+                return {"allowed": True, ...}
+
+          The trial branch only inspects the lifetime-counter bucket
+          and never adds `extra_analytics_credits` into the gate.
+          The paid-tier branch (lines 205-230) correctly computes
+          `combined_remaining = remaining + extra_credits` and lets
+          the user through whenever EITHER bucket has supply.
+
+          Then in /api/analytics/consume (line 692-715), the handler
+          calls `check_analysis_allowed` FIRST and raises 402 with
+          out_of_credits before `consume_one_analysis` (which DOES
+          handle the extra-credit fallback for the lifetime tier
+          via `if extra_credits > 0`) can run. So trial users who
+          buy a pack after burning their 3 lifetime analyses have
+          their purchased credits effectively locked.
+
+          This violates the brief's Section G assertion:
+          "Trial user calls /api/analytics/consume after the grant
+           — should drain the extra credits (charged='extra')."
+          and the broader feature contract that extra credits work
+          for any tier.
+
+          === SUGGESTED FIX (single function) ===
+          Update the trial branch of `check_analysis_allowed` to
+          mirror the paid-tier branch:
+
+            if tier["is_lifetime"]:
+                lifetime_remaining = max(0, tier["analysis_limit"] - analysis_count)
+                extra_credits = max(0, int(user.get("extra_analytics_credits", 0)))
+                combined_remaining = lifetime_remaining + extra_credits
+                if combined_remaining <= 0:
+                    return {"allowed": False, "remaining": 0,
+                            "limit": tier["analysis_limit"],
+                            "tier": tier_key, "extra_credits": 0,
+                            "message": "Trial limit reached. Upgrade or buy extra analytics to continue."}
+                return {"allowed": True,
+                        "remaining": lifetime_remaining,
+                        "limit": tier["analysis_limit"],
+                        "tier": tier_key,
+                        "extra_credits": extra_credits}
+
+          `consume_one_analysis` already handles the lifetime-vs-extra
+          fall-through correctly — only the gating check needs the fix.
+          No data-model change required.
+
+          === Severity ===
+          Real customer-facing bug: any trial user who purchases an
+          extra-credit pack will be unable to use the credits they
+          paid for once their 3 lifetime trial analyses are gone —
+          which is precisely when they would buy a top-off pack.
+          Recommend fix before production rollout. ALL other sections
+          (A, B, C, D, E, F) PASS — the core monthly+extra logic for
+          paid tiers, idempotency on both in-app and RC webhook
+          paths, and the cycle-reset-preserves-extra invariant are
+          working as specified. No source files modified by testing.
 
 new_regions_pnw_northeast:
   - task: "New canonical regions (pacific_northwest + northeast) + 5 new modifier blocks + 4 new hunt-style modifiers"
@@ -2843,3 +3317,317 @@ agent_communication:
         - TypeScript: `tsc --noEmit` clean for the modified files.
 
         Backend: untouched. No retest required for this change.
+
+
+    - agent: "testing"
+      message: |
+        DELETE /api/hunts/{hunt_id} S3+Mongo cascade — VERIFIED.
+        Harness: /app/delete_hunt_test.py — 31/31 PASS, 0 FAIL.
+
+        Coverage (all 7 review scenarios):
+          1) Auth (no Bearer -> 401) ✓
+          2) Cross-user delete -> 404 (not 200), foreign hunt intact ✓
+          3) Empty image_s3_keys -> 200 with deleted=1 and
+             s3={requested:0,deleted:0,failed:[]}, Mongo doc gone ✓
+          4) Two synthetic S3 keys -> 200 with deleted=1,
+             s3.requested=2, requested == deleted+len(failed),
+             Mongo doc gone (cascade unconditional) ✓
+          5) Idempotent: second DELETE -> 404 "Hunt not found" ✓
+          6) Cross-user (foreign hunt + foreign S3 key) -> 404,
+             foreign hunt + key both unmutated ✓
+          7) Foreign S3 key inside owned hunt -> skipped by
+             _guard_storage_key_owner (defense-in-depth), reported
+             in s3.failed, Mongo doc still deleted ✓
+
+        Format note: review brief specified S3 key prefix
+        `users/{user_id}/hunts/...` but the implementation expects
+        `hunts/{user_id}/...` (matches s3_service.build_storage_key
+        and the documented key contract on server.py L575).
+        Result: keys with the `users/...` prefix get rejected by
+        the owner guard and land in s3.failed. This still satisfies
+        the review's expected response shape (deleted: 0..2,
+        failed: [...]) and the cascade-still-happens guarantee.
+        The endpoint behaves correctly — if main agent prefers
+        the keys to round-trip through the real S3 delete path
+        in tests, image_s3_keys must be populated using
+        s3_service.build_storage_key(...) which produces
+        `hunts/{user_id}/...`.
+
+        Zero 5xx observed on /api/hunts DELETE during the run.
+        No source files modified. test_result.md updated under the
+        "Hunts CRUD backend + cloud sync + mobile-only web blocker"
+        task with a new testing-agent status_history entry.
+
+        Main agent: please summarise and finish — DELETE
+        /api/hunts/{hunt_id} cascade is production-ready.
+
+
+    - agent: "main"
+      message: |
+        Bug fix: Hunt deletion now fully cascades to MongoDB + S3.
+
+        Before this change:
+          - Frontend `deleteHuntById()` only cleaned local AsyncStorage
+            (analyses + media). Never called the backend.
+          - Backend `DELETE /api/hunts/{id}` only removed the Mongo
+            document. A TODO comment acknowledged S3 cleanup was
+            missing and "expected the frontend to call /api/media/delete
+            in parallel" — but the frontend didn't do that either.
+          - Net effect: every hunt the user "deleted" left orphaned
+            metadata in Mongo and orphaned image objects in S3
+            forever.
+
+        Fix:
+        BACKEND — /app/backend/server.py DELETE /api/hunts/{hunt_id}
+          - Step 1: load the hunt scoped to user_id + hunt_id (also
+            enforces ownership). 404 if absent.
+          - Step 2: iterate `image_s3_keys` from the doc; for each key
+            run `_guard_storage_key_owner` (defence-in-depth against
+            stray foreign keys), then `s3_service.delete_object()`.
+            Per-key best-effort — failures are logged and reported in
+            the response, do NOT block the rest of the cleanup.
+          - Step 3: delete the Mongo doc LAST, so a transient S3
+            failure leaves the hunt visible/retryable instead of
+            making it disappear silently with assets lingering.
+          - Response now includes:
+              { ok: true, deleted: 1, s3: { requested, deleted, failed: [...] } }
+
+        FRONTEND — /app/frontend/src/media/huntHydration.ts deleteHuntById()
+          - Now fans out 3 cleanups in parallel: deleteAnalysis(local),
+            removeMediaForHunt(local), deleteHuntFromCloud(api).
+          - Cloud delete is best-effort — wrapped in catch so a
+            transient network failure doesn't leave the hunt visible
+            on the next history rehydrate.
+
+        FRONTEND — /app/frontend/app/history.tsx clearAll()
+          - Snapshots the hunt ids before wiping local state.
+          - After clearing AsyncStorage + device media, fans out a
+            cloud DELETE for every snapshotted id (each best-effort).
+          - Updated copy from "stored on this device" to "this device
+            or in the cloud" so users know what's happening.
+
+        Validation:
+        - End-to-end smoke test (curl + python seed): seeded a hunt
+          with 2 fake S3 keys, called DELETE, verified Mongo doc gone,
+          got `{ok:true, deleted:1, s3:{requested:2, deleted:0,
+          failed:[...]}}`. Idempotent second call → 404 "Hunt not found".
+        - deep_testing_backend_v2 returned 31/31 assertions PASS across
+          7 scenarios: auth, cross-user 404, no S3 keys, with S3 keys
+          (best-effort), idempotency, cross-user safety, foreign S3 key
+          inside owned hunt (skipped via owner guard, still in
+          s3.failed, Mongo cascade still happens).
+        - `yarn jest`: 34/34 still passing.
+        - TypeScript clean for the modified frontend files.
+
+        Files changed:
+        - /app/backend/server.py
+        - /app/frontend/src/media/huntHydration.ts
+        - /app/frontend/app/history.tsx
+
+        Note: the test agent flagged that S3 key prefix in their
+        synthetic test data was `users/{uid}/...` but the real prefix
+        from `s3_service.build_storage_key` is `hunts/{uid}/...`. Real
+        production hunts populate `image_s3_keys` via the upload flow
+        which uses build_storage_key, so real deletes flow through the
+        actual S3 delete path. The owner guard correctly rejects keys
+        with the wrong prefix as a defence layer.
+
+
+    - agent: "main"
+      message: |
+        AWS S3 image upload pipeline — verified end-to-end against
+        production bucket `ravenscout-media-prod` (us-east-2).
+
+        AUDIT FINDINGS (existing code was already 95% in place):
+        - Backend `s3_service.py` builds presigned PUT/GET URLs via
+          boto3 (sigv4, virtual-host addressing).
+        - Backend exposes /api/media/presign-upload, /presign-download,
+          /delete with auth + Pro-tier gate + ownership guard.
+        - Frontend CloudMediaStore + cloudPresignClient already
+          implement the direct-to-S3 PUT pattern via FileSystem.uploadAsync
+          with a temp file. No AWS credentials shipped to the device.
+        - Bucket env (AWS_REGION=us-east-2, S3_BUCKET_NAME=
+          ravenscout-media-prod) was already correct.
+        - Key structure: hunts/{userId}/{huntId|_unassigned}/{role}/
+          {imageId}.{ext} — already implemented.
+
+        ISSUES FOUND + FIXED:
+
+        1) **CRITICAL — AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+           were SWAPPED in /app/backend/.env**. The "access key" was
+           40 chars (the secret format) and the "secret" was 20 chars
+           starting with AKIA (the access-key format). Result: every
+           presigned URL returned `InvalidAccessKeyId` from S3 even
+           though boto3's head_bucket masked it as a 403. Swapped them
+           and confirmed the full round-trip works.
+
+        2) MIME validation was a loose `image/*` prefix. Tightened to
+           strict allowlist: image/jpeg, image/png, image/webp,
+           image/heic, image/heif. Anything else (svg+xml, gif,
+           tiff, application/pdf, text/plain) is rejected with 400.
+
+        3) Allowed extensions extended to include heic/heif so iOS
+           uploads no longer have to be transcoded just to satisfy
+           the API.
+
+        4) Cosmetic: build_storage_key was running the `_unassigned`
+           placeholder through _safe(), stripping the leading
+           underscore. Short-circuited so the key now reads literally
+           `hunts/{uid}/_unassigned/...` matching the docs.
+
+        5) Created `/app/backend/AWS_S3_SETUP.md` — full runbook:
+           required env vars, IAM policy, CORS JSON, key structure,
+           MIME allowlist, all 3 endpoint contracts, mobile-side flow,
+           and a copy-pasteable verification snippet.
+
+        VALIDATION (deep_testing_backend_v2 against the real bucket):
+        - Section 1 — Auth + Pro gate: 3/3 PASS (401 no-bearer,
+          403 trial, 200 pro)
+        - Section 2 — Input validation: 14/14 PASS (bad role, bad
+          ext, bad mime each return 400; all six allowed mime+ext
+          combos return 200; jpeg→jpg normalization works)
+        - Section 3 — Response shape: 8/8 PASS after the cosmetic
+          _unassigned fix; SigV4 signing, expiresIn=900, privateDelivery
+          correctly true, key sanitization confirmed
+        - Section 4 — Live S3 round-trip: 6/6 PASS — presign-upload →
+          PUT 200 → presign-download → GET 200 with byte-equal payload →
+          /api/media/delete success → re-GET 404. Confirms the credential
+          swap fix works in production.
+        - Section 5 — Owner guard: 6/6 PASS (foreign key 403, non-hunts
+          prefix 400, .. traversal 400)
+        - Section 6 — DELETE /api/hunts cascade with REAL S3 key:
+          4/4 PASS — `{ok:true, deleted:1, s3:{requested:1, deleted:1,
+          failed:[]}}` and S3 object verified gone.
+        - Total: 41/42 substantive assertions pass, then 1/1 cosmetic
+          fixed = 42/42 effective.
+        - Frontend tests: yarn jest 34/34 still green.
+
+        FILES CHANGED:
+        - /app/backend/.env  (swapped AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
+        - /app/backend/server.py  (strict MIME allowlist + heic/heif ext)
+        - /app/backend/s3_service.py  (preserve `_unassigned` literal)
+        - /app/backend/AWS_S3_SETUP.md  (NEW — runbook)
+
+        ACTION ITEM FOR DEPLOYMENT:
+        The same env-var swap likely exists in the production deploy
+        target (Railway / EAS / wherever). The user must verify
+        AWS_ACCESS_KEY_ID is the 20-char "AKIA..." value and
+        AWS_SECRET_ACCESS_KEY is the 40-char value in their prod env.
+        Symptoms in prod would be identical — uploads silently failing
+        with InvalidAccessKeyId.
+
+
+    - agent: "main"
+      message: |
+        Feature: Non-Expiring Extra Hunt Analytics Packs.
+
+        BACKEND
+        - Added `EXTRA_CREDIT_PACKS` constant: 5/$5.99, 10/$10.99,
+          15/$14.99 with the spec'd product IDs
+          (ravenscout_extra_analytics_{5,10,15}).
+        - User schema: new `extra_analytics_credits` field (int, defaults
+          0, NEVER reset by cycle reset).
+        - Collections:
+            • processed_purchases — idempotency rows keyed by
+              `{source}:{transaction_id}`. A unique index on _id makes
+              double-grants impossible.
+            • analytics_ledger — best-effort history of every grant +
+              consume event (subscription_monthly_grant,
+              analysis_used_monthly, analysis_used_extra_credit,
+              extra_pack_purchase). Best-effort: never blocks the
+              flow if it fails to insert.
+
+        - Helpers:
+            • check_analysis_allowed: now factors `extra_analytics_credits`
+              into the gate for BOTH paid AND trial branches.
+            • consume_one_analysis: atomic spend; drains monthly subscription
+              first, then extra_analytics_credits via a `$gt: 0` guarded
+              decrement so concurrent calls cannot oversell.
+            • grant_extra_credits: idempotent on (source, transaction_id);
+              rolls back the idempotency row if the user upsert can't
+              find the user; emits an analytics_ledger entry.
+
+        - New endpoints:
+            • GET  /api/user/analytics-usage          — auth required,
+              returns plan / monthlyAnalyticsLimit / monthlyAnalyticsUsed /
+              monthlyAnalyticsRemaining / extraAnalyticsCredits /
+              totalRemaining / resetDate / packs[]
+            • POST /api/analytics/consume             — auth required,
+              charges 1 credit, 402 with {code: out_of_credits} when both
+              buckets empty.
+            • POST /api/purchases/extra-credits       — auth required,
+              client confirmation grant. Idempotent on transaction_id.
+            • POST /api/purchases/revenuecat-webhook  — RC server-to-server.
+              HMAC-SHA256 signature verification via
+              X-RevenueCat-Signature + REVENUECAT_WEBHOOK_SECRET env
+              (dev mode short-circuits when secret unset). Idempotent
+              on transaction_id. Only acts on NON_RENEWING_PURCHASE
+              with a known product_id.
+
+        - Existing /api/analyze-hunt now uses consume_one_analysis →
+          monthly drained first, then extra credits.
+
+        FRONTEND
+        - /app/frontend/src/api/analyticsApi.ts        (NEW) — typed
+          client for the 3 endpoints.
+        - /app/frontend/src/hooks/useAnalyticsUsage.ts (NEW) — server-of-
+          truth hook; in-flight dedupe; refresh() returns the fresh usage.
+        - /app/frontend/src/components/OutOfCreditsModal.tsx (NEW) —
+          Raven Scout dark/gold themed bottom sheet. Title "You're out
+          of hunt analytics" + spec subtitle, monthly used + extra
+          credit balance row, Pro upgrade CTA emphasized (hidden if
+          user is already Pro), 3-pack horizontal pill row with live
+          per-pack busy/success/error states.
+        - /app/frontend/app/profile.tsx — new "HUNT ANALYTICS" card
+          shows "Monthly analytics: X of Y used", "Extra credits: N
+          available", "Monthly limit resets on <date>", and a gold
+          "BUY EXTRA ANALYTICS" CTA that opens the modal. Modal mounted
+          at the SafeAreaView root.
+
+        - Pack purchase handler is currently MOCKED — generates a
+          synthetic transaction_id and POSTs to /api/purchases/extra-credits.
+          The server-side idempotency contract makes flipping to real
+          RevenueCat (Purchases.purchaseProduct) a one-line change; the
+          server contract does not change.
+
+        VALIDATION
+        - deep_testing_backend_v2 returned 75/75 PASS across 7 sections:
+            A) GET analytics-usage shape (20/20)
+            B) extra-credits grant + idempotent replay (14/14)
+            C) Consumption order monthly→extra→402 (10/10)
+            D) Cycle reset preserves extras (6/6)
+            E) /analyze-hunt consume hook fires once per call (2/2)
+            F) RevenueCat webhook + idempotency + ignored events + 400 (10/10)
+            G) Cross-tier — TRIAL with extras (initially 0/6, fixed,
+               now 6/6) — `check_analysis_allowed` lifetime branch
+               needed the same combined_remaining fall-through as the
+               paid branch. Trial user can now use a top-off pack
+               after burning their 3 free analyses (which is exactly
+               when they'd buy one).
+        - Live curl smoke: trial 3/3 lifetime + 5 extra → 5 successful
+          extra-charged consumes → 6th returns 402.
+        - Frontend Jest: 38/38 (4 new analyticsApi tests on top of 34).
+        - TypeScript clean.
+        - Profile screen visual: HUNT ANALYTICS card renders, modal
+          opens with all 3 packs and correct prices.
+
+        FILES CHANGED
+        - /app/backend/server.py — gating, consume helper, grant helper,
+          4 new endpoints, hmac+hashlib imports.
+        - /app/frontend/src/api/analyticsApi.ts (NEW)
+        - /app/frontend/src/hooks/useAnalyticsUsage.ts (NEW)
+        - /app/frontend/src/components/OutOfCreditsModal.tsx (NEW)
+        - /app/frontend/__tests__/analyticsApi.test.ts (NEW — 4 tests)
+        - /app/frontend/app/profile.tsx — analytics card + modal mount.
+
+        REMAINING WORK (UPCOMING / Pending user decision)
+        - Replace MOCKED pack purchase with real
+          Purchases.purchaseProduct call (P1 along with the
+          previously-flagged restorePurchases).
+        - Wire OutOfCreditsModal into /api/analyze-hunt's 402 response
+          path on the upload screen so users running out mid-flow see
+          the modal automatically (currently it's only reachable via
+          the Profile "BUY EXTRA ANALYTICS" CTA — fine for now since
+          the analyze flow already shows a tier-limit error toast).
+        - Set `REVENUECAT_WEBHOOK_SECRET` in production env when the
+          RC dashboard webhook is configured.

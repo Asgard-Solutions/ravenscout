@@ -773,8 +773,26 @@ export async function listHistory(
 export async function deleteHuntById(id: string): Promise<void> {
   const { deleteAnalysis } = await import('./analysisStore');
   const { removeMediaForHunt } = await import('./mediaStore');
-  await deleteAnalysis(id);
-  await removeMediaForHunt(id);
+  const { deleteHuntFromCloud } = await import('../api/huntsApi');
+
+  // Run all three cleanups in parallel. The cloud delete is
+  // best-effort: a transient network failure must NOT block us
+  // from clearing the local copy, otherwise the hunt would
+  // re-appear on the next history rehydrate. The server endpoint
+  // owns the S3 cascade — it reads `image_s3_keys` off the hunt
+  // doc and deletes each S3 object before removing the doc, so
+  // one DELETE call covers Mongo + S3 atomically.
+  const cloudPromise = deleteHuntFromCloud(id).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.warn('[deleteHuntById] cloud delete failed (will retry on next sync):', err);
+    return null;
+  });
+
+  await Promise.all([
+    deleteAnalysis(id),
+    removeMediaForHunt(id),
+    cloudPromise,
+  ]);
 }
 
 // ------------------------------ AnalysisContext helpers ------------------------------

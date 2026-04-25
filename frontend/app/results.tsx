@@ -1395,7 +1395,14 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: COLORS.primary, borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    padding: 24, maxHeight: '60%', borderTopWidth: 1, borderTopColor: 'rgba(154, 164, 169, 0.3)',
+    padding: 24,
+    // Bottom-sheet sizing: the ScrollView inside uses `flex: 1`, so we
+    // must give this container a real height (not just maxHeight) or
+    // the list collapses to 0. We pick a comfortable height that fits
+    // 5–6 marker rows on a typical phone, with internal scroll for the
+    // remaining types.
+    minHeight: 380, maxHeight: '70%',
+    borderTopWidth: 1, borderTopColor: 'rgba(154, 164, 169, 0.3)',
   },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   modalTitle: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '800', letterSpacing: 1.5 },
