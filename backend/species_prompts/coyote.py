@@ -7,7 +7,7 @@ movement/caution/tips plus two seasonal phases: breeding (Jan/Feb)
 and pup-rearing food pressure (summer).
 """
 
-from .pack import SeasonalModifier, SpeciesPromptPack
+from .pack import HuntStyleModifier, RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 
 _COYOTE_BREEDING = SeasonalModifier(
@@ -111,5 +111,153 @@ COYOTE_PACK = SpeciesPromptPack(
     seasonal_modifiers={
         "breeding_season": _COYOTE_BREEDING,
         "pup_rearing": _COYOTE_PUP_REARING,
+    },
+    hunt_style_modifiers={
+        "rifle": HuntStyleModifier(
+            style_id="rifle",
+            name="Rifle (Coyote)",
+            behavior_adjustments=(
+                "Effective window is 50-400 yards \u2014 coyotes circling downwind expose broadside at distance more reliably than face-on at close range.",
+                "A committed coyote closes fast \u2014 rifle setup must be pre-rested and zeroed to an expected kill zone, not chased with the rifle.",
+            ),
+            tactical_adjustments=(
+                "Set up with a rested bipod / pack, sight downwind and crosswind of the caller \u2014 the downwind arc is where the shot comes.",
+                "Favor elevated sightline positions with 360-degree visibility \u2014 coyotes pop up from unexpected quadrants.",
+                "Night hunting with thermal / night vision is an increasingly common rifle style \u2014 plan setup around that if hunt-style indicates it.",
+            ),
+            caution_adjustments=(
+                "Do NOT set rifle pointed toward the call \u2014 shots come from the downwind side, not the caller's side.",
+                "Do NOT shoot running coyotes casually \u2014 misses educate territory residents quickly.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize pre-rested rifle, downwind-arc coverage, and elevated sight lines.",
+            ),
+        ),
+        "archery": HuntStyleModifier(
+            style_id="archery",
+            name="Archery (Coyote)",
+            behavior_adjustments=(
+                "Archery effective range is ~20-40 yards \u2014 requires a coyote to commit close, typically to a decoy + call in cover.",
+                "Decoy + motion is nearly mandatory \u2014 a coyote committing to a visual lock inside bow range gets fixated long enough for a shot.",
+            ),
+            tactical_adjustments=(
+                "Combine electronic caller + decoy in an opening with 20-30 yard cleared lanes behind it.",
+                "Hide 15-25 yards off the decoy, slightly crosswind, with a concealed shooting position.",
+                "Set up with a partner running the caller remotely when possible.",
+            ),
+            caution_adjustments=(
+                "Do NOT expect rifle-style commit patterns \u2014 archery requires CLOSER, more visual commitment.",
+                "Do NOT rely on distress alone \u2014 decoy-based visual fixation dramatically improves bow range opportunities.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize decoy + caller setups with pre-cleared close-range lanes.",
+            ),
+        ),
+        "public_land": HuntStyleModifier(
+            style_id="public_land",
+            name="Public Land (Coyote)",
+            behavior_adjustments=(
+                "Pressured coyotes on public land are call-shy \u2014 repeated pressure teaches them electronic calls mean danger.",
+                "Territory turnover is faster \u2014 what worked two weeks ago may be a different pair now.",
+            ),
+            tactical_adjustments=(
+                "Vary call types and sounds aggressively \u2014 fewer repeated sequences, more low-volume challenge howls.",
+                "Target less-accessed pockets \u2014 creek bottoms, timber strips off-road, and sections behind walk-in barriers.",
+                "Shorten sit times (15-20 min) and cover more ground \u2014 pressured coyotes commit within 10 min or not at all.",
+            ),
+            caution_adjustments=(
+                "Do NOT repeat call sequences that educated the local population.",
+                "Do NOT assume long-sit tactics from private land translate \u2014 public-land coyote hunting is a mobile game.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize varied calls, mobile sits, and access-distance thinking.",
+            ),
+        ),
+    },
+    regional_modifiers={
+        "plains": RegionalModifier(
+            region_id="plains",
+            name="Great Plains / Open-Country Coyote",
+            behavior_adjustments=(
+                "Plains coyote country \u2014 wide open, moderate cover in creek bottoms, shelterbelts, and ag-edge brush.",
+                "Coyotes are highly visual \u2014 they commit from long distances once a call is located.",
+            ),
+            tactical_adjustments=(
+                "Set up on elevated prairie breaks / ridge points with 360-degree sightlines \u2014 commits come from a half-mile+.",
+                "Use fox pro / foxpro + decoy with long-range visibility \u2014 scope the horizon during the entire sit.",
+                "Work fields adjacent to shelterbelts and creek bottoms as staging areas for traveling coyotes.",
+            ),
+            caution_adjustments=(
+                "Do NOT set up low \u2014 plains coyotes use the whole horizon; elevation is the setup.",
+                "Do NOT ignore cross-wind geometry \u2014 even in open country, the downwind arc is the kill zone.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize elevated 360-sight setups and decoy + caller combos.",
+            ),
+        ),
+        "southeast_us": RegionalModifier(
+            region_id="southeast_us",
+            name="Southeastern Coyote",
+            behavior_adjustments=(
+                "Southeastern coyote country \u2014 dense hardwood, pine plantation, agricultural mosaic, swamp-edge habitat.",
+                "Closed cover means commits are close (inside 100 yards) and often silent \u2014 the first you see them is at bow/shotgun range.",
+                "Warm climate keeps coyotes on food-pressure cycles year-round.",
+            ),
+            tactical_adjustments=(
+                "Set up on ag-edge cover / field corners / clearcut transitions with 50-100 yard cleared lanes.",
+                "Shotgun (with buckshot) is a regionally common method \u2014 plan for CLOSE-range commits, not long shots.",
+                "Coop scent + decoy are especially effective in mixed-ag country where coyotes hunt easy meals.",
+            ),
+            caution_adjustments=(
+                "Do NOT set up for open-country long shots \u2014 the habitat doesn't support it.",
+                "Do NOT ignore shotgun as a legitimate tool \u2014 habitat dictates weapon choice.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize close-range field-corner / transition-edge setups.",
+            ),
+        ),
+        "mountain_west": RegionalModifier(
+            region_id="mountain_west",
+            name="Mountain West Coyote",
+            behavior_adjustments=(
+                "Mountain West coyotes use elevation and vegetation zones \u2014 sage flats, juniper, aspen benches, and willow bottoms.",
+                "Thermals + wind structure commit patterns strongly \u2014 coyotes use terrain like small predators.",
+            ),
+            tactical_adjustments=(
+                "Set up downwind of classic prey-concentrating terrain (willow bottoms, aspen benches, sage flats with rodent sign).",
+                "Use terrain contours and cover lines \u2014 a glass-first commitment pattern often beats the walking-and-calling Plains method.",
+                "Consider winter snow cover for pattern reading (tracks, scat freshness) as intel before calling sequence.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply Plains open-sight tactics to contour country \u2014 coyotes use terrain to hide during the commit.",
+                "Do NOT neglect thermals; they flip twice daily and change downwind geometry mid-sit.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize thermal-aware terrain-based setups in sage / juniper / aspen country.",
+            ),
+        ),
+        "northeast": RegionalModifier(
+            region_id="northeast",
+            name="Northeastern (Eastern) Coyote",
+            behavior_adjustments=(
+                "Eastern coyote populations carry significant wolf admixture \u2014 larger body size, higher tolerance for cover-dense habitat, more pack-style hunting on deer.",
+                "Habitat is closed: hardwood forest, swamp edges, ag-mosaic farmland, and exurban edges.",
+                "Coyotes here are heavily nocturnal due to rifle / hound pressure, but daylight movement spikes during deer-fawning + hard winter.",
+            ),
+            tactical_adjustments=(
+                "Target deer-yarding areas, swamp edges, and ag-edge cover lines through hard winter \u2014 calorie pressure drives daylight commit.",
+                "Use distress + howl combos with longer sit times (25-40 min) \u2014 eastern coyotes commit slowly through closed cover.",
+                "Night thermal / night-vision rifle setups are increasingly common where legal \u2014 plan setup geometry around night sightlines.",
+                "Deer-down / fawn-distress sounds in May-June produce strong commitments from food-pressed adults.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply Plains daylight-commit expectations \u2014 eastern coyotes are night-shifted and pressure-shy.",
+                "Do NOT discount the size factor \u2014 eastern coyotes can exceed 50 lb and react to caller pressure differently than 30-lb plains dogs.",
+                "Do NOT overlook posted-private mosaic in farmland \u2014 access is the gating issue, not animal density.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize closed-cover, slow-commit setups with distress + howl combos and deer-yard targeting.",
+            ),
+        ),
     },
 )

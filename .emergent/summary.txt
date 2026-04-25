@@ -1,147 +1,230 @@
-<analysis>Here is the handoff summary based on the latest context and actions.
-
-**original_problem_statement**: 
-Finish Hunt-Style Modifiers implementation (archery, rifle, blind, saddle, public land, spot-and-stalk) in the backend LLM prompt pipeline and frontend UI. Fix image-analysis bugs where results were not showing, overlays were misaligned, and the mobile application was crashing or bouncing back to the home screen after processing large map captures. PRODUCT REQUIREMENTS: Provide tactical hunting advice, multi-image context uploads, strictly separate UI/JSON/media payloads, and use reliable coordinate geometry for overlays.
+<analysis>**original_problem_statement**: 
+The user requested to build a redesigned Profile page (based on Iron Stag references), implement a Set Password flow for Google-authenticated users, adjust the Pro tier limits (100 -> 40 analyses, 1-year rollover), implement a Species Expansion architecture (adding Elk, Bear, Moose, Antelope, Coyote with regional/hunt-style prompt packs), implement 4 MapTiler map styles (Outdoor, Hybrid, Plain, Topo) with persistence, and add Jest tests and UI polish (active glow/tooltip) for the new map styles.
 
 **User's preferred language**: English (INSTRUCT next agent to respond in English only)
 
-**what currently exists?**: 
-A full-stack React Native (Expo) mobile app with a FastAPI/MongoDB backend. The app features a v3 split architecture for LLM metadata vs. S3 media persistence. The prompt pipeline handles seasonal, regional, and now hunt-style modifiers. Frontend UI supports drawing scaled, draggable tactical overlays over map screenshots.
+**what currently exists?** 
+A full-stack Expo React Native mobile app with a FastAPI/MongoDB backend deployed on Railway. The app includes a Username/Password & Google OAuth flow, a redesigned Profile page, a species registry supporting 8 animals with complex AI tactical prompt packs, MapTiler map rendering via a WebView-based MapLibre GL JS implementation, and subscription tier tracking (RevenueCat mocked). 
 
 **Last working item**: 
-    - Last item agent was working: Fixing a Mobile Chrome Out-Of-Memory (OOM) crash caused by tall panoramic screenshots. The agent discovered that  was only compressing based on , allowing 2048x4437 images to decode into ~36MB bitmaps and instantly crash the  page on mobile browsers. The agent fixed  to constrain the *longest* dimension but paused before lowering the   in .
-    - Status: IN PROGRESS
-    - Agent Testing Done: N (For the final file edit, but 137 frontend tests passed prior)
-    - Which testing method agent to use? Frontend testing agent / manual testing
+    - Last item agent was working: Setting up Jest in the frontend to write unit tests for the MapTiler  and  logic, and adding UI polish (active state glow, long-press tooltip) to the Map Style Switcher in .
+    - Status: IN PROGRESS / BLOCKED (The agent encountered Babel/Jest import errors:  and Expo preset configuration issues).
+    - Agent Testing Done: N (For the Jest implementation and the Map UI tweaks).
+    - Which testing method agent to use? Both. Frontend testing agent / bash for fixing the Jest setup; Screenshot tool for visually verifying the map switcher UX polish.
     - User Testing Done: N
 
 **All Pending/In progress Issue list**: 
-  Issue 1: Mobile Chrome crashes / unmounts instantly on  for tall panoramic images.
-     - Attempted fixes: Added a lightweight  (AsyncStorage) to survive route transitions. Temporarily disabled the background  call in  to reduce duplicate memory allocations.
-     - Next debug checklist: Update  to reduce   from 2048 to 1600 to ensure strict memory safety. Verify  stays mounted.
-     - Why fix this issue and what will be achieved with the fix? Stops the browser tab from OOM crashing, allowing the user to actually see their analysis results.
-     - Status: IN PROGRESS
-     - Is recurring issue? Y
-     - Should Test frontend/backend/both after fix? Frontend
+  Issue 1: Frontend Jest Configuration failing
+     - Attempted fixes: Created , , and . Tried testing React hooks directly, then stripped it down to test pure persistence logic. Hit continuous  related to Babel transformations and Expo workspace/module resolution constraints.
+     - Next debug checklist: Review  and . Ensure  is correctly configured in the preset, and  properly transpiles ES modules (, 
+  Usage: expo [command] [options]
+
+  Options:
+  
+    -V, --version                     output the version number
+    --non-interactive                 Fail, if an interactive prompt would be required to continue.
+    -h, --help                        output usage information
+  
+  Commands:
+
+    init [name]                       Create a new Expo project
+    start [path]                      Start a local dev server for the app
+    start:web [path]                  Start a Webpack dev server for the web app
+    export [path]                     Export the static files of the app for hosting it on a web server
+    install [packages...]             Install a module or other package to a project
+    run:android [path]                Run the Android app binary locally
+    run:ios [path]                    Run the iOS app binary locally
+    send [path]                       Share the project's URL to an email address
+
+    login                             Login to an Expo account
+    logout                            Logout of an Expo account
+    register                          Sign up for a new Expo account
+    whoami                            Return the currently authenticated account
+
+    client:install:ios                Install Expo Go for iOS on the simulator
+    client:install:android            Install Expo Go for Android on a connected device or emulator
+
+    config [path]                     Show the project config
+    doctor [path]                     Diagnose issues with the project
+    upgrade [sdk-version]             Upgrade the project packages and config for the given SDK version
+
+    customize:web [path]              Eject the default web files for customization
+    prebuild [path]                   Create native iOS and Android project files before building natively.
+                                      Learn more: https://docs.expo.dev/workflow/customizing/
+
+    build:web [path]                  Build the web app for production
+
+    credentials:manager [path]        Superseded by eas credentials in eas-cli
+
+    url [path]                        Log a URL for opening the project in Expo Go
+    url:ipa [path]                    Log the download URL for the standalone iOS binary
+    url:apk [path]                    Log the download URL for the standalone Android binary
+
+    webhooks [path]                   List all webhooks for a project
+    webhooks:add [path]               Add a webhook to a project
+    webhooks:remove [path]            Delete a webhook
+    webhooks:update [path]            Update an existing webhook
+
+    build:ios [path]                  Superseded by eas build in eas-cli
+    build:android [path]              Superseded by eas build in eas-cli
+    build:status [path]               Superseded by eas build:list in eas-cli
+    eject [path]                      Superseded by expo prebuild
+    fetch:ios:certs [path]            Superseded by eas credentials in eas-cli
+    fetch:android:keystore [path]     Superseded by eas credentials in eas-cli
+    fetch:android:hashes [path]       Superseded by eas credentials in eas-cli
+    fetch:android:upload-cert [path]  Superseded by eas credentials in eas-cli
+    publish [path]                    Superseded by eas update in eas-cli
+    publish:set [path]                Superseded by eas update:republish in eas-cli
+    publish:rollback [path]           Superseded by eas update:republish in eas-cli
+    publish:history [path]            Superseded by eas update:list in eas-cli
+    publish:details [path]            Superseded by eas update:view in eas-cli
+    push:android:upload [path]        Superseded by eas credentials in eas-cli
+    push:android:show [path]          Superseded by eas credentials in eas-cli
+    push:android:clear [path]         Superseded by eas credentials in eas-cli
+    upload:android [path]             Superseded by eas submit in eas-cli
+    upload:ios [path]                 Superseded by eas submit in eas-cli
+    client:ios [path]                 Superseded by Expo Dev Clients
+
+[14:12:21]   Run a command with --help for more info 💡
+[14:12:21]     $ expo start --help
+[14:12:21], etc.).
+     - Why fix this issue and what will be achieved with the fix? Fulfills the user's request to protect the map style configuration with automated tests to prevent regressions.
+     - Status: IN PROGRESS / BLOCKED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? Frontend (Jest execution via bash)
 
 **In progress Task List**: 
-  Task 1: Restore full  persistence (S3 + MongoDB).
-     - Where to resume: In  (or inside ), re-introduce the  call. It was temporarily removed to isolate the OOM crash.
-     - What will be achieved with this? Right now, analyses are ONLY saved to local . Re-adding this ensures images upload to AWS S3 and the hunt metadata persists to MongoDB.
-     - Status: BLOCKED (Wait until the OOM crash is confirmed fixed by the user before re-adding).
-     - Should Test frontend/backend/both after fix? Both
-     - Blocked on something: Issue 1 (Memory stability).
+  Task 1: Map Switcher UX Polish
+     - Where to resume: Review the recent changes made to . The agent attempted to add an active state glow/border and long-press tooltips to the map style selector chips, but didn't visually verify it.
+     - What will be achieved with this? Makes switching map styles feel intentional and polished for hunters in the field.
+     - Status: TESTING PENDING
+     - Should Test frontend/backend/both after fix? Frontend (Screenshot tool to confirm the UI looks correct).
+     - Blocked on something: Blocked currently by the Jest task failure context.
 
 **Upcoming and Future Tasks**
-    - P1: EAS production build for real RevenueCat purchases (Expo Go does not support live RevenueCat).
+    - P1: Wire real RevenueCat  in the Profile page (Currently mocked / relies on backend tier fetch).
+    - P2: EAS production build for real RevenueCat purchases.
     - P2: GIS integration for georeferenced overlays (mapping AI outputs to strict Lat/Lon coordinates so MapLibre can pan to them).
     - P2: Trail cam integration.
     - P3: Predictive movement modeling.
     - P3: Wind shift notifications for stands (premium feature).
     - P3: Background orphan asset detection/cleanup for local device storage.
+    - P3: Add waterfowl, dove, and quail prompt packs when the user is ready (App architecture is already prepared for this).
 
 **Completed work in this session**
-- Hunt-style Modifiers implemented across backend prompt packs (, , ) and frontend UI picker () (DONE)
-- Fixed major overlay misalignment by creating , changing  to , and mapping LLM coordinates precisely to the fitted image rect (DONE)
-- Refactored mobile hydration pipeline via  to survive SSR/runtime refreshes on mobile Chrome (DONE)
-- Added  to compress images on upload/capture (DONE)
-- Changed default MapLibre style to  (DONE)
-- Added fallback  support for  in FastAPI  (DONE)
-- Improved backend error handling/messaging when LLM budget limits are exceeded (DONE)
+- Built the Raven Scout Profile page using Iron Stag UX references but properly themed (DONE)
+- Implemented  for Google-only users to attach an email/password without leaving the app (DONE)
+- Resized Login Logo to 375x375 and updated biometric text (DONE)
+- Updated Pro tier limits: 100 -> 40 analyses/month, added 12-month accumulate-mode rollover (DONE)
+- Built Species Expansion Architecture () and added Elk, Bear, Moose, Antelope, Coyote (DONE)
+- Deepened prompt packs by adding  and  regional modifiers, plus new hunt styles (blind, saddle, etc.) (DONE)
+- Configured 4 MapTiler styles (Outdoor, Satellite Hybrid, Satellite Plain, Topo) and wired persistence (DONE)
 
 **Earlier issues found/mentioned but not fixed**
-   - None explicitly, but  is temporarily stripped from the critical path and must be re-added.
+   - None.
 
 **Known issue recurrence from previous fork**
-  - Issue recurrence in previous fork: 0
+  - Issue recurrence in previous fork: None newly recurring.
   - Recurrence count: 0
-  - Status: RESOLVED
+  - Status: N/A
 
 **Code Architecture**
 app/
 ├── backend/
-│   ├── server.py (FastAPI main entrypoint)
-│   ├── prompt_builder.py
-│   ├── species_prompts/ (Hunt styles added here)
-│   └── tests/ (312 passing tests)
-└── frontend/
-    ├── app/ (results.tsx, setup.tsx)
-    └── src/
-        ├── media/ (imageProcessor.ts, imageProfiles.ts, provisionalHuntStore.ts, huntHydration.ts)
-        ├── components/ (ImageOverlayCanvas.tsx)
-        ├── utils/ (imageFit.ts, analysisContext.ts)
-        └── __tests__/ (137 passing tests)
+│   ├── server.py 
+│   ├── password_auth.py 
+│   ├── species_registry.py (NEW - central config for species)
+│   ├── species_prompts/
+│   │   ├── regions.py (Added PNW and Northeast)
+│   │   └── elk.py, bear.py, moose.py, antelope.py, coyote.py (NEW)
+│   └── tests/
+├── frontend/
+│   ├── app/ (profile.tsx, setup.tsx)
+│   ├── src/
+│   │   ├── constants/ (mapStyles.ts, species.tsx)
+│   │   ├── hooks/ (useMapStylePreference.ts)
+│   │   ├── map/ (TacticalMapView.tsx, MapProvider.ts)
+│   │   └── media/ (storageStats.ts)
+│   ├── jest.config.js / jest.setup.js (NEW - Failing)
+│   └── __tests__/mapStyles.test.ts (NEW - Failing)
+└── .env.example (NEW)
 
 **Key Technical Concepts**
-React Native (Expo Router), FastAPI, MongoDB, AWS S3, MapLibre GL JS. Strict use of base64 image compression () prior to LLM analysis to protect mobile browser heap memory. 
+React Native (Expo Router), FastAPI, MongoDB, MapLibre GL JS (running inside a WebView in ), MapTiler, OpenAI, Jest. 
 
 **key DB schema**
-  - MongoDB (): User configurations, hunt metadata.
-  - AsyncStorage (): Temporary bridge to pass LLM results safely across mobile browser route unmounts/refreshes.
+  - : Added  boolean. Tracking tier limits (Pro is now 40 limit,  handles 12-month retention).
+  - : No structural changes, but AI analysis outputs now heavily influenced by the new species definitions.
 
 **changes in tech stack**
-  - Heavy reliance on  to enforce strict resolution limits () before putting images into React state.
+  - Added  and  to the frontend. (Currently encountering configuration errors).
 
 **All files of reference**
-  - : Contains the  logic that needs fixing (just updated to use ).
-  - : Contains . Next agent needs to drop  to 1600.
-  - : Location where  is called.  needs to be added back here eventually.
-  - : New file managing overlay math to prevent drift.
-  - : New local storage bridge.
+  - , ,  (Active failing files that need fixing)
+  -  (Contains MapTiler implementation and UI polish to verify)
+  - ,  (Reference for the new species architecture)
 
 **Areas that need refactoring**: 
-  -  pipeline decoupling: Currently it's dangerous to do heavy base64 string manipulation during a route transition on low-memory devices.
+  - Frontend Jest testing environment: The Babel configuration or module resolution is failing when trying to run Jest tests within the Expo React Native environment.
 
 **key api endpoints**
-  - 
-  - 
+  -  (New)
+  -  (Updated to fetch from )
 
 **Critical Info for New Agent**
-  - Do NOT re-introduce the  call into  until the user verifies that the  page stops crashing. Memory OOMs on mobile web are the primary blocker right now.
-  - The backend successfully accepts user's custom  and  via the  without modifying protected files.
-  - S3 logic works perfectly, but images aren't currently being uploaded because  is detached. 
+  - **CRITICAL MAP DECISION**: The user explicitly requested to keep the current MapLibre GL JS WebView implementation (). **DO NOT** attempt to migrate the app to the native  library.
+  - The MS Graph email implementation still needs real credentials (, etc.) added to the  to send real OTPs.
+  - RevenueCat is currently mocked in the app. Restore Purchases button exists but doesn't hit real native SDKs yet.
 
 **documents and test reports created in this job**
-  -  (Updated with backend/frontend testing assertions)
+  -  (Documentation on how to add future species like waterfowl/dove).
+  -  (Updated with species expansion and password auth test blocks).
 
 **Last 10 User Messages and any pending HUMAN messages** 
- 1. (User) app not loading on expo now
- 2. (Agent) Used troubleshoot agent, confirmed it was an ngrok race condition, fixed itself.
- 3. (User) Still not working and still sending you back to the analyze hunt page. also, when you click on map can we default to the satellite view.
- 4. (Agent) Discovered user's Emergent LLM key exceeded the  budget. Fixed error messages and set map to satellite.
- 5. (User) I have updated .env to use my LLM key so now we should be good.
- 6. (User) still getting results not found
- 7. (Agent) Realized  import was missing. Fixed it.
- 8. (User) I saw the hunt analysis page load a second then it went back to new hunt page. still no images in S3 and I dont see anyting the mongo
- 9. (Agent) Realized background  was OOM crashing the browser tab by duplicating 1.35MB payloads. Removed  temporarily.
- 10. (User) It loaded for a split second then went back to the new hunt screen. (Agent realized panoramic screenshots weren't being constrained by height, causing 36MB bitmap memory spikes).
+ 1. (User) Asked how Google users can set up an email/password later.
+ 2. (Agent) Suggested option C: In-app  endpoint. Built it.
+ 3. (User) Provided new logo, asked to resize to 375x375 and change biometric text.
+ 4. (Agent) Tweaked UI and swapped logo.
+ 5. (User) Asked about missing satellite views in APK.
+ 6. (Agent) Clarified --platform is required when building in non-interactive mode was needed to bake the key into the APK; no code changes needed.
+ 7. (User) Requested Pro tier limits change to 40 analyses and 1-year unused rollover.
+ 8. (Agent) Updated tier configuration in backend and frontend copy.
+ 9. (User) Requested Species Expansion (Elk, Bear, Moose, Antelope, Coyote) + regional/hunt-style prompts.
+ 10. (Agent) Built species architecture, deepened prompt packs, added PNW/Northeast regions.
+ 11. (User) Requested MapTiler map styles integration + persistent selection + UI polish + Jest tests.
+ 12. (Agent) Built MapTiler styles, but got stuck failing to run the newly added Jest tests. *(Pending: Fix Jest and verify map UI polish).*
 
 **Project Health Check:**
-  - Broken: Mobile Chrome Expo Go preview crashes via OOM when displaying tall, high-res base64 screenshots.
-  - Mocked: RevenueCat.
+  - Broken: Frontend Jest testing environment.
+  - Mocked: RevenueCat ().
 
 **3rd Party Integrations**
-  - OpenAI GPT-5.2 Vision — uses User LLM Key (Switched from Emergent Key due to budget cap)
-  - WeatherAPI.com — requires User API Key
-  - MapTiler — requires User API Key
-  - RevenueCat — requires User API Key
-  - AWS S3 — uses User AWS Credentials
+  - OpenAI GPT-5.2 Vision — uses User LLM Key directly
+  - MapTiler — requires User API Key ()
+  - Microsoft Graph — requires User Credentials (OTP Emails)
 
 **Testing status**
-  - Testing agent used after significant changes: YES (deep_testing_backend_v2 run)
-  - Troubleshoot agent used after agent stuck in loop: YES (Used for Ngrok tunnel diagnostic)
-  - Test files created: , , 
-  - Known regressions: S3 upload and Mongo persistence disabled temporarily.
+  - Testing agent used after significant changes: YES (backend testing agent used multiple times for auth and species prompts)
+  - Troubleshoot agent used after agent stuck in loop: NO
+  - Test files created: , 
+  - Known regressions: Jest test suite is broken locally.
 
 **Credentials to test flow:**
-  - See 
+  - Check 
 
 **What agent forgot to execute**
-The agent modified  to properly identify the longest edge of an image (fixing the panoramic bug), but it forgot to actually reduce the   threshold down to  inside  before the session ended.
+  - The agent ran out of context while fighting Jest configuration errors. The agent successfully modified  to include an active glow and tooltip for the Map Styles, but failed to actually look at it via the screenshot tool to confirm if the CSS/Styles are rendering correctly.
 
 **Debugging checklist for current issue**
-    Issue: Memory Crash (OOM) on  for tall screenshots
+    Issue: Jest tests failing ( or module import errors outside test scope).
+
     Frontend files to check: 
-    -  (Lower  maxDim to 1600)
-    -  (Ensure  remains disabled until the crash stops happening)
-    -  (Ensure the  component is safely garbage collecting old bitmaps)</analysis>
+    - 
+    - 
+    - 
+    - 
+
+    Checklist:
+    1. Ensure  is the preset being used.
+    2. Check  in  to ensure React Native/Expo modules are properly transpiled by Babel.
+    3. Validate if the  file is mistakenly importing UI components that require native bridging, and mock them if necessary.</analysis>

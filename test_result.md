@@ -583,7 +583,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-auth-hub.preview.emergentagent.com).
+          https://raven-scout-v2.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -741,11 +741,303 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+new_regions_pnw_northeast:
+  - task: "New canonical regions (pacific_northwest + northeast) + 5 new modifier blocks + 4 new hunt-style modifiers"
+    implemented: true
+    working: true
+    file: "/app/backend/species_prompts/regions.py, /app/backend/species_prompts/{elk,bear,moose,coyote,antelope}.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          New canonical regions (pacific_northwest, northeast) and 4 new
+          regional + 4 new hunt-style modifier blocks verified end-to-end
+          against EXPO_PUBLIC_BACKEND_URL. Harness:
+          /app/new_regions_test.py — 44/44 substantive assertions PASS
+          (3 reported "fails" all triaged as spurious; details below).
+
+          === SCENARIO 1 — GPS RESOLUTION ===
+          ✅ Olympic Peninsula WA (47.5,-123.0) -> pacific_northwest
+          ✅ Portland OR          (45.5,-122.7) -> pacific_northwest
+          ✅ Eugene OR            (44.0,-123.1) -> pacific_northwest
+          ✅ Bangor ME            (44.8, -68.8) -> northeast
+          ✅ Adirondacks NY       (43.9, -74.2) -> northeast
+          ✅ Burlington VT        (44.5, -73.2) -> northeast
+          Control regression points:
+          ✅ Bozeman MT           (45.7,-111.0) -> mountain_west
+          ✅ Cleveland OH         (41.5, -81.7) -> midwest
+          ✅ Atlanta GA           (33.7, -84.4) -> southeast_us
+          ⚠️ Cheyenne WY          (41.1,-104.8) -> mountain_west
+             (TEST-BRIEF MISMATCH, not a regression):
+             plains box is `-104.0 <= lon < -98.0`; mountain_west is
+             `-125.0 <= lon < -104.0`. Cheyenne's lon=-104.8 is < -104,
+             so it falls into mountain_west by the existing
+             pre-pacific_northwest-patch boundary. No box edits were
+             made to plains/mountain_west in this round. The new
+             pacific_northwest box (lat 41-49.5, lon -125 to -116) does
+             not touch -104.8 at all. So this is the SAME classification
+             that has been live for both prior test rounds; the brief's
+             expected="plains" appears to be a typo. ZERO REGRESSION
+             from this delta.
+
+          === SCENARIO 2 — ALIAS NORMALIZATION ===
+          ✅ "Pacific Northwest"  -> pacific_northwest
+          ✅ "PNW"                -> pacific_northwest
+          ✅ "Olympic Peninsula"  -> pacific_northwest
+          ✅ "New England"        -> northeast
+          ✅ "Maine"              -> northeast
+          ✅ "Adirondacks"        -> northeast
+          ✅ "northeast"          -> northeast
+          ✅ "north east"         -> northeast
+
+          === SCENARIO 3 — REGIONAL MODIFIER RENDERING ===
+          assemble_system_prompt(species, conditions={"hunt_date":
+          "2026-09-15"}, image_count=1, tier="pro", gps_coords=...).
+          ✅ elk + (47.5,-123.0)  contains "Pacific Northwest" + "Roosevelt"
+          ✅ bear + (47.5,-123.0) contains "Pacific Northwest" + ("salmon"
+             OR "clearcut")
+          ✅ moose + (44.8,-68.8) contains "Northeast" + ("Maine" OR
+             "beaver flowage" OR "logging-road")
+          ✅ coyote + (43.9,-74.2) contains "Eastern" or "Northeast"
+             + ("wolf admixture" OR "deer-yard")
+
+          === SCENARIO 4 — HUNT-STYLE MODIFIER RENDERING ===
+          ✅ bear + hunt_style="blind" -> "Bait Blind" / "Ground Blind /
+             Bait Blind" + "trail-cam" / "bait acclimation"
+          ✅ moose + hunt_style="blind" -> "Canoe" / "Ground / Canoe Blind"
+             + "water-edge" / "shore"
+          ✅ moose + hunt_style="public_land" -> "Public Land" + "pack-out"
+             / "boat ramps"
+          ✅ antelope + hunt_style="public_land" -> "Public Land" +
+             ("BLM" / "checkerboard" / "section line")
+
+          === SCENARIO 5 — COMBINED region + style ===
+          ✅ elk + rifle + (47.5,-123.0) -> Pacific Northwest /
+             Roosevelt AND "Rifle (Elk)"
+          ✅ moose + public_land + (44.8,-68.8) -> Northeast / Maine
+             AND "Public Land (Moose)"
+          ✅ bear + blind + (47.5,-123.0) -> Pacific Northwest / salmon
+             AND "Bait Blind"
+
+          === SCENARIO 6 — PYTEST FULL SUITE (specified files) ===
+          cd /app/backend && python -m pytest \
+            tests/test_species_prompt_packs.py \
+            tests/test_species_expansion_modifiers.py \
+            tests/test_seasonal_modifiers.py \
+            tests/test_regional_modifiers.py \
+            tests/test_hunt_style_modifiers.py -q
+          → 352 passed in 0.22s (zero failures, zero new regressions)
+          test_overlay_rendering.py was excluded from the run as
+          instructed (its 2 pre-existing failures are unrelated).
+
+          === SCENARIO 7 — LIVE /api/analyze-hunt SMOKE ===
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro)
+            body: animal=bear, hunt_style=blind,
+                  latitude=47.5, longitude=-123.0,
+                  hunt_date=2026-09-20, 256x256 PNG
+          → HTTP 200 (45.9s). NOT 500.
+          ✅ region_resolution = {
+               resolvedRegionId: "pacific_northwest",
+               resolvedRegionLabel: "Pacific Northwest",
+               regionResolutionSource: "gps",
+               latitude: 47.5, longitude: -123.0
+             }
+          ✅ hunt_style_resolution = {
+               styleId: "blind",
+               styleLabel: "Ground Blind",
+               source: "user_selected",
+               rawInput: "blind"
+             }
+          ✅ Backend logger emitted (in /var/log/supervisor/backend.err.log,
+             since the project routes Python logger output to stderr):
+               "server - INFO - Region resolved: id=pacific_northwest
+                source=gps label='Pacific Northwest'"
+               "server - INFO - Hunt style resolved: id=blind
+                source=user_selected"
+             (Harness scraped backend.out.log instead of backend.err.log,
+             so it printed two false-negative log-grep lines — the actual
+             log entries are present and correct, verified by direct
+             grep on backend.err.log.)
+
+          ZERO 500s. ZERO new regressions in any of the 5 pytest suites.
+          Block ordering still SPECIES -> REGIONAL -> SEASONAL ->
+          HUNT STYLE -> HUNT CONDITIONS, no cross-pack contamination
+          from the existing 115-test invariant suite.
+
+          No source files modified by testing. Main agent: please
+          summarise and finish — pacific_northwest + northeast canonical
+          regions and the four new (elk-PNW, bear-PNW, moose-NE,
+          coyote-NE) regional + four new (bear-blind, moose-blind,
+          moose-public_land, antelope-public_land) hunt-style modifiers
+          are production-ready.
+
+species_expansion_v1_modifiers:
+  - task: "Deepened prompt packs — regional + hunt-style modifiers for elk/bear/moose/antelope/coyote"
+    implemented: true
+    working: true
+    file: "/app/backend/species_prompts/{elk,bear,moose,antelope,coyote}.py, /app/backend/prompt_builder.py, /app/backend/tests/test_species_expansion_modifiers.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Deepened prompt packs (regional + hunt-style modifiers) verified
+          end-to-end via direct import of
+          `prompt_builder.assemble_system_prompt` and a live /api/analyze-hunt
+          smoke call.
+
+          Wrote /app/backend/tests/test_species_expansion_modifiers.py (41
+          tests). Combined suite:
+              cd /app/backend && python -m pytest \
+                tests/test_species_prompt_packs.py \
+                tests/test_species_expansion_modifiers.py -q
+              -> 115 passed in 0.06s  (74 prior + 41 new; zero regressions)
+
+          SCENARIO 1 — HUNT-STYLE MODIFIER RENDERING  (17 (species,style)
+          pairs)
+          ✅ elk      × {archery, rifle, spot_and_stalk, public_land}
+          ✅ bear     × {archery, rifle, spot_and_stalk}
+          ✅ moose    × {archery, rifle, spot_and_stalk}
+          ✅ antelope × {archery, rifle, blind, spot_and_stalk}
+          ✅ coyote   × {archery, rifle, public_land}
+          For each, the assembled prompt contains:
+            • The modifier's `name` (e.g. "Rifle (Elk)",
+              "Archery (Black Bear)", "Ground Blind / Pit Blind (Pronghorn)",
+              etc. — exact match to the dataclass `name` field).
+            • The HUNT STYLE CONTEXT header with style_id=<canonical>.
+            • A distinguishing phrase from tactical_adjustments (e.g.
+              elk+archery "caller 30-60 yards behind the shooter",
+              antelope+blind "stock tanks, windmill outflows",
+              coyote+rifle "rested bipod / pack, sight downwind", etc.).
+            • The "unspecified" fallback notice is NOT emitted when a
+              real style resolves.
+          ✅ Cross-contamination guard: for every one of the 5 species, the
+             assembled prompt does NOT contain the whitetail-specific
+             phrase "hinge-cut" (from whitetail.tactical_guidance). Confirms
+             no bleed-through between packs.
+
+          SCENARIO 2 — REGIONAL MODIFIER RENDERING  (12 (species,region)
+          pairs)
+          ✅ elk      × {mountain_west, plains}
+          ✅ bear     × {mountain_west, southeast_us, midwest}
+          ✅ moose    × {mountain_west, midwest}
+          ✅ antelope × {plains, mountain_west}
+          ✅ coyote   × {plains, southeast_us, mountain_west}
+          For each, the assembled prompt contains:
+            • The regional modifier's `name` (e.g. elk+mountain_west
+              "Mountain West (Rocky Mountain Elk)",
+              coyote+southeast_us "Southeastern Coyote", etc.).
+            • The REGIONAL CONTEXT header with region_id=<canonical>.
+            • A distinguishing regional phrase (elk+mountain_west "aspen";
+              antelope+plains "Wyoming"; coyote+southeast_us
+              "pine plantation"; bear+southeast_us "pocosin";
+              moose+mountain_west "Shiras"; coyote+mountain_west "juniper";
+              elk+plains "coulee"; bear+mountain_west "avalanche chute";
+              bear+midwest "Upper Midwest"; moose+midwest "Minnesota";
+              antelope+mountain_west "sagebrush"; coyote+plains
+              "shelterbelt").
+            • "REGIONAL CONTEXT: generic" NOT emitted when a real region
+              resolves.
+
+          SCENARIO 3 — COMBINED STYLE + REGION  (3 cases)
+          ✅ elk + archery + mountain_west
+          ✅ antelope + blind + plains
+          ✅ coyote + rifle + southeast_us
+          For each, BOTH names and BOTH distinguishing phrases appear,
+          neither fallback notice is emitted, AND the builder's stable
+          block order is verified by string-index ordering:
+            SPECIES -> REGIONAL CONTEXT -> SEASONAL CONTEXT ->
+            HUNT STYLE CONTEXT -> HUNT CONDITIONS.
+
+          SCENARIO 4 — FALLBACK — UNKNOWN STYLE OR REGION
+          ✅ elk + hunt_style="saddle" (elk registers archery/rifle/
+             spot_and_stalk/public_land, NOT saddle)  -> prompt renders
+             with "HUNT STYLE CONTEXT: unspecified" (graceful neutral
+             notice); no exception; no cross-contamination from the
+             whitetail saddle pack.
+          ✅ elk + region_id="south_texas" (elk registers mountain_west/
+             plains only) -> prompt renders with "REGIONAL CONTEXT:
+             generic (region_id=south_texas, source=manual_override)";
+             no whitetail "South Texas (Brush Country)" content leaks.
+          ✅ coyote + hunt_style="saddle" + region_id="east_texas" (both
+             unknown to coyote pack) -> prompt renders with BOTH
+             fallback notices, no exception, no cross-pack leakage.
+          ✅ Belt-and-braces: assemble_system_prompt called with
+             hunt_style="banana_boat_method" + region="narnia" for each
+             of the 5 expanded species — no exception; all prompts
+             render > 500 chars.
+
+          SCENARIO 5 — BACKWARD COMPAT (whitetail untouched)
+          Already covered by the existing
+          tests/test_species_prompt_packs.py suite (74 passing, re-run
+          here), and reconfirmed via the combined pytest run above.
+          Whitetail's "SPECIES: Whitetail Deer" block + its
+          south_texas regional modifier + its archery hunt-style
+          modifier all still render correctly. No regressions detected
+          in the 74 prior tests.
+
+          SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
+          Backend base URL: EXPO_PUBLIC_BACKEND_URL =
+          https://raven-scout-v2.preview.emergentagent.com
+          POST /api/analyze-hunt
+            Headers: Authorization: Bearer test_session_rs_001
+                     Content-Type: application/json
+                     User-Agent: RavenScoutTest/1.0
+            Body   : {
+              "conditions": {
+                "animal": "coyote",
+                "hunt_date": "2026-02-15",
+                "time_window": "morning",
+                "wind_direction": "NW",
+                "temperature": "32F",
+                "property_type": "public",
+                "region": "Texas",
+                "hunt_style": "rifle",
+                "latitude": 31.2956,
+                "longitude": -95.9778
+              },
+              "map_image_base64": "<256x256 PNG>"
+            }
+          -> HTTP 200, success=true, 5 overlays,
+             region_resolution = {"resolvedRegionId":"east_texas",
+             "resolvedRegionLabel":"East Texas",
+             "regionResolutionSource":"gps","latitude":31.2956,
+             "longitude":-95.9778}
+             hunt_style_resolution = {"styleId":"rifle",
+             "styleLabel":"Rifle","source":"user_selected",
+             "rawInput":"rifle"}
+          ✅ NO 500. Pack rendering path never crashes with the expanded
+             modifier packs in-line.
+
+          FILES ADDED
+          ✅ /app/backend/tests/test_species_expansion_modifiers.py
+             (4 test classes, 41 parametrized assertions). Run:
+               cd /app/backend && python -m pytest \
+                 tests/test_species_expansion_modifiers.py -q
+               -> 41 passed in 0.04s
+             Combined with existing suite:
+               cd /app/backend && python -m pytest \
+                 tests/test_species_prompt_packs.py \
+                 tests/test_species_expansion_modifiers.py -q
+               -> 115 passed in 0.06s
+
+          No source files modified by testing. Deepened prompt packs are
+          production-ready; the five expanded species each register
+          well-formed hunt_style_modifiers and regional_modifiers that
+          render end-to-end through the assembled LLM system prompt,
+          with graceful fallbacks on unknown ids and zero cross-pack
+          contamination.
 
 species_expansion_v1:
   - task: "Species registry expansion (5 new species) + tier gating + prompt-pack resolution"
@@ -761,7 +1053,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-auth-hub.preview.emergentagent.com). Harness:
+          https://raven-scout-v2.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -1161,7 +1453,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://tactical-auth-hub.preview.emergentagent.com/api/auth/verify-otp
+            POST https://raven-scout-v2.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -1443,7 +1735,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://tactical-auth-hub.preview.emergentagent.com/api). Test
+      URL (https://raven-scout-v2.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -1782,7 +2074,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://tactical-auth-hub.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://raven-scout-v2.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -2036,7 +2328,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-auth-hub.preview.emergentagent.com).
+          https://raven-scout-v2.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
@@ -2177,6 +2469,72 @@ agent_communication:
            remaining, rollover=7.
         3. Pro accumulate-mode rollover: rollover 30 + unused 35 = 65,
            remaining = 40 + 65 = 105.
+
+
+  - agent: "testing"
+    message: |
+      New canonical regions (pacific_northwest + northeast) and their
+      4 new regional + 4 new hunt-style modifier blocks verified
+      end-to-end against EXPO_PUBLIC_BACKEND_URL. Harness:
+      /app/new_regions_test.py — 44/44 substantive assertions PASS.
+
+      ✅ Scenario 1 — GPS resolution: all 6 NEW points
+         (Olympic Peninsula / Portland / Eugene -> pacific_northwest;
+         Bangor ME / Adirondacks NY / Burlington VT -> northeast).
+         Control regression points Bozeman/Cleveland/Atlanta still
+         resolve to mountain_west / midwest / southeast_us. Cheyenne WY
+         (lon=-104.8) still resolves to mountain_west — that is the
+         pre-existing classification (mountain_west box is lon<-104,
+         plains is lon>=-104), NOT a regression caused by the new
+         pacific_northwest/northeast boxes. Test brief's expected
+         "plains" appears to be a typo.
+      ✅ Scenario 2 — alias normalization: PNW / Pacific Northwest /
+         Olympic Peninsula -> pacific_northwest; New England / Maine /
+         Adirondacks / northeast / "north east" -> northeast.
+      ✅ Scenario 3 — regional modifier rendering: elk+PNW renders
+         "Pacific Northwest" + "Roosevelt"; bear+PNW renders
+         "Pacific Northwest" + salmon/clearcut; moose+NE renders
+         "Northeast" + Maine/beaver flowage/logging-road; coyote+NE
+         renders "Eastern"/"Northeast" + wolf admixture/deer-yard.
+      ✅ Scenario 4 — hunt-style modifier rendering: bear+blind ->
+         "Bait Blind" / "Ground Blind / Bait Blind" + trail-cam /
+         bait acclimation; moose+blind -> "Canoe" / "Ground / Canoe
+         Blind" + water-edge/shore; moose+public_land -> "Public Land"
+         + pack-out/boat ramps; antelope+public_land -> "Public Land"
+         + BLM/checkerboard/section-line.
+      ✅ Scenario 5 — combined region+style: elk+rifle+PNW renders
+         BOTH "Pacific Northwest"/"Roosevelt" AND "Rifle (Elk)";
+         moose+public_land+NE renders BOTH "Northeast"/"Maine" AND
+         "Public Land (Moose)"; bear+blind+PNW renders BOTH
+         "Pacific Northwest"/"salmon" AND "Bait Blind".
+      ✅ Scenario 6 — full pytest suite (5 specified files):
+           tests/test_species_prompt_packs.py
+           tests/test_species_expansion_modifiers.py
+           tests/test_seasonal_modifiers.py
+           tests/test_regional_modifiers.py
+           tests/test_hunt_style_modifiers.py
+         -> 352 passed in 0.22s. Zero failures, zero new regressions.
+         test_overlay_rendering.py excluded as instructed.
+      ✅ Scenario 7 — live /api/analyze-hunt: POST with Bearer
+         test_session_rs_001, animal=bear, hunt_style=blind,
+         GPS (47.5,-123.0), 256x256 PNG, hunt_date=2026-09-20
+         -> HTTP 200 (NOT 500). region_resolution.resolvedRegionId =
+         "pacific_northwest" / source=gps; hunt_style_resolution
+         .styleId = "blind" / source=user_selected.
+         Server log (backend.err.log) confirmed:
+           "Region resolved: id=pacific_northwest source=gps
+            label='Pacific Northwest'"
+           "Hunt style resolved: id=blind source=user_selected"
+
+      test_result.md updated: new task block
+      `new_regions_pnw_northeast` set to working:true,
+      needs_retesting:false; current_focus cleared. No source files
+      modified by testing agent. Main agent: please summarise and
+      finish — pacific_northwest + northeast canonical regions and
+      the four new (elk-PNW, bear-PNW, moose-NE, coyote-NE) regional
+      + four new (bear-blind, moose-blind, moose-public_land,
+      antelope-public_land) hunt-style modifiers are production-ready.
+
         4. Pro rollover cap honored: 475 + 40 clamps to 480 (40*12),
            remaining = 520.
         5. Pro limit-reached returns allowed=false, remaining=0,
@@ -2252,3 +2610,236 @@ agent_communication:
       inventory; the species registry / prompt packs / /api/species /
       /api/analyze-hunt gating are production-ready.
 
+
+  - agent: "testing"
+    message: |
+      Deepened prompt packs (regional + hunt-style modifiers) verified
+      end-to-end for the 5 newly-expanded species
+      (elk/bear/moose/antelope/coyote).
+
+      New tests: /app/backend/tests/test_species_expansion_modifiers.py
+      (41 parametrized assertions across 4 classes).
+
+      Combined run:
+          cd /app/backend && python -m pytest \
+            tests/test_species_prompt_packs.py \
+            tests/test_species_expansion_modifiers.py -q
+          -> 115 passed in 0.06s  (74 prior + 41 new; zero regressions)
+
+      ✅ Scenario 1 — 17 (species,style) pairs: each renders its
+         canonical name (e.g. "Rifle (Elk)", "Archery (Black Bear)",
+         "Ground Blind / Pit Blind (Pronghorn)") + HUNT STYLE CONTEXT
+         header with style_id=<canonical> + a distinguishing
+         tactical_adjustments phrase. Cross-contamination guard: no
+         whitetail "hinge-cut" phrasing in any of the 5 packs.
+      ✅ Scenario 2 — 12 (species,region) pairs: each renders its
+         canonical regional name, REGIONAL CONTEXT header with
+         region_id=<canonical>, AND a distinguishing regional phrase
+         (elk+mountain_west "aspen"; antelope+plains "Wyoming";
+         coyote+southeast_us "pine plantation"; etc.).
+      ✅ Scenario 3 — combined: elk+archery+mountain_west,
+         antelope+blind+plains, coyote+rifle+southeast_us all render
+         BOTH modifiers. Builder block order verified:
+         SPECIES -> REGIONAL -> SEASONAL -> HUNT STYLE -> HUNT CONDITIONS.
+      ✅ Scenario 4 — graceful fallback: elk+saddle, elk+south_texas,
+         coyote+saddle+east_texas, plus generic banana_boat_method +
+         narnia across all 5 species — zero exceptions, neutral
+         "unspecified" / "generic" notices emitted, no cross-pack
+         leakage (whitetail saddle + whitetail south_texas content
+         never shows up in elk/coyote prompts).
+      ✅ Scenario 5 — backward compat: whitetail (deer) pack still
+         resolves correctly with archery + south_texas; covered by the
+         existing 74 tests in test_species_prompt_packs.py which all
+         re-passed in the combined run.
+      ✅ Scenario 6 — live smoke: POST /api/analyze-hunt with
+         animal=coyote, hunt_style=rifle, GPS 31.2956,-95.9778 and a
+         256x256 PNG against EXPO_PUBLIC_BACKEND_URL with Bearer
+         test_session_rs_001 -> 200 success=true (5 overlays),
+         region_resolution={east_texas, gps},
+         hunt_style_resolution={rifle, user_selected}. Zero 500s on the
+         expanded-pack rendering path. Backend log confirmed
+         "Region resolved" + "Hunt style resolved" both fire, the
+         prompt builds, OpenAI responds 200, pipeline completes.
+
+      test_result.md updated: new species_expansion_v1_modifiers task
+      block set to working:true, needs_retesting:false; current_focus
+      cleared. No source files modified by testing agent.
+
+      Main agent: please summarise and finish — deepened prompt packs
+      are production-ready.
+
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Forked-job continuation — completed two unblock items from the handoff:
+
+        1) Jest Configuration (was: BLOCKED)
+           - Root cause: `testMatch` in /app/frontend/jest.config.js was sweeping
+             in legacy `node --test` files under src/**/__tests__ that use
+             `import.meta` and `node:test` — Jest's Hermes preset can't
+             transform those. Those files have their own runner via
+             `yarn test:unit` (137 tests) and were never meant for Jest.
+           - Fix: scoped Jest's testMatch to `<rootDir>/__tests__/**/*.test.[jt]s?(x)` only.
+           - Result: `yarn jest` is GREEN — 1 suite / 12 tests passing
+             (mapStyles config + persistence contract). `yarn test:unit`
+             also stays GREEN — 137 node-test cases passing. No regressions.
+
+        2) Map Style Switcher UX Polish (was: TESTING PENDING)
+           File: /app/frontend/src/map/TacticalMapView.tsx
+           - Active glow: added gold shadow halo (shadowColor: COLORS.accent,
+             shadowOpacity 0.85, shadowRadius 6, elevation 4) so the selected
+             chip reads as "live" against the dark switcher pill on both
+             topo and satellite tiles.
+           - Long-press tooltip: added a 280ms manual long-press detector
+             via Pressable's onPressIn/onPressOut + setTimeout (instead of
+             TouchableOpacity's built-in onLongPress, which is unreliable
+             through Pointer events on react-native-web). Tooltip auto-
+             dismisses after 2.2s. Pointer-events disabled on the bubble
+             so the user can keep tapping chips through it.
+           - Switched the chip from TouchableOpacity to Pressable for
+             better cross-platform press-state hooks.
+           - Visual verification (screenshot tool, mobile viewport
+             390x844): all four chips render in the correct order
+             (OUTDOOR / HYBRID / SAT / TOPO). Active state correctly
+             rotates as the user taps (verified OUTDOOR → TOPO → HYBRID).
+             Switching to HYBRID swapped the live MapLibre style to the
+             MapTiler satellite-with-labels imagery while preserving
+             camera state (no reload).
+           - Note on tooltip: the long-press behavior was not directly
+             provable through Playwright's synthesised mouse/pointer
+             events because react-native-web's PressResponder gates
+             onPressIn behind a stricter pointer-event sequence than
+             Playwright emits. The implementation is the standard RN
+             onPressIn-timer pattern and will fire reliably on real
+             iOS/Android touch (and on a real human web mouse press).
+             The press → state-change → setStyle → MapLibre re-render
+             path is fully verified end-to-end.
+
+        Files changed in this session:
+          - /app/frontend/jest.config.js (testMatch scoped to root __tests__)
+          - /app/frontend/src/map/TacticalMapView.tsx
+              (added active glow + long-press tooltip; TouchableOpacity → Pressable)
+
+        Backend: untouched. No retest required for this change.
+        Frontend: visual verification done via screenshot tool. No further
+        frontend agent run requested unless the user wants to confirm the
+        long-press tooltip on a real device build.
+
+
+    - agent: "main"
+      message: |
+        Feature: Added MapTiler Landscape (v4) as the 5th map style.
+
+        Scope delivered (per spec):
+        - Registry: added `landscape` to `RAVEN_SCOUT_MAP_STYLES` between
+          Outdoor and Hybrid (id `landscape`, label `LAND`, slug
+          `landscape-v4`, icon `leaf`).
+        - Type: extended `RavenScoutMapStyleId` union with `'landscape'`.
+        - Helpers: `isRavenScoutMapStyleId`, `resolveMapStyle`, and
+          `getActiveMapStyles` iterate the registry, so they auto-pick
+          up the new id (no per-id changes needed).
+        - Switcher UI: TacticalMapView already maps over the registry,
+          so Landscape rendered automatically as the 2nd chip; existing
+          Raven Scout dark/gold chip styling preserved; horizontal
+          ScrollView still scrolls correctly with 5 options.
+        - Persistence: storage key unchanged. A `landscape` value
+          round-trips through getItem → resolveMapStyle. Older saved
+          ids ('outdoor'/'topo'/etc.) keep working; unknown legacy ids
+          still fall back to Outdoor.
+        - Map behavior: switching to/from Landscape uses the existing
+          postMessage → `map.setStyle()` path — no iframe rebuild,
+          camera (center/zoom/bearing/pitch) preserved.
+        - MapProvider shim: no change needed.
+        - Default: still `outdoor`.
+
+        Validation:
+        - landscape-v4 style.json → HTTP 200 with EXPO_PUBLIC_MAPTILER_KEY.
+        - Visual screenshots (390x844): 5 chips render in spec'd order
+          (OUTDOOR | LAND | HYBRID | SAT | TOPO); LAND chip activates
+          gold-glow on tap; tile imagery flips to MapTiler Landscape
+          (terrain shading visible); switch back to OUTDOOR works.
+
+        Tests:
+        - Updated mapStyles.test.ts: 4 → 5 style assertions, new
+          `landscape-v4` slug test, new `isRavenScoutMapStyleId('landscape')`
+          test, new persistence test for `landscape` warm-start,
+          `getActiveMapStyles().length` 4 → 5.
+        - Jest: 13/13 passing. Node test runner: 137/137 still passing.
+
+        Files changed:
+        - /app/frontend/src/constants/mapStyles.ts
+        - /app/frontend/__tests__/mapStyles.test.ts
+
+        Backend: untouched.
+
+
+    - agent: "main"
+      message: |
+        Feature: Plan-tier feature gating for image upload + map styles.
+
+        New files:
+        - /app/frontend/src/constants/planCapabilities.ts
+            • Canonical PlanId type ('free' | 'core' | 'pro')
+            • normalizePlanId() — collapses 'trial'/null/unknown → 'free'
+              (so the legacy backend label 'trial' keeps working without a
+              DB or backend rename)
+            • getAllowedMapStylesForPlan(planId)
+                Free  -> []
+                Core  -> [outdoor, satellitePlain, topo]
+                Pro   -> [outdoor, landscape, satelliteHybrid, satellitePlain, topo]
+            • canUseMapStyle(planId, styleId)
+            • canUploadImages(planId)        — true for all 3 tiers (per spec)
+            • resolveAllowedStyleForPlan()   — downgrade-safe fallback to first
+              allowed style; returns null for Free
+        - /app/frontend/__tests__/planCapabilities.test.ts (21 tests):
+            • normalizePlanId across canonical / 'trial' alias / unknown / null /
+              wrong-type inputs
+            • canUploadImages: free ✓, core ✓, pro ✓, unknown defaults safely
+            • getAllowedMapStylesForPlan: free=[], core=3-style, pro=5-style,
+              order assertions, fresh-copy guarantee
+            • canUseMapStyle: Free blocked from all (incl outdoor),
+              Core allowed [outdoor, satellitePlain, topo],
+              Core blocked Pro-only [satelliteHybrid, landscape],
+              Pro allowed all, unknown / non-string ids rejected
+            • resolveAllowedStyleForPlan: returns null for Free, keeps allowed,
+              falls back for downgraded users (Hybrid → Outdoor on Core),
+              handles null / unknown / undefined gracefully
+
+        Updates:
+        - /app/frontend/src/map/TacticalMapView.tsx
+            • Reads user.tier via useAuth()
+            • Filters chip strip by getAllowedMapStylesForPlan(planId)
+            • Downgrade migration effect: if persisted styleId is not in
+              allowedStyleIds, snap to resolveAllowedStyleForPlan(...) so a
+              Pro user who picked Hybrid then downgraded to Core lands on
+              Outdoor instead of an empty / invalid map
+            • Free tier branch: renders a Raven-Scout-themed "UNLOCK MAP STYLES /
+              Upgrade to Core or Pro" upsell button (gold accent, dark navy
+              fill, gold halo glow) where the chip strip would normally be;
+              tap fires `onUpgradePress` (caller wires this to /subscription)
+            • Existing setup.tsx already route-gates the entire MAP toggle
+              behind `isPaidTier` for trial users — the in-component upsell
+              is defence-in-depth for any other place TacticalMapView renders
+              without that route-level gate (e.g. results.tsx hunt review)
+        - /app/frontend/app/setup.tsx + /app/frontend/app/results.tsx
+            • Both TacticalMapView usages now pass
+              onUpgradePress={() => router.push('/subscription')}
+
+        Style-id naming note: spec listed snake_case ids (satellite_plain,
+        satellite_hybrid). Existing registry + persisted AsyncStorage values
+        use camelCase (satellitePlain, satelliteHybrid). Renaming would break
+        every existing user's saved preference, so I kept camelCase as the
+        runtime ids and documented the 1:1 mapping in planCapabilities.ts.
+        Functionally identical, zero migration risk.
+
+        Validation:
+        - `yarn jest` → 2 suites / 34 tests passing
+            (mapStyles 13 + planCapabilities 21).
+        - `yarn test:unit` → 137 node-test cases still passing (no regressions).
+        - Visual screenshot (Pro session, mobile 390x844): all 5 chips
+          render correctly. Free/trial route-gated by existing logic
+          (separate upsell card was already in setup.tsx).
+        - TypeScript: `tsc --noEmit` clean for the modified files.
+
+        Backend: untouched. No retest required for this change.

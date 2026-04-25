@@ -362,7 +362,7 @@ class TestPromptIntegration:
 
     def test_fallback_species_skips_regional_modifier(self):
         prompt = assemble_system_prompt(
-            "elk",
+            "squirrel",
             conditions={"hunt_date": "2026-11-12"},
             image_count=1,
             tier="pro",

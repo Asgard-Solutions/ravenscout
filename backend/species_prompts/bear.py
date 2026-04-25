@@ -7,7 +7,7 @@ more open country in AK/interior). Baseline behavior/tactical/movement/caution/t
 plus two seasonal phases: spring food-concentration and fall hyperphagia.
 """
 
-from .pack import SeasonalModifier, SpeciesPromptPack
+from .pack import HuntStyleModifier, RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 
 _BEAR_SPRING = SeasonalModifier(
@@ -111,5 +111,175 @@ BEAR_PACK = SpeciesPromptPack(
     seasonal_modifiers={
         "spring_foods": _BEAR_SPRING,
         "fall_hyperphagia": _BEAR_FALL,
+    },
+    hunt_style_modifiers={
+        "archery": HuntStyleModifier(
+            style_id="archery",
+            name="Archery (Black Bear)",
+            behavior_adjustments=(
+                "Effective range is ~15-40 yards; bears detect scent at hundreds of yards so archery stands live or die on wind + thermal discipline.",
+                "Bears approach known food carefully \u2014 a broadside archery shot often requires pre-positioning on trail + wind, not reacting to arrival.",
+            ),
+            tactical_adjustments=(
+                "Favor elevated setups (tree stand / saddle / blind platform) near concentrated food with a pre-cleared 25-35 yard lane.",
+                "Plan a downwind approach path that does NOT cross the bear's expected inbound trail.",
+                "Where legal, bait setups define the shot lane \u2014 geometry is fixed; plan stand placement around it.",
+            ),
+            caution_adjustments=(
+                "Do NOT set up ground-level inside a bear's inbound scent cone \u2014 a close-range bust is dangerous AND season-ending.",
+                "Do NOT rely on visibility without wind \u2014 a bear at 30 yards wins the scent game every time wind is wrong.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize elevation, shot-lane pre-cut, and hard wind/thermal discipline over raw visibility.",
+            ),
+        ),
+        "rifle": HuntStyleModifier(
+            style_id="rifle",
+            name="Rifle (Black Bear)",
+            behavior_adjustments=(
+                "Effective window extends to glassing limit \u2014 spring green-up and fall berry/salmon concentrations are glassable at half-mile-plus.",
+                "A shootable bear can emerge, feed, and disappear in minutes \u2014 glass-ready setup matters.",
+            ),
+            tactical_adjustments=(
+                "Glass green-up slopes, berry benches, salmon streams, and ag-edge orchards from across-drainage knob positions.",
+                "Plan shot lanes 100-400 yards; bears feeding cross-grain to cover show broadside at distance.",
+                "Wind/thermal discipline still dominant even at range \u2014 a bear looping downwind of the glasser collapses the hunt regardless of cover.",
+            ),
+            caution_adjustments=(
+                "Do NOT assume a first sighting is a first-and-last chance \u2014 patient glass often produces a better angle 30 minutes later.",
+                "Do NOT ignore terrain between shooter and bear \u2014 downhill shots into canyons are recovery nightmares.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize patient across-drainage glassing and recovery-aware shot angles.",
+            ),
+        ),
+        "spot_and_stalk": HuntStyleModifier(
+            style_id="spot_and_stalk",
+            name="Spot-and-Stalk (Black Bear)",
+            behavior_adjustments=(
+                "Bears don't pattern like ungulates \u2014 daily food focus drifts. A stalk from spot is often a one-chance window per day.",
+                "Bears feed heads-down for long intervals \u2014 the stalk window opens WHILE the bear is engrossed, not when he looks up.",
+            ),
+            tactical_adjustments=(
+                "Close during a heads-down feeding interval; freeze when the bear lifts and looks around.",
+                "Use wind + thermal + cover contours to set the approach \u2014 an across-canyon contour stalk beats a direct downhill ridge walk.",
+                "Commit the final 80-120 yards only when wind AND terrain AND posture line up.",
+            ),
+            caution_adjustments=(
+                "Do NOT stalk cross-wind \u2014 bears win scent at 200+ yards.",
+                "Do NOT assume retreat on failure is safe \u2014 a busted bear upwind of you may come closer to investigate.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize heads-down stalk windows, wind-first approach geometry, and controlled abort criteria.",
+            ),
+        ),
+        "blind": HuntStyleModifier(
+            style_id="blind",
+            name="Ground Blind / Bait Blind (Black Bear)",
+            behavior_adjustments=(
+                "Where legal, bait setups are the dominant black bear tactic in much of the Upper Midwest, Canada, and parts of the West \u2014 bears acclimate to bait sites and pattern visits.",
+                "Bears tolerate established blinds at bait better than ungulates \u2014 if the blind has been in place a week or longer, structure is part of the landscape.",
+                "Hit times drift with food density and pressure; trail-cam intel is how the actual sit time gets selected, not gut feel.",
+            ),
+            tactical_adjustments=(
+                "Position blind 18-25 yards downwind / crosswind of the bait with a clean broadside shot lane.",
+                "Bait freshness, bait diversity (bread + grease + sweets layered), and check rhythm drive consistent visits \u2014 plan logistics with the setup.",
+                "Use a high-cover blind (treestand or saddle if safer; ground blind brushed in heavily) \u2014 bears CAN look up, but vertical movement is harder for them to track.",
+                "Run trail-cams on the bait for 7-10 days minimum before sitting; weight the actual visit times heavily.",
+            ),
+            caution_adjustments=(
+                "Do NOT sit a fresh-set bait the same day it's placed \u2014 bears need acclimation time.",
+                "Do NOT assume a small bear at the bait is the only visitor \u2014 dominant boars often run off smaller bears and arrive last; sit longer.",
+                "Do NOT ignore state-specific bait law \u2014 timing, bait type, and registration vary widely; flag as key_assumption.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize trail-cam-led sit timing, wind-disciplined blind placement, and bait acclimation realism.",
+            ),
+        ),
+    },
+    regional_modifiers={
+        "mountain_west": RegionalModifier(
+            region_id="mountain_west",
+            name="Mountain West Black Bear",
+            behavior_adjustments=(
+                "Rocky Mountain / intermountain black bears \u2014 broad elevation range, heavy reliance on south-facing avalanche chute green-up in spring and berry / acorn benches in fall.",
+                "Public-land access dominates; bears pressure off roads quickly.",
+            ),
+            tactical_adjustments=(
+                "Glass avalanche chutes and south-facing burn scars at long range through spring; pivot to berry basins and mast flats in fall.",
+                "Pit / ridge glass positions across drainages are high-value \u2014 bears on open slopes are visible at mile-plus.",
+                "Plan packs-outs \u2014 elevation + distance matter for recovery planning.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply eastern mast-flat tactics \u2014 mountain chutes and burn scars are the classic spring play.",
+                "Do NOT neglect grizzly overlap in parts of MT / ID / WY / AK \u2014 identification must be certain before shots.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize avalanche-chute / burn-scar glassing and long recovery logistics.",
+            ),
+        ),
+        "southeast_us": RegionalModifier(
+            region_id="southeast_us",
+            name="Southeastern Black Bear",
+            behavior_adjustments=(
+                "Eastern / southeastern black bears live in dense hardwood bottoms, swamps, and pocosins \u2014 mast-driven, ag-subsidized, often nocturnal under pressure.",
+                "Habitat is closed \u2014 long-range glassing is rarely feasible; hunts happen inside 100 yards.",
+            ),
+            tactical_adjustments=(
+                "Target acorn / beechnut / oak flats, swamp-edge trails, and mast-heavy bottoms \u2014 bait where legal for ambush geometry.",
+                "Hound-hunting, drive, and still-hunt in dense country are regionally common methods \u2014 plan for close-cover setups and short shot lanes.",
+                "Use wind and scent-control carefully in tight country \u2014 bears acclimated to human sign still spook on pure scent hits.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend long-range open-country glassing strategies in closed dense country.",
+                "Do NOT apply mountain-West spring green-up tactics \u2014 spring seasons are mast-driven or absent.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize mast-flat and swamp-edge ambush setups with close shot lanes.",
+            ),
+        ),
+        "midwest": RegionalModifier(
+            region_id="midwest",
+            name="Upper Midwest / Great Lakes Black Bear",
+            behavior_adjustments=(
+                "Upper Midwest / Great Lakes bears \u2014 classic bait-hunting country, dense deciduous forest, plentiful mast, and agricultural overlap.",
+                "Food targeting is strongly mast / ag / berry driven \u2014 bears pattern to single productive sources at short timescales.",
+            ),
+            tactical_adjustments=(
+                "Where legal, bait setups are the dominant play \u2014 optimize wind, shot-lane geometry, and trail-cam pattern data.",
+                "Natural-food ambushes target acorn / beech / apple concentrations with active sign (rubs / scat / bitten branches).",
+                "Use canopy-cover transitions and swamp-edge trails \u2014 mid-forest is less productive than edge targeting.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend open-country glassing \u2014 habitat is closed.",
+                "Do NOT ignore state-specific bait rules \u2014 flag as key_assumption.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize bait or natural-food edge targeting with trail-cam-grade intel.",
+            ),
+        ),
+        "pacific_northwest": RegionalModifier(
+            region_id="pacific_northwest",
+            name="Pacific Northwest Black Bear",
+            behavior_adjustments=(
+                "Pacific Northwest \u2014 highest density of black bears in the lower 48; coastal rainforest, clearcuts, salmon streams, mountain transition zones.",
+                "Salmon runs (Aug-Oct) override every other food source where streams are accessible \u2014 a salmon-streaming bear is a salmon-streaming bear, period.",
+                "Coastal bears reach record sizes; size discrimination matters more than in eastern states.",
+            ),
+            tactical_adjustments=(
+                "Glass clearcuts, replant edges, and burn scars from elevated knob positions in spring; pivot to salmon streams in fall.",
+                "Spot-and-stalk on clearcut bears at 100-400 yards with rifle is the dominant non-bait method.",
+                "Where bait is legal (private timber lands), wind + lane geometry on cleared 25-yard archery lanes is the play.",
+                "Active fishing-on-stream bears are predictable patterners \u2014 plan multi-day setup with a confirmed stream.",
+            ),
+            caution_adjustments=(
+                "Do NOT ignore the salmon factor in fall \u2014 attempting general food-concentration logic in a salmon zone misses the obvious.",
+                "Do NOT confuse a small salmon-fattened young bear with a mature dry-land bear \u2014 size-on-stream is misleading.",
+                "Do NOT ignore wet-weather scent dispersion impacts on stand placement.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize salmon-stream and clearcut targeting with size-discrimination discipline.",
+            ),
+        ),
     },
 )

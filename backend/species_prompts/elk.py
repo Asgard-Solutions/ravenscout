@@ -6,7 +6,7 @@ hunt-style modifiers can be added in a later pass — the generic
 renderer handles absent modifiers safely.
 """
 
-from .pack import SeasonalModifier, SpeciesPromptPack
+from .pack import HuntStyleModifier, RegionalModifier, SeasonalModifier, SpeciesPromptPack
 
 
 _ELK_RUT = SeasonalModifier(
@@ -114,5 +114,155 @@ ELK_PACK = SpeciesPromptPack(
     seasonal_modifiers={
         "rut": _ELK_RUT,
         "winter_range": _ELK_WINTER,
+    },
+    hunt_style_modifiers={
+        "archery": HuntStyleModifier(
+            style_id="archery",
+            name="Archery (Elk)",
+            behavior_adjustments=(
+                "Effective archery window is ~20-50 yards — calling and terrain must close the gap before the bull commits to circling downwind.",
+                "Bulls coming to a call almost always attempt a downwind arc before closing — setup geometry must plan for that circle.",
+            ),
+            tactical_adjustments=(
+                "Set up caller 30-60 yards behind the shooter so the bull crosses the shooter's lane en route to the caller.",
+                "Bias setups to benches, saddles, and timber edges with pre-cleared shooting lanes at 20-40 yards.",
+                "Bugle / challenge call only when the bull is located AND the setup geometry beats his likely downwind approach.",
+                "Favor close-range timber setups over open-park glassing \u2014 an elk inside 50 yards is the shot, not one glassed at 400.",
+            ),
+            caution_adjustments=(
+                "Do NOT call from an open park / meadow edge \u2014 bulls hang up just inside timber to verify visually.",
+                "Do NOT ignore thermals in archery windows \u2014 a 30-yard shot is unforgiving of scent drift the forecast wind misses.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize caller/shooter spacing, in-range shooting lanes, and downwind-circle interception.",
+            ),
+        ),
+        "rifle": HuntStyleModifier(
+            style_id="rifle",
+            name="Rifle (Elk)",
+            behavior_adjustments=(
+                "Effective window extends to the limit of glassing and shooter skill \u2014 300-600 yard shots are standard elk-country expectations.",
+                "Herd behavior matters more than individual bull behavior \u2014 a shootable bull exposes himself through herd movement over minutes, not seconds.",
+            ),
+            tactical_adjustments=(
+                "Favor glassing-knob setups across drainages, ridge benches overlooking feeding parks, and burn-scar edges.",
+                "Stalking approach leverages terrain cover + thermal discipline rather than closing for calls.",
+                "Shot staging should account for a 200-800 yard lane, not a 30-yard archery window.",
+            ),
+            caution_adjustments=(
+                "Do NOT collapse rifle setups onto archery-tight calling positions \u2014 open-country sight lines are the point.",
+                "Do NOT assume a single glass \u2014 elk emerge, feed, and re-bed over hours; sit the glass until a shootable bull is located.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize long-range glassing and patience-driven sitting glass positions.",
+            ),
+        ),
+        "spot_and_stalk": HuntStyleModifier(
+            style_id="spot_and_stalk",
+            name="Spot-and-Stalk (Elk)",
+            behavior_adjustments=(
+                "Elk are spotted far (glassing mile-plus), then stalked close \u2014 the gap between detection and shot can be multi-hour.",
+                "Thermals dictate approach feasibility as much as the base wind \u2014 an uphill stalk on an afternoon thermal is usually doomed.",
+            ),
+            tactical_adjustments=(
+                "Plan a two-phase approach: (1) get on elevation to glass, (2) descend / contour to a downwind-thermal stalk lane.",
+                "Use terrain ribs, timber stringers, and burn-scar seams as covered access \u2014 open-ground crossings are high-risk.",
+                "Commit to the stalk only when wind + thermal + cover all align; walk back otherwise \u2014 failed stalks burn the bull.",
+            ),
+            caution_adjustments=(
+                "Do NOT stalk a herd cross-wind in open country \u2014 mutliple cows will pick up movement before the bull is in range.",
+                "Do NOT start a stalk late afternoon against a rising thermal unless the approach is over-the-top / down.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize thermal-aware stalk geometry, covered-seam access, and abort criteria before committing.",
+            ),
+        ),
+        "public_land": HuntStyleModifier(
+            style_id="public_land",
+            name="Public Land (Elk)",
+            behavior_adjustments=(
+                "Pressured elk abandon easy-access parks within days of opener and push to dark timber / roadless benches.",
+                "Vocalization collapses under pressure \u2014 silent bulls are the norm in hunted public country past week one.",
+            ),
+            tactical_adjustments=(
+                "Scale recommendations to 2-5 mile hikes from roads / trailheads \u2014 accessible parks are typically empty of bulls by mid-season.",
+                "Target dark-timber benches, roadless drainages, and wilderness-interior meadows.",
+                "Plan for cold-calling sparingly \u2014 pressured bulls answer rarely; let terrain-first movement patterns dominate.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend road-proximate or trailhead-accessible setups as primary in hunted public country.",
+                "Do NOT assume bugling activity \u2014 flag the need to scout silent-bull patterns (fresh sign, wallows, tracks).",
+            ),
+            species_tips_adjustments=(
+                "Emphasize distance-from-access and terrain-first tactics over calling.",
+            ),
+        ),
+    },
+    regional_modifiers={
+        "mountain_west": RegionalModifier(
+            region_id="mountain_west",
+            name="Mountain West (Rocky Mountain Elk)",
+            behavior_adjustments=(
+                "Rocky Mountain elk country \u2014 classic drainage-and-ridge terrain, 6,000-11,000 ft elevation bands, aspen benches and spruce-fir dark timber.",
+                "Elevation migration is driven by snow and forage: high-country summer -> mid-elevation fall -> low-elevation winter yards.",
+                "Public land dominates \u2014 plan for pressure and long access.",
+            ),
+            tactical_adjustments=(
+                "Weight aspen / dark-timber edge benches heavily as bedding, with meadows / burns as feeding targets.",
+                "Drainage saddles, ridge passes, and canyon pinch points structure travel \u2014 they function as mile-scale funnels.",
+                "Wallows in September-October are concentrated intel \u2014 find one, hunt a one-mile radius around it.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply flat-country tactics \u2014 elevation gain and thermals dominate terrain-use decisions.",
+                "Do NOT claim specific wallow / rub locations without imagery support.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize elevation-band transition targeting and saddle-scale funnel use.",
+            ),
+        ),
+        "plains": RegionalModifier(
+            region_id="plains",
+            name="Great Plains (Prairie & Breaks Elk)",
+            behavior_adjustments=(
+                "Prairie / breaks elk live in creek-bottom cottonwoods, shelterbelts, badland coulees, and irrigated ag perimeters \u2014 not classic mountain timber.",
+                "Open-country sightlines mean herds detect approach at a mile-plus \u2014 cover use is at terrain-break scale.",
+                "Movement ties to ag fields and water more than to high-elevation park feeding.",
+            ),
+            tactical_adjustments=(
+                "Target coulee / creek-bottom cottonwoods as bedding and ag-edge stubble as feeding \u2014 plan setups on the transition.",
+                "Spot-and-stalk dominates; calling is noise in wide-open country unless the bull is located and within cover approach.",
+                "Glass from high-ground breaks at extreme range before committing to any approach.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply mountain-West calling and timber tactics \u2014 open-country eyesight is the ceiling.",
+                "Do NOT recommend mid-field open-country crossings \u2014 a cow group will pick it up a mile out.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize coulee-and-cottonwood targeting with long-range glassing-first approaches.",
+            ),
+        ),
+        "pacific_northwest": RegionalModifier(
+            region_id="pacific_northwest",
+            name="Pacific Northwest (Roosevelt Elk)",
+            behavior_adjustments=(
+                "Roosevelt elk country \u2014 coastal Washington and Oregon rainforest, dense old-growth + clearcuts, low elevation, year-round wet conditions.",
+                "Roosevelt bulls are larger-bodied and use thicker cover than Rocky Mountain elk; daylight movement is heavily structured around clearcut / mature-timber edges.",
+                "Vocalization is more subdued than RM elk; bugles are quieter and less reliable as locator tools.",
+            ),
+            tactical_adjustments=(
+                "Target clearcut edges, replant transitions, and old-growth dark timber benches \u2014 NOT alpine parks.",
+                "Glass cuts and clearings at very first / last light; expect close-cover work the rest of the day.",
+                "Plan setups in the 50-200 yard range \u2014 visibility is short, shots come quick.",
+                "Logging-road systems define access \u2014 plan kill / pack-out logistics around them.",
+            ),
+            caution_adjustments=(
+                "Do NOT apply Rocky Mountain bugle / call-and-stalk tactics directly \u2014 Roosevelt bulls are quieter and less call-responsive.",
+                "Do NOT recommend high-alpine setups \u2014 Roosevelt elk are coastal lowland animals.",
+                "Do NOT ignore the wet weather impact \u2014 thermal patterns, scent dispersion, and quiet ground all change in heavy rain.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize clearcut / replant edges and dense old-growth tactics with road-access pack-out planning.",
+            ),
+        ),
     },
 )
