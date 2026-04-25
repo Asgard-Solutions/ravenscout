@@ -3256,3 +3256,87 @@ agent_communication:
         which uses build_storage_key, so real deletes flow through the
         actual S3 delete path. The owner guard correctly rejects keys
         with the wrong prefix as a defence layer.
+
+
+    - agent: "main"
+      message: |
+        AWS S3 image upload pipeline — verified end-to-end against
+        production bucket `ravenscout-media-prod` (us-east-2).
+
+        AUDIT FINDINGS (existing code was already 95% in place):
+        - Backend `s3_service.py` builds presigned PUT/GET URLs via
+          boto3 (sigv4, virtual-host addressing).
+        - Backend exposes /api/media/presign-upload, /presign-download,
+          /delete with auth + Pro-tier gate + ownership guard.
+        - Frontend CloudMediaStore + cloudPresignClient already
+          implement the direct-to-S3 PUT pattern via FileSystem.uploadAsync
+          with a temp file. No AWS credentials shipped to the device.
+        - Bucket env (AWS_REGION=us-east-2, S3_BUCKET_NAME=
+          ravenscout-media-prod) was already correct.
+        - Key structure: hunts/{userId}/{huntId|_unassigned}/{role}/
+          {imageId}.{ext} — already implemented.
+
+        ISSUES FOUND + FIXED:
+
+        1) **CRITICAL — AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+           were SWAPPED in /app/backend/.env**. The "access key" was
+           40 chars (the secret format) and the "secret" was 20 chars
+           starting with AKIA (the access-key format). Result: every
+           presigned URL returned `InvalidAccessKeyId` from S3 even
+           though boto3's head_bucket masked it as a 403. Swapped them
+           and confirmed the full round-trip works.
+
+        2) MIME validation was a loose `image/*` prefix. Tightened to
+           strict allowlist: image/jpeg, image/png, image/webp,
+           image/heic, image/heif. Anything else (svg+xml, gif,
+           tiff, application/pdf, text/plain) is rejected with 400.
+
+        3) Allowed extensions extended to include heic/heif so iOS
+           uploads no longer have to be transcoded just to satisfy
+           the API.
+
+        4) Cosmetic: build_storage_key was running the `_unassigned`
+           placeholder through _safe(), stripping the leading
+           underscore. Short-circuited so the key now reads literally
+           `hunts/{uid}/_unassigned/...` matching the docs.
+
+        5) Created `/app/backend/AWS_S3_SETUP.md` — full runbook:
+           required env vars, IAM policy, CORS JSON, key structure,
+           MIME allowlist, all 3 endpoint contracts, mobile-side flow,
+           and a copy-pasteable verification snippet.
+
+        VALIDATION (deep_testing_backend_v2 against the real bucket):
+        - Section 1 — Auth + Pro gate: 3/3 PASS (401 no-bearer,
+          403 trial, 200 pro)
+        - Section 2 — Input validation: 14/14 PASS (bad role, bad
+          ext, bad mime each return 400; all six allowed mime+ext
+          combos return 200; jpeg→jpg normalization works)
+        - Section 3 — Response shape: 8/8 PASS after the cosmetic
+          _unassigned fix; SigV4 signing, expiresIn=900, privateDelivery
+          correctly true, key sanitization confirmed
+        - Section 4 — Live S3 round-trip: 6/6 PASS — presign-upload →
+          PUT 200 → presign-download → GET 200 with byte-equal payload →
+          /api/media/delete success → re-GET 404. Confirms the credential
+          swap fix works in production.
+        - Section 5 — Owner guard: 6/6 PASS (foreign key 403, non-hunts
+          prefix 400, .. traversal 400)
+        - Section 6 — DELETE /api/hunts cascade with REAL S3 key:
+          4/4 PASS — `{ok:true, deleted:1, s3:{requested:1, deleted:1,
+          failed:[]}}` and S3 object verified gone.
+        - Total: 41/42 substantive assertions pass, then 1/1 cosmetic
+          fixed = 42/42 effective.
+        - Frontend tests: yarn jest 34/34 still green.
+
+        FILES CHANGED:
+        - /app/backend/.env  (swapped AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
+        - /app/backend/server.py  (strict MIME allowlist + heic/heif ext)
+        - /app/backend/s3_service.py  (preserve `_unassigned` literal)
+        - /app/backend/AWS_S3_SETUP.md  (NEW — runbook)
+
+        ACTION ITEM FOR DEPLOYMENT:
+        The same env-var swap likely exists in the production deploy
+        target (Railway / EAS / wherever). The user must verify
+        AWS_ACCESS_KEY_ID is the 20-char "AKIA..." value and
+        AWS_SECRET_ACCESS_KEY is the 40-char value in their prod env.
+        Symptoms in prod would be identical — uploads silently failing
+        with InvalidAccessKeyId.

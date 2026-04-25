@@ -54,7 +54,11 @@ def build_storage_key(
     ext = (extension or "jpg").lstrip(".").lower()
     ext = _safe(ext, "jpg")
     u = _safe(user_id, "anon")
-    h = _safe(hunt_id or "_unassigned")
+    # `_unassigned` is a literal sentinel for hunts that don't have an
+    # id yet (the user is still on the upload screen). _safe() would
+    # otherwise strip the leading underscore — short-circuit so the
+    # path matches what's documented in AWS_S3_SETUP.md.
+    h = "_unassigned" if not hunt_id else _safe(hunt_id)
     r = _safe(role or "primary", "primary")
     i = _safe(image_id, "img")
     return f"hunts/{u}/{h}/{r}/{i}.{ext}"
