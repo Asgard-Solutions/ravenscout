@@ -40,7 +40,7 @@ export default function LoginScreen() {
     try {
       const [info, enabled] = await Promise.all([isBiometricAvailable(), isBiometricEnabled()]);
       if (!info.available || enabled) return;
-      const label = info.type === 'face' ? 'Face ID' : info.type === 'fingerprint' ? 'Fingerprint' : 'Biometric';
+      const label = 'Fingerprint';
       // Try the incoming param, fall back to the context token, finally storage.
       let token: string | null = tokenForStore ?? sessionToken ?? null;
       if (!token) token = await AsyncStorage.getItem('session_token');

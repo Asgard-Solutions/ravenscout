@@ -300,7 +300,7 @@ export default function ProfileScreen() {
   const tier = (user.tier || 'trial').toLowerCase();
   const tierCopy = TIER_COPY[tier] || TIER_COPY.trial;
   const usernameSuggestion = (user.email || '').split('@')[0] || user.name;
-  const bioLabel = bioAvail.type === 'face' ? 'Face ID' : bioAvail.type === 'fingerprint' ? 'Fingerprint Login' : 'Biometric Login';
+  const bioLabel = bioAvail.type === 'face' ? 'Fingerprint Login' : bioAvail.type === 'fingerprint' ? 'Fingerprint Login' : 'Biometric Login';
   const bioIcon: keyof typeof Ionicons.glyphMap = bioAvail.type === 'face' ? 'happy-outline' : 'finger-print';
   const version = Constants.expoConfig?.version || '1.0.0';
   const buildNumber = (Constants as any).nativeBuildVersion || Constants.expoConfig?.android?.versionCode || Constants.expoConfig?.ios?.buildNumber || '—';
