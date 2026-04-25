@@ -878,10 +878,27 @@ export default function SetupScreen() {
                     // tells the ResponderSystem "this View handles its own
                     // touches — parent, stop capturing". Without this the
                     // whole page scrolls when the user tries to move the map.
-                    onStartShouldSetResponder={() => true}
+                    //
+                    // EXCEPTION: the bottom strip houses the map-style chips
+                    // (Pressables at bottom:24, maxHeight:36 inside the
+                    // TacticalMapView overlay). If we capture there too, the
+                    // chip onPress never fires and the user is stuck on the
+                    // default style. So we explicitly let touches in the
+                    // bottom ~72px bubble down to the chip Pressables while
+                    // still capturing pan/pinch over the rest of the map.
+                    onStartShouldSetResponder={(e) => {
+                      const y = e.nativeEvent.locationY ?? 0;
+                      return y < 300 - 72;
+                    }}
                     onMoveShouldSetResponder={() => true}
-                    onStartShouldSetResponderCapture={() => true}
-                    onMoveShouldSetResponderCapture={() => true}
+                    onStartShouldSetResponderCapture={(e) => {
+                      const y = e.nativeEvent.locationY ?? 0;
+                      return y < 300 - 72;
+                    }}
+                    onMoveShouldSetResponderCapture={(e) => {
+                      const y = e.nativeEvent.locationY ?? 0;
+                      return y < 300 - 72;
+                    }}
                   >
                     <TacticalMapView
                       key={mapKey}
