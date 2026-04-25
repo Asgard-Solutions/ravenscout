@@ -1,5 +1,5 @@
-import React, { useMemo, useEffect, useRef, useCallback } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity, Platform, ScrollView } from 'react-native';
+import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
+import { View, StyleSheet, Text, Pressable, Platform, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/theme';
 import {
@@ -39,6 +39,33 @@ export default function TacticalMapView({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const webviewRef = useRef<any>(null);
   const lastCaptureRef = useRef(0);
+  // Long-press tooltip state for the style switcher chips. Holds the
+  // id of whichever chip is currently being long-pressed; null when
+  // no tooltip is visible. We track long-press manually via
+  // onPressIn/onPressOut so the behavior is identical on iOS, Android,
+  // and react-native-web (the built-in `onLongPress` on TouchableOpacity
+  // is unreliable through Pointer events on web).
+  const [tooltipFor, setTooltipFor] = useState<RavenScoutMapStyleId | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tooltipDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armLongPress = useCallback((id: RavenScoutMapStyleId) => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      setTooltipFor(id);
+      if (tooltipDismissTimerRef.current) clearTimeout(tooltipDismissTimerRef.current);
+      tooltipDismissTimerRef.current = setTimeout(() => setTooltipFor(null), 2200);
+    }, 280);
+  }, []);
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    if (tooltipDismissTimerRef.current) clearTimeout(tooltipDismissTimerRef.current);
+  }, []);
 
   // The HTML is built ONCE (with the bootstrap style URL) so the
   // iframe / WebView never reloads on style switch — that would
@@ -239,9 +266,23 @@ export default function TacticalMapView({
     );
   })();
 
+  // Resolve the description for the currently visible tooltip outside JSX
+  // so the conditional render is straightforward (no IIFE / fragments).
+  const tooltipCfg = tooltipFor
+    ? RAVEN_SCOUT_MAP_STYLES.find(s => s.id === tooltipFor)
+    : null;
+
   return (
     <View style={[styles.container, { height }]}>
       {mapContent}
+
+      {showStyleSwitcher && useMaptiler && tooltipCfg && (
+        <View pointerEvents="none" style={styles.tooltip}>
+          <Text style={styles.tooltipText} numberOfLines={2}>
+            {tooltipCfg.description}
+          </Text>
+        </View>
+      )}
 
       {showStyleSwitcher && useMaptiler && (
         <ScrollView
@@ -253,13 +294,18 @@ export default function TacticalMapView({
           {RAVEN_SCOUT_MAP_STYLES.map((s) => {
             const active = styleId === s.id;
             return (
-              <TouchableOpacity
+              <Pressable
                 key={s.id}
                 testID={`map-style-${s.id}`}
                 accessibilityLabel={s.description}
-                style={[styles.styleButton, active && styles.styleButtonActive]}
-                onPress={() => setStyleId(s.id)}
-                activeOpacity={0.75}
+                style={({ pressed }) => [
+                  styles.styleButton,
+                  active && styles.styleButtonActive,
+                  pressed && styles.styleButtonPressed,
+                ]}
+                onPress={() => { cancelLongPress(); setStyleId(s.id); }}
+                onPressIn={() => armLongPress(s.id)}
+                onPressOut={cancelLongPress}
               >
                 <Ionicons
                   name={s.icon as any}
@@ -269,7 +315,7 @@ export default function TacticalMapView({
                 <Text style={[styles.styleLabel, active && styles.styleLabelActive]}>
                   {s.label}
                 </Text>
-              </TouchableOpacity>
+              </Pressable>
             );
           })}
         </ScrollView>
@@ -307,12 +353,46 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 6,
     borderRadius: 7,
   },
-  styleButtonActive: { backgroundColor: COLORS.accent },
+  styleButtonActive: {
+    backgroundColor: COLORS.accent,
+    // Active glow — soft gold halo so the selected chip reads as
+    // "live" against the dark switcher pill, including under the
+    // map's mid-tone tiles.
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  styleButtonPressed: {
+    opacity: 0.75,
+  },
   styleLabel: {
     color: COLORS.fogGray, fontSize: 10, fontWeight: '800',
     letterSpacing: 0.6,
   },
   styleLabelActive: { color: COLORS.primary, fontWeight: '900' },
+  tooltip: {
+    position: 'absolute', bottom: 64, left: 16, right: 16,
+    backgroundColor: 'rgba(11, 31, 42, 0.96)',
+    borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.55)',
+    borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 6,
+    zIndex: 10,
+  },
+  tooltipText: {
+    color: '#F5EFD9',
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 14,
+    textAlign: 'center',
+  },
   attribution: {
     position: 'absolute', bottom: 4, right: 8,
     backgroundColor: 'rgba(11, 31, 42, 0.6)',

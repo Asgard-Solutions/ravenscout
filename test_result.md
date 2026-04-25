@@ -583,7 +583,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-auth-hub.preview.emergentagent.com).
+          https://raven-scout-v2.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -989,7 +989,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-auth-hub.preview.emergentagent.com
+          https://raven-scout-v2.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -1053,7 +1053,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-auth-hub.preview.emergentagent.com). Harness:
+          https://raven-scout-v2.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -1453,7 +1453,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://tactical-auth-hub.preview.emergentagent.com/api/auth/verify-otp
+            POST https://raven-scout-v2.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -1735,7 +1735,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://tactical-auth-hub.preview.emergentagent.com/api). Test
+      URL (https://raven-scout-v2.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -2074,7 +2074,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://tactical-auth-hub.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://raven-scout-v2.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -2328,7 +2328,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-auth-hub.preview.emergentagent.com).
+          https://raven-scout-v2.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
@@ -2667,3 +2667,61 @@ agent_communication:
 
       Main agent: please summarise and finish — deepened prompt packs
       are production-ready.
+
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Forked-job continuation — completed two unblock items from the handoff:
+
+        1) Jest Configuration (was: BLOCKED)
+           - Root cause: `testMatch` in /app/frontend/jest.config.js was sweeping
+             in legacy `node --test` files under src/**/__tests__ that use
+             `import.meta` and `node:test` — Jest's Hermes preset can't
+             transform those. Those files have their own runner via
+             `yarn test:unit` (137 tests) and were never meant for Jest.
+           - Fix: scoped Jest's testMatch to `<rootDir>/__tests__/**/*.test.[jt]s?(x)` only.
+           - Result: `yarn jest` is GREEN — 1 suite / 12 tests passing
+             (mapStyles config + persistence contract). `yarn test:unit`
+             also stays GREEN — 137 node-test cases passing. No regressions.
+
+        2) Map Style Switcher UX Polish (was: TESTING PENDING)
+           File: /app/frontend/src/map/TacticalMapView.tsx
+           - Active glow: added gold shadow halo (shadowColor: COLORS.accent,
+             shadowOpacity 0.85, shadowRadius 6, elevation 4) so the selected
+             chip reads as "live" against the dark switcher pill on both
+             topo and satellite tiles.
+           - Long-press tooltip: added a 280ms manual long-press detector
+             via Pressable's onPressIn/onPressOut + setTimeout (instead of
+             TouchableOpacity's built-in onLongPress, which is unreliable
+             through Pointer events on react-native-web). Tooltip auto-
+             dismisses after 2.2s. Pointer-events disabled on the bubble
+             so the user can keep tapping chips through it.
+           - Switched the chip from TouchableOpacity to Pressable for
+             better cross-platform press-state hooks.
+           - Visual verification (screenshot tool, mobile viewport
+             390x844): all four chips render in the correct order
+             (OUTDOOR / HYBRID / SAT / TOPO). Active state correctly
+             rotates as the user taps (verified OUTDOOR → TOPO → HYBRID).
+             Switching to HYBRID swapped the live MapLibre style to the
+             MapTiler satellite-with-labels imagery while preserving
+             camera state (no reload).
+           - Note on tooltip: the long-press behavior was not directly
+             provable through Playwright's synthesised mouse/pointer
+             events because react-native-web's PressResponder gates
+             onPressIn behind a stricter pointer-event sequence than
+             Playwright emits. The implementation is the standard RN
+             onPressIn-timer pattern and will fire reliably on real
+             iOS/Android touch (and on a real human web mouse press).
+             The press → state-change → setStyle → MapLibre re-render
+             path is fully verified end-to-end.
+
+        Files changed in this session:
+          - /app/frontend/jest.config.js (testMatch scoped to root __tests__)
+          - /app/frontend/src/map/TacticalMapView.tsx
+              (added active glow + long-press tooltip; TouchableOpacity → Pressable)
+
+        Backend: untouched. No retest required for this change.
+        Frontend: visual verification done via screenshot tool. No further
+        frontend agent run requested unless the user wants to confirm the
+        long-press tooltip on a real device build.
