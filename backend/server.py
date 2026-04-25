@@ -155,12 +155,31 @@ async def check_analysis_allowed(user: dict) -> dict:
     rollover_count = user.get("rollover_count", 0)
 
     if tier["is_lifetime"]:
-        # Trial: lifetime limit
+        # Trial: lifetime limit. Extra (purchased, non-expiring)
+        # credits also gate analysis here — a trial user who buys
+        # a top-off pack must be able to spend it after their 3
+        # free lifetime analyses are gone. `consume_one_analysis`
+        # already handles the spend correctly; this gate just
+        # mirrors that fall-through.
         remaining = max(0, tier["analysis_limit"] - analysis_count)
-        if remaining <= 0:
-            return {"allowed": False, "remaining": 0, "limit": tier["analysis_limit"],
-                    "tier": tier_key, "message": "Trial limit reached. Upgrade to continue."}
-        return {"allowed": True, "remaining": remaining, "limit": tier["analysis_limit"], "tier": tier_key}
+        extra_credits = max(0, int(user.get("extra_analytics_credits", 0)))
+        combined_remaining = remaining + extra_credits
+        if combined_remaining <= 0:
+            return {
+                "allowed": False,
+                "remaining": 0,
+                "limit": tier["analysis_limit"],
+                "tier": tier_key,
+                "extra_credits": 0,
+                "message": "Trial limit reached. Upgrade or buy extra analytics to continue.",
+            }
+        return {
+            "allowed": True,
+            "remaining": remaining,
+            "limit": tier["analysis_limit"],
+            "tier": tier_key,
+            "extra_credits": extra_credits,
+        }
     else:
         # Paid tiers: monthly limit + rollover
         cycle_start = user.get("billing_cycle_start")

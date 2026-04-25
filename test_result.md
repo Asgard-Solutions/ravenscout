@@ -3515,3 +3515,119 @@ agent_communication:
         AWS_SECRET_ACCESS_KEY is the 40-char value in their prod env.
         Symptoms in prod would be identical — uploads silently failing
         with InvalidAccessKeyId.
+
+
+    - agent: "main"
+      message: |
+        Feature: Non-Expiring Extra Hunt Analytics Packs.
+
+        BACKEND
+        - Added `EXTRA_CREDIT_PACKS` constant: 5/$5.99, 10/$10.99,
+          15/$14.99 with the spec'd product IDs
+          (ravenscout_extra_analytics_{5,10,15}).
+        - User schema: new `extra_analytics_credits` field (int, defaults
+          0, NEVER reset by cycle reset).
+        - Collections:
+            • processed_purchases — idempotency rows keyed by
+              `{source}:{transaction_id}`. A unique index on _id makes
+              double-grants impossible.
+            • analytics_ledger — best-effort history of every grant +
+              consume event (subscription_monthly_grant,
+              analysis_used_monthly, analysis_used_extra_credit,
+              extra_pack_purchase). Best-effort: never blocks the
+              flow if it fails to insert.
+
+        - Helpers:
+            • check_analysis_allowed: now factors `extra_analytics_credits`
+              into the gate for BOTH paid AND trial branches.
+            • consume_one_analysis: atomic spend; drains monthly subscription
+              first, then extra_analytics_credits via a `$gt: 0` guarded
+              decrement so concurrent calls cannot oversell.
+            • grant_extra_credits: idempotent on (source, transaction_id);
+              rolls back the idempotency row if the user upsert can't
+              find the user; emits an analytics_ledger entry.
+
+        - New endpoints:
+            • GET  /api/user/analytics-usage          — auth required,
+              returns plan / monthlyAnalyticsLimit / monthlyAnalyticsUsed /
+              monthlyAnalyticsRemaining / extraAnalyticsCredits /
+              totalRemaining / resetDate / packs[]
+            • POST /api/analytics/consume             — auth required,
+              charges 1 credit, 402 with {code: out_of_credits} when both
+              buckets empty.
+            • POST /api/purchases/extra-credits       — auth required,
+              client confirmation grant. Idempotent on transaction_id.
+            • POST /api/purchases/revenuecat-webhook  — RC server-to-server.
+              HMAC-SHA256 signature verification via
+              X-RevenueCat-Signature + REVENUECAT_WEBHOOK_SECRET env
+              (dev mode short-circuits when secret unset). Idempotent
+              on transaction_id. Only acts on NON_RENEWING_PURCHASE
+              with a known product_id.
+
+        - Existing /api/analyze-hunt now uses consume_one_analysis →
+          monthly drained first, then extra credits.
+
+        FRONTEND
+        - /app/frontend/src/api/analyticsApi.ts        (NEW) — typed
+          client for the 3 endpoints.
+        - /app/frontend/src/hooks/useAnalyticsUsage.ts (NEW) — server-of-
+          truth hook; in-flight dedupe; refresh() returns the fresh usage.
+        - /app/frontend/src/components/OutOfCreditsModal.tsx (NEW) —
+          Raven Scout dark/gold themed bottom sheet. Title "You're out
+          of hunt analytics" + spec subtitle, monthly used + extra
+          credit balance row, Pro upgrade CTA emphasized (hidden if
+          user is already Pro), 3-pack horizontal pill row with live
+          per-pack busy/success/error states.
+        - /app/frontend/app/profile.tsx — new "HUNT ANALYTICS" card
+          shows "Monthly analytics: X of Y used", "Extra credits: N
+          available", "Monthly limit resets on <date>", and a gold
+          "BUY EXTRA ANALYTICS" CTA that opens the modal. Modal mounted
+          at the SafeAreaView root.
+
+        - Pack purchase handler is currently MOCKED — generates a
+          synthetic transaction_id and POSTs to /api/purchases/extra-credits.
+          The server-side idempotency contract makes flipping to real
+          RevenueCat (Purchases.purchaseProduct) a one-line change; the
+          server contract does not change.
+
+        VALIDATION
+        - deep_testing_backend_v2 returned 75/75 PASS across 7 sections:
+            A) GET analytics-usage shape (20/20)
+            B) extra-credits grant + idempotent replay (14/14)
+            C) Consumption order monthly→extra→402 (10/10)
+            D) Cycle reset preserves extras (6/6)
+            E) /analyze-hunt consume hook fires once per call (2/2)
+            F) RevenueCat webhook + idempotency + ignored events + 400 (10/10)
+            G) Cross-tier — TRIAL with extras (initially 0/6, fixed,
+               now 6/6) — `check_analysis_allowed` lifetime branch
+               needed the same combined_remaining fall-through as the
+               paid branch. Trial user can now use a top-off pack
+               after burning their 3 free analyses (which is exactly
+               when they'd buy one).
+        - Live curl smoke: trial 3/3 lifetime + 5 extra → 5 successful
+          extra-charged consumes → 6th returns 402.
+        - Frontend Jest: 38/38 (4 new analyticsApi tests on top of 34).
+        - TypeScript clean.
+        - Profile screen visual: HUNT ANALYTICS card renders, modal
+          opens with all 3 packs and correct prices.
+
+        FILES CHANGED
+        - /app/backend/server.py — gating, consume helper, grant helper,
+          4 new endpoints, hmac+hashlib imports.
+        - /app/frontend/src/api/analyticsApi.ts (NEW)
+        - /app/frontend/src/hooks/useAnalyticsUsage.ts (NEW)
+        - /app/frontend/src/components/OutOfCreditsModal.tsx (NEW)
+        - /app/frontend/__tests__/analyticsApi.test.ts (NEW — 4 tests)
+        - /app/frontend/app/profile.tsx — analytics card + modal mount.
+
+        REMAINING WORK (UPCOMING / Pending user decision)
+        - Replace MOCKED pack purchase with real
+          Purchases.purchaseProduct call (P1 along with the
+          previously-flagged restorePurchases).
+        - Wire OutOfCreditsModal into /api/analyze-hunt's 402 response
+          path on the upload screen so users running out mid-flow see
+          the modal automatically (currently it's only reachable via
+          the Profile "BUY EXTRA ANALYTICS" CTA — fine for now since
+          the analyze flow already shows a tier-limit error toast).
+        - Set `REVENUECAT_WEBHOOK_SECRET` in production env when the
+          RC dashboard webhook is configured.
