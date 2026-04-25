@@ -148,6 +148,11 @@ export default function TacticalMapView({
       minZoom: 2,
       preserveDrawingBuffer: true
     });
+    // Explicitly attach to window so injectJavaScript() from the host
+    // RN side can always find it across WebView strict-mode quirks
+    // (some Android WebView builds do NOT alias top-level `var` to
+    // window — chip taps would no-op without this).
+    window.map = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
 
     function postToHost(payload) {
@@ -221,19 +226,30 @@ export default function TacticalMapView({
       );
     } else if (webviewRef.current) {
       const url = JSON.stringify(cfg.styleUrl);
+      // NOTE: We do a brief retry-poll in case the chip is tapped
+      // before maplibre finishes the initial load. Without this, on
+      // slower Android devices `window.map` can still be undefined
+      // when the host fires the first style change.
       webviewRef.current.injectJavaScript(`
         (function() {
-          try {
-            if (!window.map) return;
-            var c = window.map.getCenter();
-            var z = window.map.getZoom();
-            var b = window.map.getBearing();
-            var p = window.map.getPitch();
-            window.map.setStyle(${url});
-            window.map.once('styledata', function() {
-              try { window.map.jumpTo({ center: c, zoom: z, bearing: b, pitch: p }); } catch(e) {}
-            });
-          } catch(e) {}
+          var tries = 0;
+          function apply() {
+            try {
+              if (!window.map || !window.map.isStyleLoaded) {
+                if (tries++ < 30) { setTimeout(apply, 100); return; }
+                return;
+              }
+              var c = window.map.getCenter();
+              var z = window.map.getZoom();
+              var b = window.map.getBearing();
+              var p = window.map.getPitch();
+              window.map.setStyle(${url});
+              window.map.once('styledata', function() {
+                try { window.map.jumpTo({ center: c, zoom: z, bearing: b, pitch: p }); } catch(e) {}
+              });
+            } catch(e) {}
+          }
+          apply();
         })(); true;
       `);
     }

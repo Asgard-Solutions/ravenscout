@@ -18,6 +18,9 @@ import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
+import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
+import { grantExtraCreditsPurchase } from '../src/api/analyticsApi';
+import OutOfCreditsModal from '../src/components/OutOfCreditsModal';
 
 const { width } = Dimensions.get('window');
 const STEPS = ['Species', 'Maps', 'Conditions', 'Review'];
@@ -64,6 +67,29 @@ export default function SetupScreen() {
   const [huntDate, setHuntDate] = useState(new Date().toISOString().split('T')[0]);
 
   const isPaidTier = user?.tier === 'core' || user?.tier === 'pro';
+
+  // Out-of-credits modal state. We do NOT auto-fetch usage on every
+  // setup-screen mount (it'd be wasteful for the 99% of analyses that
+  // succeed). The hook is fetched lazily by `refresh()` below the
+  // first time we hit a 402.
+  const { usage: analyticsUsage, refresh: refreshAnalyticsUsage } = useAnalyticsUsage(false);
+  const [creditsModalOpen, setCreditsModalOpen] = useState(false);
+
+  // MOCKED pack purchase (RevenueCat is still mocked per the project
+  // backlog). When real RC is wired, swap the synthetic transaction
+  // id for `Purchases.purchaseProduct(packId).transactionIdentifier`.
+  // Server-side idempotency contract is unchanged.
+  const handleAnalyzePackPurchase = useCallback(async (pack: { id: string; credits: number }) => {
+    const txnId = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await grantExtraCreditsPurchase(pack.id, txnId);
+      await refreshAnalyticsUsage();
+      return 'success' as const;
+    } catch {
+      return 'cancelled' as const;
+    }
+  }, [refreshAnalyticsUsage]);
+
   const [timeWindow, setTimeWindow] = useState('morning');
   const [windDirection, setWindDirection] = useState('N');
   const [windSpeed, setWindSpeed] = useState('');
@@ -388,6 +414,23 @@ export default function SetupScreen() {
         return;
       }
 
+      // 402 Payment Required → user is out of analytics. Auto-open
+      // the OutOfCreditsModal so they can either upgrade to Pro or
+      // top off with an extra-credit pack right where they are.
+      // Refresh usage first so the modal renders with accurate
+      // monthly + extra balance.
+      if (response.status === 402) {
+        setLoading(false);
+        try {
+          await refreshAnalyticsUsage();
+        } catch {
+          // Modal can still render with stale/null usage; OutOfCreditsModal
+          // tolerates a null payload.
+        }
+        setCreditsModalOpen(true);
+        return;
+      }
+
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         Alert.alert('Error', errData.detail || errData.error || `Server error (${response.status})`);
@@ -565,8 +608,8 @@ export default function SetupScreen() {
           <Text style={styles.limitSubtitle}>
             You've used all {user?.usage?.limit || 3} analyses on your {tierName} plan.
             {user?.tier === 'trial'
-              ? '\n\nUpgrade to Core or Pro for monthly analyses with auto-reset.'
-              : '\n\nYour limit resets at the start of your next billing cycle.'}
+              ? '\n\nUpgrade to Core or Pro for monthly analyses, or top off with an extra-credit pack.'
+              : '\n\nYour limit resets next billing cycle. Top off with extra credits to keep scouting now — they never expire.'}
           </Text>
 
           <TouchableOpacity
@@ -577,6 +620,19 @@ export default function SetupScreen() {
           >
             <Ionicons name="arrow-up-circle" size={22} color={COLORS.primary} />
             <Text style={styles.limitUpgradeText}>VIEW PLANS & UPGRADE</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            testID="limit-buy-extra-button"
+            style={styles.limitBuyExtraButton}
+            onPress={async () => {
+              try { await refreshAnalyticsUsage(); } catch {}
+              setCreditsModalOpen(true);
+            }}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add-circle-outline" size={20} color={COLORS.accent} />
+            <Text style={styles.limitBuyExtraText}>BUY EXTRA ANALYTICS</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -597,10 +653,33 @@ export default function SetupScreen() {
             </View>
             <View style={styles.limitTierRow}>
               <Ionicons name="rocket" size={14} color={COLORS.accent} />
-              <Text style={styles.limitTierText}>Pro: 100 analyses/month — $14.99/mo</Text>
+              <Text style={styles.limitTierText}>Pro: 40 analyses/month — $14.99/mo</Text>
             </View>
           </View>
         </View>
+
+        {/* Out-of-credits modal mounted here too so users hitting
+            this gate can buy a pack without leaving the screen. */}
+        <OutOfCreditsModal
+          visible={creditsModalOpen}
+          usage={analyticsUsage}
+          onClose={async () => {
+            setCreditsModalOpen(false);
+            // After the modal closes, refresh user + usage so a fresh
+            // credit balance is reflected. If the user actually got
+            // some credits, drop them out of the limit gate so they
+            // can re-tap ANALYZE.
+            try {
+              if (refreshUser) await refreshUser();
+              const fresh = await refreshAnalyticsUsage();
+              if (fresh && fresh.totalRemaining > 0) {
+                setLimitReached(false);
+              }
+            } catch {}
+          }}
+          onUpgradePress={() => router.push('/subscription')}
+          onPackPurchase={handleAnalyzePackPurchase}
+        />
       </SafeAreaView>
     );
   }
@@ -1147,6 +1226,17 @@ export default function SetupScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      {/* Out-of-credits modal — auto-opens when /api/analyze-hunt
+          returns 402 (monthly + extra both empty). User can upgrade
+          to Pro or top off with an extra-credit pack here. */}
+      <OutOfCreditsModal
+        visible={creditsModalOpen}
+        usage={analyticsUsage}
+        onClose={() => setCreditsModalOpen(false)}
+        onUpgradePress={() => router.push('/subscription')}
+        onPackPurchase={handleAnalyzePackPurchase}
+      />
     </SafeAreaView>
   );
 }
@@ -1377,6 +1467,18 @@ const styles = StyleSheet.create({
     minHeight: 60, width: '100%', marginTop: 32,
   },
   limitUpgradeText: { color: COLORS.primary, fontSize: 16, fontWeight: '800', letterSpacing: 1.5 },
+  // Secondary "Buy Extra Analytics" CTA on the limit-reached screen.
+  // Outline-style so the gold "Upgrade" button stays visually primary.
+  limitBuyExtraButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 13, paddingHorizontal: 20, borderRadius: 12,
+    borderWidth: 1.5, borderColor: COLORS.accent,
+    backgroundColor: 'rgba(200, 155, 60, 0.10)',
+    marginTop: 10, marginBottom: 4,
+  },
+  limitBuyExtraText: {
+    color: COLORS.accent, fontSize: 13, fontWeight: '900', letterSpacing: 1,
+  },
   limitHomeButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 14, marginTop: 14, width: '100%', borderRadius: 10,
