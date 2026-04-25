@@ -1040,10 +1040,185 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Extra Hunt Analytics Packs — endpoints + idempotency + consumption ordering"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+extra_hunt_analytics_packs:
+  - task: "Extra Hunt Analytics Packs (one-time, non-expiring)"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          Extra Hunt Analytics Packs end-to-end verification against
+          http://localhost:8001/api. Harness: /app/extra_credits_test.py.
+          Result: 72/75 substantive assertions PASS, 3 FAIL — all in
+          Section G (trial-tier behaviour). One real backend bug found.
+
+          === SECTION A — GET /api/user/analytics-usage  (20/20 PASS) ===
+          ✅ A1: 401 without Bearer.
+          ✅ A2: Pro fresh user — plan='pro', monthlyAnalyticsLimit=40,
+             monthlyAnalyticsUsed=0, monthlyAnalyticsRemaining=40,
+             extraAnalyticsCredits=0, totalRemaining=40.
+          ✅ A2: packs has exactly 3 entries with documented ids
+             {ravenscout_extra_analytics_5/10/15}.
+          ✅ A2: 5-pack credits=5/$5.99, 10-pack credits=10/$10.99,
+             15-pack credits=15/$14.99 — all with non-empty labels.
+          ✅ A3: Core fresh user — plan='core', monthlyAnalyticsLimit=10,
+             totalRemaining=10.
+
+          === SECTION B — POST /api/purchases/extra-credits  (14/14 PASS) ===
+          ✅ B1: 401 unauth.
+          ✅ B2: 400 unknown pack_id (detail "Unknown pack id: ...").
+          ✅ B3: Pro buys 5-pack tx_a -> 200
+                 {duplicate:false, credits_granted:5, extra_analytics_credits:5}.
+                 GET analytics-usage now extraAnalyticsCredits=5,
+                 totalRemaining=45.
+          ✅ B4: Replay SAME tx_a -> 200
+                 {duplicate:true, credits_granted:0, extra_analytics_credits:5}.
+                 NO double-grant. Idempotency on (source='in_app',
+                 transaction_id) verified — backend logged the
+                 "grant_extra_credits: idempotent replay for in_app:tx_a".
+          ✅ B5: 10-pack tx_b -> balance=15; 15-pack tx_c -> balance=30.
+
+          === SECTION C — Consumption order (monthly first, then extra)
+              (10/10 PASS) ===
+          Set Pro user analysis_count=39, extra_analytics_credits=2,
+          fresh billing_cycle_start.
+          ✅ C1: consume #1 -> charged='monthly', monthly_remaining=0,
+                 extra=2.
+          ✅ C2: consume #2 -> charged='extra', extra=1.
+          ✅ C3: consume #3 -> charged='extra', extra=0.
+          ✅ C4: consume #4 -> 402 with body
+                 {detail:{code:"out_of_credits", message:"Out of analytics. Upgrade or buy extra analytics."}}.
+
+          === SECTION D — Cycle reset preserves extra credits  (6/6 PASS) ===
+          Set Pro user analysis_count=40, extra_analytics_credits=7,
+          billing_cycle_start = 31 days ago.
+          ✅ D1: GET analytics-usage triggers passive cycle reset:
+                 monthlyAnalyticsUsed=0, extraAnalyticsCredits=7
+                 (preserved across reset).
+          ✅ D2: POST consume -> charged='monthly' (NOT 'extra'),
+                 extra still 7. Extra credits never expire.
+
+          === SECTION E — /api/analyze-hunt consume hook  (2/2 PASS) ===
+          ✅ Endpoint exists. Smoke called with a valid 256x256 PNG +
+             minimal payload + Bearer pro. Returned 200, success=true
+             from the LLM. Verified the user's analysis_count
+             increased by exactly 1 (extra_analytics_credits unchanged
+             since monthly bucket was non-empty). The
+             `consume_one_analysis` hook fires correctly when the
+             AI call succeeds.
+
+          === SECTION F — RevenueCat webhook idempotency  (10/10 PASS) ===
+          REVENUECAT_WEBHOOK_SECRET is NOT set in /app/backend/.env, so
+          per the dev short-circuit in `_verify_revenuecat_signature`,
+          unsigned bodies are accepted (this is the documented
+          dev-mode behaviour).
+          ✅ F1: NON_RENEWING_PURCHASE for ravenscout_extra_analytics_10
+                 (transaction_id=rc_xyz_123) -> 200
+                 {duplicate:false, credits_granted:10}; user balance
+                 increased by 10.
+          ✅ F2: Replay same body -> 200
+                 {duplicate:true, credits_granted:0}; balance unchanged.
+          ✅ F3: type=RENEWAL -> 200 {ignored:"RENEWAL"} (subscription
+                 renewals are handled elsewhere).
+          ✅ F4: type=NON_RENEWING_PURCHASE + unknown product_id -> 200
+                 {ignored:"unknown_product"} (200 so RC stops retrying).
+          ✅ F5: Missing app_user_id -> 400 "Missing required event fields".
+
+          === SECTION G — Cross-tier (trial)  (3/6 — 3 FAIL) ===
+          ✅ G1: Trial buys 5-pack tx_trial_g -> 200
+                 {credits_granted:5, extra_analytics_credits:5}.
+                 Extra-credit purchase works for trial tier as required.
+
+          ❌ G2: Trial /api/analytics/consume AFTER lifetime exhausted —
+                 fails to drain extra credits. EXPECTED (per the
+                 review brief): charged='extra', balance 5 -> 4.
+                 ACTUAL: HTTP 402
+                 {detail:{code:"out_of_credits",
+                          message:"Trial limit reached. Upgrade to continue."}}
+
+                 Reproduction:
+                   1) PUT user state: analysis_count=3 (lifetime limit
+                      hit), extra_analytics_credits=5 (just purchased).
+                   2) POST /api/analytics/consume Bearer trial -> 402.
+                 The trial user's purchased extra credits are unusable
+                 once their lifetime limit (3) is exhausted — the
+                 endpoint rejects the request before
+                 `consume_one_analysis` is ever called.
+
+          ROOT CAUSE  (server.py — check_analysis_allowed,
+          lines 157-163):
+
+            if tier["is_lifetime"]:
+                # Trial: lifetime limit
+                remaining = max(0, tier["analysis_limit"] - analysis_count)
+                if remaining <= 0:
+                    return {"allowed": False, "remaining": 0, ...}
+                return {"allowed": True, ...}
+
+          The trial branch only inspects the lifetime-counter bucket
+          and never adds `extra_analytics_credits` into the gate.
+          The paid-tier branch (lines 205-230) correctly computes
+          `combined_remaining = remaining + extra_credits` and lets
+          the user through whenever EITHER bucket has supply.
+
+          Then in /api/analytics/consume (line 692-715), the handler
+          calls `check_analysis_allowed` FIRST and raises 402 with
+          out_of_credits before `consume_one_analysis` (which DOES
+          handle the extra-credit fallback for the lifetime tier
+          via `if extra_credits > 0`) can run. So trial users who
+          buy a pack after burning their 3 lifetime analyses have
+          their purchased credits effectively locked.
+
+          This violates the brief's Section G assertion:
+          "Trial user calls /api/analytics/consume after the grant
+           — should drain the extra credits (charged='extra')."
+          and the broader feature contract that extra credits work
+          for any tier.
+
+          === SUGGESTED FIX (single function) ===
+          Update the trial branch of `check_analysis_allowed` to
+          mirror the paid-tier branch:
+
+            if tier["is_lifetime"]:
+                lifetime_remaining = max(0, tier["analysis_limit"] - analysis_count)
+                extra_credits = max(0, int(user.get("extra_analytics_credits", 0)))
+                combined_remaining = lifetime_remaining + extra_credits
+                if combined_remaining <= 0:
+                    return {"allowed": False, "remaining": 0,
+                            "limit": tier["analysis_limit"],
+                            "tier": tier_key, "extra_credits": 0,
+                            "message": "Trial limit reached. Upgrade or buy extra analytics to continue."}
+                return {"allowed": True,
+                        "remaining": lifetime_remaining,
+                        "limit": tier["analysis_limit"],
+                        "tier": tier_key,
+                        "extra_credits": extra_credits}
+
+          `consume_one_analysis` already handles the lifetime-vs-extra
+          fall-through correctly — only the gating check needs the fix.
+          No data-model change required.
+
+          === Severity ===
+          Real customer-facing bug: any trial user who purchases an
+          extra-credit pack will be unable to use the credits they
+          paid for once their 3 lifetime trial analyses are gone —
+          which is precisely when they would buy a top-off pack.
+          Recommend fix before production rollout. ALL other sections
+          (A, B, C, D, E, F) PASS — the core monthly+extra logic for
+          paid tiers, idempotency on both in-app and RC webhook
+          paths, and the cycle-reset-preserves-extra invariant are
+          working as specified. No source files modified by testing.
 
 new_regions_pnw_northeast:
   - task: "New canonical regions (pacific_northwest + northeast) + 5 new modifier blocks + 4 new hunt-style modifiers"

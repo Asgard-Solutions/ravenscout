@@ -31,6 +31,9 @@ import {
   type StorageStats,
 } from '../src/media/storageStats';
 import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
+import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
+import { grantExtraCreditsPurchase } from '../src/api/analyticsApi';
+import OutOfCreditsModal from '../src/components/OutOfCreditsModal';
 
 // ---------------------------------------------------------------------
 // Config — tweak these if legal/marketing URLs change.
@@ -95,6 +98,31 @@ export default function ProfileScreen() {
 
   // About modal
   const [aboutOpen, setAboutOpen] = useState(false);
+
+  // Analytics usage + extra-credits modal
+  const { usage, refresh: refreshUsage } = useAnalyticsUsage(true);
+  const [creditsModalOpen, setCreditsModalOpen] = useState(false);
+
+  // Pack purchase handler. RevenueCat is currently MOCKED in this
+  // build (per the project handoff — real `Purchases.purchaseProduct`
+  // wiring is the upcoming P1). When that lands, replace the body
+  // below with the real `Purchases.purchaseProduct(packId)` call and
+  // pass the platform-issued `transactionIdentifier` as the
+  // idempotency key. The server-side grant + idempotency contract
+  // does not change.
+  const handlePackPurchase = useCallback(async (pack: { id: string; credits: number }) => {
+    // MOCK: simulate a successful StoreKit/RevenueCat purchase by
+    // synthesising a deterministic-enough transaction id. Replaying
+    // the same id is safe (server enforces idempotency).
+    const txnId = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await grantExtraCreditsPurchase(pack.id, txnId);
+      await refreshUsage();
+      return 'success' as const;
+    } catch (e) {
+      return 'cancelled' as const;
+    }
+  }, [refreshUsage]);
 
   // ---- effects ----
   useEffect(() => { setNameDraft(user?.name || ''); }, [user?.name]);
@@ -356,6 +384,46 @@ export default function ProfileScreen() {
             <Text style={styles.subscriptionSubtitle}>{tierCopy.subtitle}</Text>
           </View>
         </View>
+
+        {/* Analytics usage card — backend is source of truth. Surfaces
+            monthly used / remaining, extra-credit balance, and a
+            top-off CTA that opens the OutOfCreditsModal. */}
+        {usage && (
+          <View style={styles.analyticsCard} testID="analytics-usage-card">
+            <View style={styles.analyticsHeader}>
+              <Ionicons name="analytics-outline" size={18} color={COLORS.accent} />
+              <Text style={styles.analyticsHeaderText}>HUNT ANALYTICS</Text>
+            </View>
+            <View style={styles.analyticsRow}>
+              <Text style={styles.analyticsLine}>
+                Monthly analytics:{' '}
+                <Text style={styles.analyticsStrong}>
+                  {usage.monthlyAnalyticsUsed} of {usage.monthlyAnalyticsLimit} used
+                </Text>
+              </Text>
+              <Text style={styles.analyticsLine}>
+                Extra credits:{' '}
+                <Text style={styles.analyticsStrong}>
+                  {usage.extraAnalyticsCredits} available
+                </Text>
+              </Text>
+              {usage.resetDate && (
+                <Text style={styles.analyticsHint}>
+                  Monthly limit resets on {formatShortDate(usage.resetDate)}
+                </Text>
+              )}
+            </View>
+            <TouchableOpacity
+              testID="buy-extra-analytics-btn"
+              style={styles.buyExtraBtn}
+              onPress={() => setCreditsModalOpen(true)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="add-circle" size={16} color={COLORS.primary} />
+              <Text style={styles.buyExtraBtnText}>BUY EXTRA ANALYTICS</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Local Storage */}
         <Text style={styles.sectionLabel}>LOCAL STORAGE</Text>
@@ -639,6 +707,15 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Out-of-credits / extra-pack purchase modal */}
+      <OutOfCreditsModal
+        visible={creditsModalOpen}
+        usage={usage}
+        onClose={() => setCreditsModalOpen(false)}
+        onUpgradePress={() => router.push('/subscription')}
+        onPackPurchase={handlePackPurchase}
+      />
     </SafeAreaView>
   );
 }
@@ -701,6 +778,28 @@ const styles = StyleSheet.create({
   },
   subscriptionTitle: { color: COLORS.accent, fontSize: 18, fontWeight: '800' },
   subscriptionSubtitle: { color: COLORS.textSecondary, fontSize: 13, marginTop: 2 },
+  // Analytics usage card
+  analyticsCard: {
+    backgroundColor: 'rgba(11, 31, 42, 0.6)', borderRadius: 12,
+    padding: 16, marginBottom: 18,
+    borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.25)',
+  },
+  analyticsHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  analyticsHeaderText: {
+    color: COLORS.accent, fontSize: 11, fontWeight: '900', letterSpacing: 1,
+  },
+  analyticsRow: { gap: 4, marginBottom: 12 },
+  analyticsLine: { color: COLORS.textPrimary, fontSize: 13 },
+  analyticsStrong: { color: COLORS.accent, fontWeight: '800' },
+  analyticsHint: { color: COLORS.textSecondary, fontSize: 11, marginTop: 4 },
+  buyExtraBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, backgroundColor: COLORS.accent,
+    borderRadius: 10, paddingVertical: 10,
+  },
+  buyExtraBtnText: {
+    color: COLORS.primary, fontSize: 12, fontWeight: '900', letterSpacing: 0.6,
+  },
 
   sectionLabel: {
     color: COLORS.textSecondary, fontSize: 11, fontWeight: '800',
