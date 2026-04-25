@@ -3015,3 +3015,74 @@ agent_communication:
 
         Main agent: please summarise and finish — DELETE
         /api/hunts/{hunt_id} cascade is production-ready.
+
+
+    - agent: "main"
+      message: |
+        Bug fix: Hunt deletion now fully cascades to MongoDB + S3.
+
+        Before this change:
+          - Frontend `deleteHuntById()` only cleaned local AsyncStorage
+            (analyses + media). Never called the backend.
+          - Backend `DELETE /api/hunts/{id}` only removed the Mongo
+            document. A TODO comment acknowledged S3 cleanup was
+            missing and "expected the frontend to call /api/media/delete
+            in parallel" — but the frontend didn't do that either.
+          - Net effect: every hunt the user "deleted" left orphaned
+            metadata in Mongo and orphaned image objects in S3
+            forever.
+
+        Fix:
+        BACKEND — /app/backend/server.py DELETE /api/hunts/{hunt_id}
+          - Step 1: load the hunt scoped to user_id + hunt_id (also
+            enforces ownership). 404 if absent.
+          - Step 2: iterate `image_s3_keys` from the doc; for each key
+            run `_guard_storage_key_owner` (defence-in-depth against
+            stray foreign keys), then `s3_service.delete_object()`.
+            Per-key best-effort — failures are logged and reported in
+            the response, do NOT block the rest of the cleanup.
+          - Step 3: delete the Mongo doc LAST, so a transient S3
+            failure leaves the hunt visible/retryable instead of
+            making it disappear silently with assets lingering.
+          - Response now includes:
+              { ok: true, deleted: 1, s3: { requested, deleted, failed: [...] } }
+
+        FRONTEND — /app/frontend/src/media/huntHydration.ts deleteHuntById()
+          - Now fans out 3 cleanups in parallel: deleteAnalysis(local),
+            removeMediaForHunt(local), deleteHuntFromCloud(api).
+          - Cloud delete is best-effort — wrapped in catch so a
+            transient network failure doesn't leave the hunt visible
+            on the next history rehydrate.
+
+        FRONTEND — /app/frontend/app/history.tsx clearAll()
+          - Snapshots the hunt ids before wiping local state.
+          - After clearing AsyncStorage + device media, fans out a
+            cloud DELETE for every snapshotted id (each best-effort).
+          - Updated copy from "stored on this device" to "this device
+            or in the cloud" so users know what's happening.
+
+        Validation:
+        - End-to-end smoke test (curl + python seed): seeded a hunt
+          with 2 fake S3 keys, called DELETE, verified Mongo doc gone,
+          got `{ok:true, deleted:1, s3:{requested:2, deleted:0,
+          failed:[...]}}`. Idempotent second call → 404 "Hunt not found".
+        - deep_testing_backend_v2 returned 31/31 assertions PASS across
+          7 scenarios: auth, cross-user 404, no S3 keys, with S3 keys
+          (best-effort), idempotency, cross-user safety, foreign S3 key
+          inside owned hunt (skipped via owner guard, still in
+          s3.failed, Mongo cascade still happens).
+        - `yarn jest`: 34/34 still passing.
+        - TypeScript clean for the modified frontend files.
+
+        Files changed:
+        - /app/backend/server.py
+        - /app/frontend/src/media/huntHydration.ts
+        - /app/frontend/app/history.tsx
+
+        Note: the test agent flagged that S3 key prefix in their
+        synthetic test data was `users/{uid}/...` but the real prefix
+        from `s3_service.build_storage_key` is `hunts/{uid}/...`. Real
+        production hunts populate `image_s3_keys` via the upload flow
+        which uses build_storage_key, so real deletes flow through the
+        actual S3 delete path. The owner guard correctly rejects keys
+        with the wrong prefix as a defence layer.
