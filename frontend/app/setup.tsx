@@ -811,6 +811,7 @@ export default function SetupScreen() {
                       height={300}
                       captureRequested={captureCount}
                       onCapture={handleMapCapture}
+                      onUpgradePress={() => router.push('/subscription')}
                     />
                   </View>
 

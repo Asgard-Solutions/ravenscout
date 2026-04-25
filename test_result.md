@@ -2772,3 +2772,74 @@ agent_communication:
         - /app/frontend/__tests__/mapStyles.test.ts
 
         Backend: untouched.
+
+
+    - agent: "main"
+      message: |
+        Feature: Plan-tier feature gating for image upload + map styles.
+
+        New files:
+        - /app/frontend/src/constants/planCapabilities.ts
+            • Canonical PlanId type ('free' | 'core' | 'pro')
+            • normalizePlanId() — collapses 'trial'/null/unknown → 'free'
+              (so the legacy backend label 'trial' keeps working without a
+              DB or backend rename)
+            • getAllowedMapStylesForPlan(planId)
+                Free  -> []
+                Core  -> [outdoor, satellitePlain, topo]
+                Pro   -> [outdoor, landscape, satelliteHybrid, satellitePlain, topo]
+            • canUseMapStyle(planId, styleId)
+            • canUploadImages(planId)        — true for all 3 tiers (per spec)
+            • resolveAllowedStyleForPlan()   — downgrade-safe fallback to first
+              allowed style; returns null for Free
+        - /app/frontend/__tests__/planCapabilities.test.ts (21 tests):
+            • normalizePlanId across canonical / 'trial' alias / unknown / null /
+              wrong-type inputs
+            • canUploadImages: free ✓, core ✓, pro ✓, unknown defaults safely
+            • getAllowedMapStylesForPlan: free=[], core=3-style, pro=5-style,
+              order assertions, fresh-copy guarantee
+            • canUseMapStyle: Free blocked from all (incl outdoor),
+              Core allowed [outdoor, satellitePlain, topo],
+              Core blocked Pro-only [satelliteHybrid, landscape],
+              Pro allowed all, unknown / non-string ids rejected
+            • resolveAllowedStyleForPlan: returns null for Free, keeps allowed,
+              falls back for downgraded users (Hybrid → Outdoor on Core),
+              handles null / unknown / undefined gracefully
+
+        Updates:
+        - /app/frontend/src/map/TacticalMapView.tsx
+            • Reads user.tier via useAuth()
+            • Filters chip strip by getAllowedMapStylesForPlan(planId)
+            • Downgrade migration effect: if persisted styleId is not in
+              allowedStyleIds, snap to resolveAllowedStyleForPlan(...) so a
+              Pro user who picked Hybrid then downgraded to Core lands on
+              Outdoor instead of an empty / invalid map
+            • Free tier branch: renders a Raven-Scout-themed "UNLOCK MAP STYLES /
+              Upgrade to Core or Pro" upsell button (gold accent, dark navy
+              fill, gold halo glow) where the chip strip would normally be;
+              tap fires `onUpgradePress` (caller wires this to /subscription)
+            • Existing setup.tsx already route-gates the entire MAP toggle
+              behind `isPaidTier` for trial users — the in-component upsell
+              is defence-in-depth for any other place TacticalMapView renders
+              without that route-level gate (e.g. results.tsx hunt review)
+        - /app/frontend/app/setup.tsx + /app/frontend/app/results.tsx
+            • Both TacticalMapView usages now pass
+              onUpgradePress={() => router.push('/subscription')}
+
+        Style-id naming note: spec listed snake_case ids (satellite_plain,
+        satellite_hybrid). Existing registry + persisted AsyncStorage values
+        use camelCase (satellitePlain, satelliteHybrid). Renaming would break
+        every existing user's saved preference, so I kept camelCase as the
+        runtime ids and documented the 1:1 mapping in planCapabilities.ts.
+        Functionally identical, zero migration risk.
+
+        Validation:
+        - `yarn jest` → 2 suites / 34 tests passing
+            (mapStyles 13 + planCapabilities 21).
+        - `yarn test:unit` → 137 node-test cases still passing (no regressions).
+        - Visual screenshot (Pro session, mobile 390x844): all 5 chips
+          render correctly. Free/trial route-gated by existing logic
+          (separate upsell card was already in setup.tsx).
+        - TypeScript: `tsc --noEmit` clean for the modified files.
+
+        Backend: untouched. No retest required for this change.

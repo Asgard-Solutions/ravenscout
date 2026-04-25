@@ -737,6 +737,7 @@ export default function ResultsScreen() {
               center={hunt.locationCoords || { lat: 39.8283, lon: -98.5795 }}
               zoom={hunt.locationCoords ? 12 : 5}
               height={MAP_HEIGHT}
+              onUpgradePress={() => router.push('/subscription')}
             />
             {!hunt.locationCoords && (
               <View style={styles.noLocationHint}>
@@ -811,6 +812,7 @@ export default function ResultsScreen() {
                   zoom={hunt.locationCoords ? 14 : 5}
                   height={MAP_HEIGHT}
                   showStyleSwitcher={true}
+                  onUpgradePress={() => router.push('/subscription')}
                 />
               </View>
             )}

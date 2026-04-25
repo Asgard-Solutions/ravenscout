@@ -8,8 +8,14 @@ import {
   hasMapTilerKey,
   type RavenScoutMapStyleId,
 } from '../constants/mapStyles';
+import {
+  getAllowedMapStylesForPlan,
+  resolveAllowedStyleForPlan,
+  normalizePlanId,
+} from '../constants/planCapabilities';
 import { getFallbackStyleJSON } from '../map/MapProvider';
 import { useMapStylePreference } from '../hooks/useMapStylePreference';
+import { useAuth } from '../hooks/useAuth';
 
 interface TacticalMapViewProps {
   center?: { lat: number; lon: number };
@@ -23,6 +29,8 @@ interface TacticalMapViewProps {
    * preference (or DEFAULT_MAP_STYLE_ID = "outdoor") is used.
    */
   initialStyle?: RavenScoutMapStyleId;
+  /** Optional callback fired when a Free user taps the upsell. */
+  onUpgradePress?: () => void;
 }
 
 export default function TacticalMapView({
@@ -33,8 +41,12 @@ export default function TacticalMapView({
   captureRequested = 0,
   onCapture,
   initialStyle,
+  onUpgradePress,
 }: TacticalMapViewProps) {
   const useMaptiler = hasMapTilerKey();
+  const { user } = useAuth();
+  const planId = normalizePlanId(user?.tier);
+  const allowedStyleIds = useMemo(() => getAllowedMapStylesForPlan(planId), [planId]);
   const { styleId, setStyleId } = useMapStylePreference(initialStyle);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const webviewRef = useRef<any>(null);
@@ -66,6 +78,19 @@ export default function TacticalMapView({
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     if (tooltipDismissTimerRef.current) clearTimeout(tooltipDismissTimerRef.current);
   }, []);
+
+  // Tier-aware downgrade migration: if the user's persisted style is
+  // not allowed by their current plan (e.g. a Pro user picked Hybrid
+  // then downgraded to Core), silently snap to the first allowed style
+  // for their tier. Free users have an empty allow-list and will see
+  // the upsell instead — we leave their persisted value alone.
+  useEffect(() => {
+    if (allowedStyleIds.length === 0) return;
+    if (!allowedStyleIds.includes(styleId)) {
+      const fallback = resolveAllowedStyleForPlan(planId, styleId);
+      if (fallback) setStyleId(fallback);
+    }
+  }, [planId, allowedStyleIds, styleId, setStyleId]);
 
   // The HTML is built ONCE (with the bootstrap style URL) so the
   // iframe / WebView never reloads on style switch — that would
@@ -272,6 +297,14 @@ export default function TacticalMapView({
     ? RAVEN_SCOUT_MAP_STYLES.find(s => s.id === tooltipFor)
     : null;
 
+  // Tier-filtered switcher rows. Free => empty (we render the upsell
+  // instead). Core / Pro get their plan-specific subset, in plan order.
+  const switcherStyles = useMemo(
+    () => RAVEN_SCOUT_MAP_STYLES.filter(s => allowedStyleIds.includes(s.id)),
+    [allowedStyleIds],
+  );
+  const isFreeTier = planId === 'free';
+
   return (
     <View style={[styles.container, { height }]}>
       {mapContent}
@@ -284,14 +317,31 @@ export default function TacticalMapView({
         </View>
       )}
 
-      {showStyleSwitcher && useMaptiler && (
+      {showStyleSwitcher && useMaptiler && isFreeTier && (
+        <Pressable
+          testID="map-style-upsell"
+          accessibilityRole="button"
+          accessibilityLabel="Upgrade to Core or Pro to unlock map styles"
+          onPress={onUpgradePress}
+          style={({ pressed }) => [
+            styles.upsell,
+            pressed && styles.upsellPressed,
+          ]}
+        >
+          <Ionicons name="lock-closed" size={14} color={COLORS.accent} />
+          <Text style={styles.upsellLabel}>UNLOCK MAP STYLES</Text>
+          <Text style={styles.upsellSub}>Upgrade to Core or Pro</Text>
+        </Pressable>
+      )}
+
+      {showStyleSwitcher && useMaptiler && !isFreeTier && switcherStyles.length > 0 && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.styleSwitcherContent}
           style={styles.styleSwitcher}
         >
-          {RAVEN_SCOUT_MAP_STYLES.map((s) => {
+          {switcherStyles.map((s) => {
             const active = styleId === s.id;
             return (
               <Pressable
@@ -392,6 +442,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 14,
     textAlign: 'center',
+  },
+  upsell: {
+    position: 'absolute', bottom: 24, left: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 8,
+    backgroundColor: 'rgba(11, 31, 42, 0.92)',
+    borderRadius: 10,
+    borderWidth: 1, borderColor: 'rgba(200, 155, 60, 0.55)',
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.45,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  upsellPressed: { opacity: 0.78 },
+  upsellLabel: {
+    color: COLORS.accent, fontSize: 11, fontWeight: '900', letterSpacing: 0.8,
+  },
+  upsellSub: {
+    color: COLORS.fogGray, fontSize: 10, fontWeight: '600',
   },
   attribution: {
     position: 'absolute', bottom: 4, right: 8,
