@@ -39,9 +39,9 @@ describe('mapStyles config', () => {
     });
     afterAll(() => { delete process.env.EXPO_PUBLIC_MAPTILER_KEY; });
 
-    it('exposes exactly four canonical styles in the documented order', () => {
+    it('exposes exactly five canonical styles in the documented order', () => {
       expect(mod.RAVEN_SCOUT_MAP_STYLES.map(s => s.id)).toEqual([
-        'outdoor', 'satelliteHybrid', 'satellitePlain', 'topo',
+        'outdoor', 'landscape', 'satelliteHybrid', 'satellitePlain', 'topo',
       ]);
     });
 
@@ -56,6 +56,7 @@ describe('mapStyles config', () => {
     it('uses the v4 slugs the spec calls out', () => {
       const byId = Object.fromEntries(mod.RAVEN_SCOUT_MAP_STYLES.map(s => [s.id, s]));
       expect(byId.outdoor.styleUrl).toContain('/maps/outdoor-v4/style.json');
+      expect(byId.landscape.styleUrl).toContain('/maps/landscape-v4/style.json');
       expect(byId.satelliteHybrid.styleUrl).toContain('/maps/hybrid-v4/style.json');
       expect(byId.satellitePlain.styleUrl).toContain('/maps/satellite-v4/style.json');
       expect(byId.topo.styleUrl).toContain('/maps/topo-v4/style.json');
@@ -70,11 +71,12 @@ describe('mapStyles config', () => {
 
     it('hasMapTilerKey() reflects env presence', () => {
       expect(mod.hasMapTilerKey()).toBe(true);
-      expect(mod.getActiveMapStyles()).toHaveLength(4);
+      expect(mod.getActiveMapStyles()).toHaveLength(5);
     });
 
     it('isRavenScoutMapStyleId guards against bad ids', () => {
       expect(mod.isRavenScoutMapStyleId('outdoor')).toBe(true);
+      expect(mod.isRavenScoutMapStyleId('landscape')).toBe(true);
       expect(mod.isRavenScoutMapStyleId('topo')).toBe(true);
       expect(mod.isRavenScoutMapStyleId('streets')).toBe(false);
       expect(mod.isRavenScoutMapStyleId(42)).toBe(false);
@@ -141,6 +143,14 @@ describe('map style persistence contract', () => {
     expect(stored).toBe('topo');
     expect(mod.isRavenScoutMapStyleId(stored)).toBe(true);
     expect(mod.resolveMapStyle(stored).id).toBe('topo');
+  });
+
+  it('warm-start with a persisted "landscape" id -> hook would restore it', async () => {
+    await AsyncStorage.setItem(mod.MAP_STYLE_STORAGE_KEY, 'landscape');
+    const stored = await AsyncStorage.getItem(mod.MAP_STYLE_STORAGE_KEY);
+    expect(stored).toBe('landscape');
+    expect(mod.isRavenScoutMapStyleId(stored)).toBe(true);
+    expect(mod.resolveMapStyle(stored).id).toBe('landscape');
   });
 
   it('warm-start with a stale legacy id -> hook would fall back to Outdoor', async () => {

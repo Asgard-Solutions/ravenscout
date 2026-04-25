@@ -2725,3 +2725,50 @@ agent_communication:
         Frontend: visual verification done via screenshot tool. No further
         frontend agent run requested unless the user wants to confirm the
         long-press tooltip on a real device build.
+
+
+    - agent: "main"
+      message: |
+        Feature: Added MapTiler Landscape (v4) as the 5th map style.
+
+        Scope delivered (per spec):
+        - Registry: added `landscape` to `RAVEN_SCOUT_MAP_STYLES` between
+          Outdoor and Hybrid (id `landscape`, label `LAND`, slug
+          `landscape-v4`, icon `leaf`).
+        - Type: extended `RavenScoutMapStyleId` union with `'landscape'`.
+        - Helpers: `isRavenScoutMapStyleId`, `resolveMapStyle`, and
+          `getActiveMapStyles` iterate the registry, so they auto-pick
+          up the new id (no per-id changes needed).
+        - Switcher UI: TacticalMapView already maps over the registry,
+          so Landscape rendered automatically as the 2nd chip; existing
+          Raven Scout dark/gold chip styling preserved; horizontal
+          ScrollView still scrolls correctly with 5 options.
+        - Persistence: storage key unchanged. A `landscape` value
+          round-trips through getItem → resolveMapStyle. Older saved
+          ids ('outdoor'/'topo'/etc.) keep working; unknown legacy ids
+          still fall back to Outdoor.
+        - Map behavior: switching to/from Landscape uses the existing
+          postMessage → `map.setStyle()` path — no iframe rebuild,
+          camera (center/zoom/bearing/pitch) preserved.
+        - MapProvider shim: no change needed.
+        - Default: still `outdoor`.
+
+        Validation:
+        - landscape-v4 style.json → HTTP 200 with EXPO_PUBLIC_MAPTILER_KEY.
+        - Visual screenshots (390x844): 5 chips render in spec'd order
+          (OUTDOOR | LAND | HYBRID | SAT | TOPO); LAND chip activates
+          gold-glow on tap; tile imagery flips to MapTiler Landscape
+          (terrain shading visible); switch back to OUTDOOR works.
+
+        Tests:
+        - Updated mapStyles.test.ts: 4 → 5 style assertions, new
+          `landscape-v4` slug test, new `isRavenScoutMapStyleId('landscape')`
+          test, new persistence test for `landscape` warm-start,
+          `getActiveMapStyles().length` 4 → 5.
+        - Jest: 13/13 passing. Node test runner: 137/137 still passing.
+
+        Files changed:
+        - /app/frontend/src/constants/mapStyles.ts
+        - /app/frontend/__tests__/mapStyles.test.ts
+
+        Backend: untouched.

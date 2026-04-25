@@ -12,6 +12,7 @@
 
 export type RavenScoutMapStyleId =
   | 'outdoor'
+  | 'landscape'
   | 'satelliteHybrid'
   | 'satellitePlain'
   | 'topo';
@@ -64,6 +65,13 @@ export const RAVEN_SCOUT_MAP_STYLES: ReadonlyArray<RavenScoutMapStyle> = [
     description: 'Best default scouting map for trails, terrain, parks, and outdoor context.',
     icon: 'trail-sign',
     styleUrl: buildStyleUrl('outdoor-v4'),
+  },
+  {
+    id: 'landscape',
+    label: 'LAND',
+    description: 'Terrain-focused map with natural features and elevation shading. Great balance between Outdoor and Topo.',
+    icon: 'leaf',
+    styleUrl: buildStyleUrl('landscape-v4'),
   },
   {
     id: 'satelliteHybrid',
