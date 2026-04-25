@@ -69,10 +69,22 @@ export async function isBiometricEnabled(): Promise<boolean> {
 
 export async function enableBiometric(sessionToken: string): Promise<boolean> {
   try {
-    await SecureStore.setItemAsync(STORE_KEY, sessionToken, {
-      requireAuthentication: true,
-      authenticationPrompt: 'Confirm to enable biometric unlock',
-    });
+    if (Platform.OS === 'ios') {
+      // iOS Keychain with biometric ACL: the OS prompts for biometric
+      // automatically on read, so we get a clean single-prompt unlock.
+      await SecureStore.setItemAsync(STORE_KEY, sessionToken, {
+        requireAuthentication: true,
+        authenticationPrompt: 'Confirm to enable biometric unlock',
+      });
+    } else {
+      // Android: store the token encrypted-at-rest in EncryptedSharedPreferences
+      // WITHOUT `requireAuthentication`. We gate access at unlock time via
+      // a separate `authenticateAsync` call (see authenticateWithBiometric).
+      // Storing with requireAuthentication on Android causes the read side
+      // to silently fail when called without the matching auth context,
+      // which is the bug that made fingerprint "do nothing".
+      await SecureStore.setItemAsync(STORE_KEY, sessionToken);
+    }
     await AsyncStorage.setItem(FLAG_KEY, '1');
     return true;
   } catch (err) {
@@ -91,17 +103,30 @@ export async function authenticateWithBiometric(reason = 'Unlock Raven Scout'): 
   { ok: true; sessionToken: string } | { ok: false; reason: string }
 > {
   try {
-    const auth = await LocalAuthentication.authenticateAsync({
-      promptMessage: reason,
-      disableDeviceFallback: false,
-      fallbackLabel: 'Use password',
-      cancelLabel: 'Cancel',
-    });
-    if (!auth.success) {
-      return { ok: false, reason: (auth as any).error || 'cancelled' };
+    if (Platform.OS === 'android') {
+      // Android path: single biometric prompt (no "Use PIN" fallback),
+      // then read the un-gated token from SecureStore.
+      const auth = await LocalAuthentication.authenticateAsync({
+        promptMessage: reason,
+        // CRITICAL: disable the device lock-screen PIN/password fallback.
+        // Users never set an app-level PIN, and the device PIN fallback
+        // is not what they expect to see here.
+        disableDeviceFallback: true,
+        cancelLabel: 'Cancel',
+      });
+      if (!auth.success) {
+        return { ok: false, reason: (auth as any).error || 'cancelled' };
+      }
+      const token = await SecureStore.getItemAsync(STORE_KEY);
+      if (!token) return { ok: false, reason: 'no_stored_token' };
+      return { ok: true, sessionToken: token };
     }
+
+    // iOS path: the Keychain biometric ACL prompts for Face/Touch ID
+    // during getItemAsync, so we don't need a separate authenticateAsync.
+    // This keeps it a single, native-looking prompt.
     const token = await SecureStore.getItemAsync(STORE_KEY, {
-      requireAuthentication: Platform.OS === 'ios' ? true : false,
+      requireAuthentication: true,
       authenticationPrompt: reason,
     });
     if (!token) return { ok: false, reason: 'no_stored_token' };

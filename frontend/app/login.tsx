@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
 import { RavenSpinner } from '../src/components/RavenSpinner';
-import { isBiometricAvailable, isBiometricEnabled, enableBiometric, authenticateWithBiometric } from '../src/utils/biometric';
+import { isBiometricAvailable, isBiometricEnabled, enableBiometric, authenticateWithBiometric, disableBiometric } from '../src/utils/biometric';
 
 // Sign-in screen: email+password, Google OAuth, and biometric unlock.
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT
@@ -99,7 +99,19 @@ export default function LoginScreen() {
   const handleBiometric = async () => {
     const r = await authenticateWithBiometric('Unlock Raven Scout');
     if (!r.ok) {
-      if (r.reason === 'cancelled' || r.reason === 'user_cancel') return;
+      if (r.reason === 'cancelled' || r.reason === 'user_cancel' || r.reason === 'UserCancel') return;
+      // Self-healing: if the token wasn't readable (legacy enrollment from
+      // the previous broken code path, or the device biometric set
+      // changed), auto-disable so the next enrollment uses the new path
+      // and fall through to password sign-in.
+      if (r.reason === 'no_stored_token' || /key|invalid|biometric/i.test(r.reason || '')) {
+        await disableBiometric();
+        Alert.alert(
+          'Re-enable fingerprint',
+          'We need to re-register your fingerprint after the latest update. Please sign in with your password and enable Fingerprint Login again from the prompt or Profile.',
+        );
+        return;
+      }
       Alert.alert('Biometric failed', 'Sign in with your password instead.');
       return;
     }
