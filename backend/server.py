@@ -539,7 +539,17 @@ async def get_tiers():
 import s3_service  # noqa: E402
 
 
-_ALLOWED_MEDIA_EXT = {"jpg", "jpeg", "png", "webp"}
+_ALLOWED_MEDIA_EXT = {"jpg", "jpeg", "png", "webp", "heic", "heif"}
+# Allowed image MIME types for cloud upload. Anything else is rejected
+# at the presign endpoint so the caller never wastes a round-trip
+# trying to PUT a non-image to S3.
+_ALLOWED_MEDIA_MIMES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
 _ALLOWED_MEDIA_ROLES = {"primary", "context", "thumbnail"}
 
 
@@ -604,9 +614,17 @@ async def presign_media_upload(body: PresignUploadBody, request: Request):
     if ext not in _ALLOWED_MEDIA_EXT:
         raise HTTPException(status_code=400, detail=f"extension must be one of {sorted(_ALLOWED_MEDIA_EXT)}")
 
-    mime = body.mime or "image/jpeg"
-    if not mime.startswith("image/"):
-        raise HTTPException(status_code=400, detail="mime must be an image/* type")
+    mime = (body.mime or "image/jpeg").lower()
+    if mime not in _ALLOWED_MEDIA_MIMES:
+        # Strict allowlist — reject any non-image MIME, plus image
+        # types we do not support (e.g. tiff/gif/svg). This protects
+        # the bucket from being used as generic file storage and makes
+        # downstream image processing safe to assume one of these
+        # known formats.
+        raise HTTPException(
+            status_code=400,
+            detail=f"mime must be one of {sorted(_ALLOWED_MEDIA_MIMES)}",
+        )
 
     if not s3_service.is_configured():
         raise HTTPException(

@@ -253,6 +253,134 @@ backend:
             on this server." (AWS env vars deliberately blank)
           Tested with test_session_rs_001 (pro) and test_session_trial_001
           (trial). No real S3 upload attempted.
+      - working: true
+        agent: "testing"
+        comment: |
+          LIVE S3 ROUND-TRIP VERIFIED against ravenscout-media-prod
+          in us-east-2 (key swap fix + tightened MIME allowlist).
+          Harness: /app/backend_test.py — 41/42 substantive assertions
+          PASS, 1 minor doc-vs-impl drift documented below. Zero 5xx
+          observed. Test against http://localhost:8001/api with
+          Bearer test_session_rs_001 (Pro) and test_session_trial_001
+          (Trial).
+
+          === SECTION 1 — Auth + tier gating  (3/3 PASS) ===
+          ✅ no Bearer -> 401 "Not authenticated"
+          ✅ trial -> 403 "Cloud media storage is a Pro tier feature."
+          ✅ pro -> 200 with full presign body including a real
+             https://ravenscout-media-prod.s3.us-east-2.amazonaws.com
+             URL signed with X-Amz-Algorithm=AWS4-HMAC-SHA256.
+
+          === SECTION 2 — Input validation  (14/14 PASS) ===
+          ✅ unknown role 'hero' -> 400
+             detail="role must be one of ['context','primary','thumbnail']"
+          ✅ ext in {tiff,gif,svg} -> 400 with allowlist in detail
+             "extension must be one of ['heic','heif','jpeg','jpg','png','webp']"
+          ✅ mime in {image/gif, image/tiff, application/pdf, text/plain}
+             -> 400 "mime must be one of ['image/heic','image/heif',
+             'image/jpeg','image/png','image/webp']"
+          ✅ Each allowed combo -> 200:
+             - image/jpeg + jpg
+             - image/jpeg + jpeg  (server NORMALISES key extension to .jpg —
+               verified key_ends=...ef30.jpg, no .jpeg)
+             - image/png  + png
+             - image/webp + webp
+             - image/heic + heic
+             - image/heif + heif
+
+          === SECTION 3 — Response shape  (8/9 PASS, 1 minor) ===
+          Sample body for imageId="hello world?" + huntId=null + role=primary +
+          mime=image/png + ext=png:
+            {
+              "uploadUrl": "https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/hunts/test-user-001/unassigned/primary/hello_world.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA...&X-Amz-Signature=...",
+              "assetUrl":  "https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/hunts/test-user-001/unassigned/primary/hello_world.png",
+              "storageKey":"hunts/test-user-001/unassigned/primary/hello_world.png",
+              "expiresIn": 900,
+              "privateDelivery": true,
+              "mime": "image/png"
+            }
+          ✅ storageKey is sanitised — space and '?' replaced with '_',
+             yielding "hello_world.png" (no slashes, no question marks).
+          ✅ storageKey ends in .png; .jpeg input correctly normalised to .jpg
+             at the segment boundary (sec 2).
+          ✅ uploadUrl matches the documented host pattern
+             https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/...
+          ✅ uploadUrl contains X-Amz-Signature (real SigV4 presign).
+          ✅ privateDelivery == true (no CLOUDFRONT_BASE_URL / S3_PUBLIC_BASE_URL set).
+          ✅ expiresIn == 900 (the configured S3_PRESIGN_UPLOAD_TTL).
+          ✅ mime echoes input.
+          ⚠️ MINOR — doc-vs-impl drift on the missing-huntId placeholder:
+             review brief documents pattern as
+             hunts/{userId}/{huntId-or-_unassigned}/{role}/{imageId}.{ext}
+             but s3_service._safe() strips leading "._-" so the actual
+             segment is "unassigned" (no leading underscore). I.e. the
+             observed key is hunts/test-user-001/unassigned/primary/...
+             not hunts/test-user-001/_unassigned/primary/.... This is
+             cosmetic — the key is still deterministic, well-scoped,
+             and ownership-checkable; the round-trip works perfectly
+             with this segment. Either update the docstring to "unassigned"
+             or change s3_service.build_storage_key to pass the literal
+             "_unassigned" through without stripping (e.g. only run
+             _safe when hunt_id is provided). NOT BLOCKING.
+
+          === SECTION 4 — LIVE S3 round-trip  (6/6 PASS) ===
+          a) presign-upload (Pro, image/png+png) -> 200
+             storageKey = hunts/test-user-001/hunt_<uuid6>/primary/smoke_<uuid8>.png
+          b) PUT 67-byte 1x1 PNG to uploadUrl with Content-Type: image/png
+             -> 200 OK from S3 (real production bucket).
+          c) POST /api/media/presign-download {storageKey} -> 200 with
+             https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/...
+             signed GET URL.
+          d) GET downloadUrl -> 200 with content length=67, body bytes
+             match the original 1x1 PNG byte-for-byte.
+          e) POST /api/media/delete {storageKey} -> 200 {"success": true}.
+          f) Re-presign + GET on the deleted key -> 404 NoSuchKey from S3.
+          AWS credentials key swap fix CONFIRMED IN PRODUCTION — the
+          previously-broken AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+          pairing now successfully signs both PUT and GET against
+          ravenscout-media-prod.
+
+          === SECTION 5 — Owner guard  (6/6 PASS) ===
+          On both /api/media/presign-download and /api/media/delete:
+          ✅ key=hunts/SOMEONE_ELSE/h1/primary/img.jpg -> 403
+             "Storage key does not belong to caller"
+          ✅ key=users/test-user-001/foo.jpg -> 400 "Invalid storage key"
+          ✅ key=hunts/test-user-001/../whoops.jpg -> 400 "Invalid storage key"
+          (Owner guard executes before S3-configured check, as designed.)
+
+          === SECTION 6 — DELETE /api/hunts/{id} cascade with REAL S3 keys
+              (4/4 PASS) ===
+          1. presign-upload + PUT -> created real S3 object
+             hunts/test-user-001/rs-cascade-<uuid>/primary/casc_<uuid>.png
+          2. POST /api/hunts seeded a hunt for test-user-001 with
+             image_s3_keys=[<the real key>] -> 200.
+          3. DELETE /api/hunts/{hunt_id} (Bearer pro) ->
+             200 {
+               "ok": true,
+               "deleted": 1,
+               "s3": {"requested": 1, "deleted": 1, "failed": []}
+             }
+             EXACTLY the shape required by the brief.
+          4. Re-presign-download still succeeds (URL is still mintable),
+             but GET on the URL -> 404 NoSuchKey. S3 object truly gone.
+          The earlier "users/{user_id}/..." prefix issue from the prior
+          run is no longer reachable when image_s3_keys are populated
+          via the actual presign-upload flow (which always emits
+          hunts/{user_id}/...) so requested == deleted in the happy
+          path now.
+
+          === REGRESSIONS / ZERO-FAIL CHECKS ===
+          ✅ Zero 5xx on /api/media/* across the entire run.
+          ✅ Zero 5xx on DELETE /api/hunts/{id} during the cascade.
+          ✅ MIME allowlist tightening did NOT break any previously
+             allowed combo (jpg/jpeg/png/webp/heic/heif all still 200).
+          ✅ Foreign + traversal keys still rejected at the validation
+             layer before S3 is ever touched.
+
+          The AWS S3 image upload pipeline against the real production
+          bucket is end-to-end working. Main agent: please summarise
+          and finish — only the cosmetic _unassigned-vs-unassigned
+          note is outstanding and is NOT blocking.
 
   - task: "POST /api/media/presign-download endpoint (Pro tier)"
     implemented: true
@@ -863,10 +991,52 @@ frontend:
           Main agent: please summarise and finish — DELETE
           /api/hunts/{hunt_id} S3+Mongo cascade is production-ready.
 
+agent_communication:
+    -agent: "testing"
+    -message: |
+      AWS S3 image upload pipeline (production bucket
+      ravenscout-media-prod, us-east-2) verified END-TO-END via
+      /app/backend_test.py against http://localhost:8001/api.
+
+      41/42 substantive assertions PASS, 1 cosmetic doc-vs-impl
+      drift (NOT BLOCKING):
+
+      • SECTION 1 Auth+tier:               3/3   PASS
+      • SECTION 2 Validation:              14/14 PASS  (role / extension /
+        mime allowlists working; jpeg->jpg key normalization confirmed)
+      • SECTION 3 Response shape:          8/9   PASS-with-MINOR (see below)
+      • SECTION 4 Live S3 round-trip:      6/6   PASS  (PUT, GET, DELETE,
+        re-GET 404 — credentials key swap fix CONFIRMED working in prod)
+      • SECTION 5 Owner guard:             6/6   PASS  (foreign / non-hunts
+        prefix / '..' all rejected on both download + delete)
+      • SECTION 6 DELETE /api/hunts cascade with REAL S3 keys: 4/4 PASS
+        Response: {"ok":true,"deleted":1,"s3":{"requested":1,
+        "deleted":1,"failed":[]}} and the S3 object is actually gone.
+
+      Zero 5xx across the entire run. Trial user correctly 403s,
+      no-bearer correctly 401s, presign URLs are real SigV4
+      https://ravenscout-media-prod.s3.us-east-2.amazonaws.com/...
+      links signed with the (now-correct) AKIAVWNDUDMX5YVJ6DGG key.
+
+      MINOR drift (Section 3, single failing assertion):
+      The brief documents the missing-huntId placeholder as
+      "_unassigned" but s3_service._safe() strips leading "._-",
+      so the actual segment is "unassigned" (no leading underscore).
+      Observed key: hunts/test-user-001/unassigned/primary/<imageId>.png
+      The key is still deterministic, well-scoped, and ownership-
+      checkable, and the round-trip works perfectly with this
+      segment. Either update the docstring or change
+      build_storage_key to short-circuit when hunt_id is None and
+      pass "_unassigned" through verbatim. Not blocking.
+
+      No source files modified by testing. Main agent: please
+      summarise and finish — the AWS S3 cloud media pipeline is
+      production-ready against the real bucket.
+
 metadata:
   created_by: "main_agent"
-  version: "3.2"
-  test_sequence: 1
+  version: "3.3"
+  test_sequence: 2
   run_ui: false
 
 test_plan:
