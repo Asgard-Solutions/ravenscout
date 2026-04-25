@@ -150,8 +150,8 @@ export default function TacticalMapView({
     });
     // Explicitly attach to window so injectJavaScript() from the host
     // RN side can always find it across WebView strict-mode quirks
-    // (some Android WebView builds do NOT alias top-level `var` to
-    // window — chip taps would no-op without this).
+    // (some Android WebView builds do NOT alias top-level var to
+    // window -- chip taps would no-op without this).
     window.map = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
 
@@ -228,7 +228,7 @@ export default function TacticalMapView({
       const url = JSON.stringify(cfg.styleUrl);
       // NOTE: We do a brief retry-poll in case the chip is tapped
       // before maplibre finishes the initial load. Without this, on
-      // slower Android devices `window.map` can still be undefined
+      // slower Android devices window.map can still be undefined
       // when the host fires the first style change.
       webviewRef.current.injectJavaScript(`
         (function() {
