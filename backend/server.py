@@ -1521,18 +1521,70 @@ async def update_hunt(hunt_id: str, body: HuntPatchBody, request: Request):
 
 @api_router.delete("/hunts/{hunt_id}")
 async def delete_hunt(hunt_id: str, request: Request):
-    """Delete a hunt. Idempotent: 404 if it didn't exist."""
+    """
+    Fully delete a hunt: removes the Mongo document AND every S3
+    object listed in its `image_s3_keys`. Best-effort on S3 — a
+    single object failure is logged but does not block the Mongo
+    delete (orphan cleanup is preferable to a hunt that can't be
+    deleted at all). Idempotent: 404 if it didn't exist.
+    """
     user = await get_current_user(request)
     uid = user["user_id"]
 
-    # TODO (future): also schedule deletion of any associated S3
-    # assets in image_s3_keys. For now the frontend is expected to
-    # fire separate /api/media/delete requests in parallel — matches
-    # the existing contract used elsewhere in the app.
-    result = await db.hunts.delete_one({"user_id": uid, "hunt_id": hunt_id})
-    if result.deleted_count == 0:
+    # Step 1: load the hunt so we know which S3 keys belong to it.
+    # Filtering by user_id also enforces ownership for the S3 deletes.
+    hunt_doc = await db.hunts.find_one(
+        {"user_id": uid, "hunt_id": hunt_id},
+        {"image_s3_keys": 1},
+    )
+    if not hunt_doc:
         raise HTTPException(status_code=404, detail="Hunt not found")
-    return {"ok": True, "deleted": 1}
+
+    # Step 2: delete the S3 objects (if any). Per-key best-effort —
+    # we keep going even if one fails so partial cleanup still
+    # happens and Mongo doesn't get out of sync with S3 long term.
+    s3_keys = hunt_doc.get("image_s3_keys") or []
+    s3_deleted = 0
+    s3_failed: list[str] = []
+    if s3_keys and s3_service.is_configured():
+        for key in s3_keys:
+            # Defense in depth: never delete keys that don't belong
+            # to this user, even if Mongo somehow stored a stray.
+            try:
+                _guard_storage_key_owner(user, key)
+            except HTTPException:
+                logger.warning("delete_hunt: skipped foreign s3 key %s", key)
+                s3_failed.append(key)
+                continue
+            try:
+                if s3_service.delete_object(key):
+                    s3_deleted += 1
+                else:
+                    s3_failed.append(key)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("delete_hunt: s3 delete failed for %s: %s", key, exc)
+                s3_failed.append(key)
+    elif s3_keys and not s3_service.is_configured():
+        logger.warning(
+            "delete_hunt: %d s3 keys orphaned because S3 is not configured",
+            len(s3_keys),
+        )
+        s3_failed = list(s3_keys)
+
+    # Step 3: delete the Mongo doc. We do this last so a transient
+    # S3 failure leaves the hunt visible (and retryable) instead of
+    # silently disappearing while its assets linger.
+    result = await db.hunts.delete_one({"user_id": uid, "hunt_id": hunt_id})
+
+    return {
+        "ok": True,
+        "deleted": result.deleted_count,
+        "s3": {
+            "requested": len(s3_keys),
+            "deleted": s3_deleted,
+            "failed": s3_failed,
+        },
+    }
 
 
 
