@@ -1,48 +1,53 @@
 /**
- * MapProvider - Provider-agnostic map configuration
- * 
- * Current: MapTiler (satellite, outdoor, streets)
- * Renderer: MapLibre GL JS
- * 
- * To swap to Mapbox later: update ACTIVE_PROVIDER and add Mapbox token
+ * MapProvider — legacy shim.
+ *
+ * The canonical Raven Scout style catalog now lives in
+ * `src/constants/mapStyles.ts`. This module is preserved purely for
+ * backward compatibility with older imports (`getStyleUrl(style)`,
+ * `hasMaptilerKey()`, `getFallbackStyleJSON()`) and proxies through
+ * to the new config.
+ *
+ * New code should import from `../constants/mapStyles` directly.
  */
+import {
+  RAVEN_SCOUT_MAP_STYLES,
+  hasMapTilerKey,
+  resolveMapStyle,
+  type RavenScoutMapStyleId,
+} from '../constants/mapStyles';
 
-export type MapStyle = 'streets' | 'satellite' | 'outdoor';
+// Legacy MapStyle type — keep the old surface for callers that still
+// pass 'streets' / 'satellite' / 'outdoor'. We map them to the closest
+// modern equivalent so old preferences keep rendering something useful.
+export type MapStyle = RavenScoutMapStyleId | 'streets' | 'satellite';
 
-export type MapProviderType = 'maptiler' | 'osm-carto' | 'mapbox';
-
-const MAPTILER_KEY = process.env.EXPO_PUBLIC_MAPTILER_KEY || '';
-
-interface MapStyleConfig {
-  id: MapStyle;
-  label: string;
-  icon: string;
-  styleUrl: string;
-}
-
-// MapTiler vector style URLs (used by MapLibre GL JS)
-const MAPTILER_STYLES: Record<MapStyle, MapStyleConfig> = {
-  streets: {
-    id: 'streets',
-    label: 'STREETS',
-    icon: 'map-outline',
-    styleUrl: `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}`,
-  },
-  satellite: {
-    id: 'satellite',
-    label: 'SATELLITE',
-    icon: 'earth',
-    styleUrl: `https://api.maptiler.com/maps/satellite/style.json?key=${MAPTILER_KEY}`,
-  },
-  outdoor: {
-    id: 'outdoor',
-    label: 'OUTDOOR',
-    icon: 'trail-sign',
-    styleUrl: `https://api.maptiler.com/maps/outdoor-v2/style.json?key=${MAPTILER_KEY}`,
-  },
+const LEGACY_MAP: Record<string, RavenScoutMapStyleId> = {
+  streets: 'outdoor',
+  satellite: 'satelliteHybrid',
+  outdoor: 'outdoor',
 };
 
-// Fallback: free CartoDB Voyager (no key needed)
+function toCanonical(style: MapStyle | string): RavenScoutMapStyleId {
+  if (style in LEGACY_MAP) return LEGACY_MAP[style];
+  // Already canonical (or unknown — resolveMapStyle handles fallback)
+  return resolveMapStyle(style as RavenScoutMapStyleId).id;
+}
+
+export function getMapStyles() {
+  return RAVEN_SCOUT_MAP_STYLES.map(s => ({
+    id: s.id,
+    label: s.label,
+    icon: s.icon,
+    styleUrl: s.styleUrl,
+  }));
+}
+
+export function getStyleUrl(style: MapStyle | string): string {
+  if (!hasMapTilerKey()) return '';
+  return resolveMapStyle(toCanonical(style)).styleUrl;
+}
+
+// CartoDB Voyager fallback — used when the MapTiler key is missing.
 const FALLBACK_STYLE = {
   version: 8,
   name: 'Fallback',
@@ -60,27 +65,14 @@ const FALLBACK_STYLE = {
   layers: [{ id: 'carto-layer', type: 'raster', source: 'carto-voyager', minzoom: 0, maxzoom: 22 }],
 };
 
-export function getMapStyles(): MapStyleConfig[] {
-  if (!MAPTILER_KEY) return [];
-  // Satellite first — it is the default in TacticalMapView and the
-  // primary imagery hunters use for terrain reading.
-  return [MAPTILER_STYLES.satellite, MAPTILER_STYLES.outdoor, MAPTILER_STYLES.streets];
-}
-
-export function getStyleUrl(style: MapStyle): string {
-  if (!MAPTILER_KEY) return '';
-  return MAPTILER_STYLES[style].styleUrl;
-}
-
 export function getFallbackStyleJSON(): object {
   return FALLBACK_STYLE;
 }
 
 export function hasMaptilerKey(): boolean {
-  return !!MAPTILER_KEY;
+  return hasMapTilerKey();
 }
 
-// Keep for backward compat
 export function getDarkStyleJSON(): object {
   return FALLBACK_STYLE;
 }
