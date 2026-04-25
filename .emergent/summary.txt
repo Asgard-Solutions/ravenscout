@@ -1,230 +1,168 @@
 <analysis>**original_problem_statement**: 
-The user requested to build a redesigned Profile page (based on Iron Stag references), implement a Set Password flow for Google-authenticated users, adjust the Pro tier limits (100 -> 40 analyses, 1-year rollover), implement a Species Expansion architecture (adding Elk, Bear, Moose, Antelope, Coyote with regional/hunt-style prompt packs), implement 4 MapTiler map styles (Outdoor, Hybrid, Plain, Topo) with persistence, and add Jest tests and UI polish (active glow/tooltip) for the new map styles.
+The user requested several fixes and features: 
+1. Change Face ID text to Fingerprint / Biometrics across the app and fix a bug where the Android fingerprint scanner did nothing and showed an unwanted Use PIN option.
+2. Fix map tiles appearing blank on Android, ensure all 5 map style chips fit on screen, and fix tapping a chip not switching the style.
+3. Fix the Edit Hunt modal not showing marker options.
+4. Ensure deleting a hunt cascades to delete local data, MongoDB records, and S3 objects.
+5. Verify and secure the AWS S3 image upload flow (presigned URLs, MIME checks).
+6. Implement Non-Expiring Extra Hunt Analytics Packs (5, 10, 15 packs) to act as a top-off once a user exhausts their monthly Core (10) or Pro (40) limits.
+
+PRODUCT REQUIREMENTS:
+- Gate map styles by subscription tier (Free: none, Core: 3 styles, Pro: 5 styles).
+- Add Landscape v4 map style.
+- Extra analytics packs must not expire, monthly credits are consumed first, and RevenueCat integration is required for purchases. 
 
 **User's preferred language**: English (INSTRUCT next agent to respond in English only)
 
 **what currently exists?** 
-A full-stack Expo React Native mobile app with a FastAPI/MongoDB backend deployed on Railway. The app includes a Username/Password & Google OAuth flow, a redesigned Profile page, a species registry supporting 8 animals with complex AI tactical prompt packs, MapTiler map rendering via a WebView-based MapLibre GL JS implementation, and subscription tier tracking (RevenueCat mocked). 
+A full-stack Expo React Native mobile app with FastAPI/MongoDB backend. Features include Google OAuth, AI tactical hunt analysis, MapLibre GL JS mapping with MapTiler, S3 cloud media storage via presigned URLs, and a subscription tier system (Free, Core, Pro) which now supports Non-Expiring Extra Hunt Analytics Packs. 
 
 **Last working item**: 
-    - Last item agent was working: Setting up Jest in the frontend to write unit tests for the MapTiler  and  logic, and adding UI polish (active state glow, long-press tooltip) to the Map Style Switcher in .
-    - Status: IN PROGRESS / BLOCKED (The agent encountered Babel/Jest import errors:  and Expo preset configuration issues).
-    - Agent Testing Done: N (For the Jest implementation and the Map UI tweaks).
-    - Which testing method agent to use? Both. Frontend testing agent / bash for fixing the Jest setup; Screenshot tool for visually verifying the map switcher UX polish.
+    - Last item agent was working: Wiring the new  into the legacy Analysis Limit Reached screen in . The agent discovered  returns HTTP 200 with  instead of HTTP 402 on limit exhaustion, triggering a legacy UI. The agent added a BUY EXTRA ANALYTICS button to this screen that pops up the newly created modal.
+    - Status: TESTING PENDING
+    - Agent Testing Done: Y (Jest tests pass, but needs visual verification via screenshot).
+    - Which testing method agent to use? Screenshot tool to visually verify the BUY EXTRA ANALYTICS button appears correctly on the limit reached screen and opens the modal.
     - User Testing Done: N
 
 **All Pending/In progress Issue list**: 
-  Issue 1: Frontend Jest Configuration failing
-     - Attempted fixes: Created , , and . Tried testing React hooks directly, then stripped it down to test pure persistence logic. Hit continuous  related to Babel transformations and Expo workspace/module resolution constraints.
-     - Next debug checklist: Review  and . Ensure  is correctly configured in the preset, and  properly transpiles ES modules (, 
-  Usage: expo [command] [options]
-
-  Options:
-  
-    -V, --version                     output the version number
-    --non-interactive                 Fail, if an interactive prompt would be required to continue.
-    -h, --help                        output usage information
-  
-  Commands:
-
-    init [name]                       Create a new Expo project
-    start [path]                      Start a local dev server for the app
-    start:web [path]                  Start a Webpack dev server for the web app
-    export [path]                     Export the static files of the app for hosting it on a web server
-    install [packages...]             Install a module or other package to a project
-    run:android [path]                Run the Android app binary locally
-    run:ios [path]                    Run the iOS app binary locally
-    send [path]                       Share the project's URL to an email address
-
-    login                             Login to an Expo account
-    logout                            Logout of an Expo account
-    register                          Sign up for a new Expo account
-    whoami                            Return the currently authenticated account
-
-    client:install:ios                Install Expo Go for iOS on the simulator
-    client:install:android            Install Expo Go for Android on a connected device or emulator
-
-    config [path]                     Show the project config
-    doctor [path]                     Diagnose issues with the project
-    upgrade [sdk-version]             Upgrade the project packages and config for the given SDK version
-
-    customize:web [path]              Eject the default web files for customization
-    prebuild [path]                   Create native iOS and Android project files before building natively.
-                                      Learn more: https://docs.expo.dev/workflow/customizing/
-
-    build:web [path]                  Build the web app for production
-
-    credentials:manager [path]        Superseded by eas credentials in eas-cli
-
-    url [path]                        Log a URL for opening the project in Expo Go
-    url:ipa [path]                    Log the download URL for the standalone iOS binary
-    url:apk [path]                    Log the download URL for the standalone Android binary
-
-    webhooks [path]                   List all webhooks for a project
-    webhooks:add [path]               Add a webhook to a project
-    webhooks:remove [path]            Delete a webhook
-    webhooks:update [path]            Update an existing webhook
-
-    build:ios [path]                  Superseded by eas build in eas-cli
-    build:android [path]              Superseded by eas build in eas-cli
-    build:status [path]               Superseded by eas build:list in eas-cli
-    eject [path]                      Superseded by expo prebuild
-    fetch:ios:certs [path]            Superseded by eas credentials in eas-cli
-    fetch:android:keystore [path]     Superseded by eas credentials in eas-cli
-    fetch:android:hashes [path]       Superseded by eas credentials in eas-cli
-    fetch:android:upload-cert [path]  Superseded by eas credentials in eas-cli
-    publish [path]                    Superseded by eas update in eas-cli
-    publish:set [path]                Superseded by eas update:republish in eas-cli
-    publish:rollback [path]           Superseded by eas update:republish in eas-cli
-    publish:history [path]            Superseded by eas update:list in eas-cli
-    publish:details [path]            Superseded by eas update:view in eas-cli
-    push:android:upload [path]        Superseded by eas credentials in eas-cli
-    push:android:show [path]          Superseded by eas credentials in eas-cli
-    push:android:clear [path]         Superseded by eas credentials in eas-cli
-    upload:android [path]             Superseded by eas submit in eas-cli
-    upload:ios [path]                 Superseded by eas submit in eas-cli
-    client:ios [path]                 Superseded by Expo Dev Clients
-
-[14:12:21]   Run a command with --help for more info 💡
-[14:12:21]     $ expo start --help
-[14:12:21], etc.).
-     - Why fix this issue and what will be achieved with the fix? Fulfills the user's request to protect the map style configuration with automated tests to prevent regressions.
-     - Status: IN PROGRESS / BLOCKED
+  Issue 1: RevenueCat Mock Replacement
+     - Attempted fixes: Pack purchases and  are currently MOCKED using synthetic transaction IDs in  and .
+     - Next debug checklist: Replace mock  handlers with real  once RevenueCat SDK is fully wired.
+     - Why fix this issue and what will be achieved with the fix? Real monetary transactions are required for production.
+     - Status: NOT STARTED (Blocked pending RevenueCat integration phase)
      - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? Frontend (Jest execution via bash)
+     - Should Test frontend/backend/both after fix? Frontend
 
 **In progress Task List**: 
-  Task 1: Map Switcher UX Polish
-     - Where to resume: Review the recent changes made to . The agent attempted to add an active state glow/border and long-press tooltips to the map style selector chips, but didn't visually verify it.
-     - What will be achieved with this? Makes switching map styles feel intentional and polished for hunters in the field.
-     - Status: TESTING PENDING
-     - Should Test frontend/backend/both after fix? Frontend (Screenshot tool to confirm the UI looks correct).
-     - Blocked on something: Blocked currently by the Jest task failure context.
+  None actively in-progress (all requested tasks were completed).
 
 **Upcoming and Future Tasks**
-    - P1: Wire real RevenueCat  in the Profile page (Currently mocked / relies on backend tier fetch).
-    - P2: EAS production build for real RevenueCat purchases.
+    - P1: Wire real RevenueCat  and  (currently mocked).
+    - P2: EAS production build for real RevenueCat purchases and baking in the  for Android.
     - P2: GIS integration for georeferenced overlays (mapping AI outputs to strict Lat/Lon coordinates so MapLibre can pan to them).
     - P2: Trail cam integration.
     - P3: Predictive movement modeling.
     - P3: Wind shift notifications for stands (premium feature).
     - P3: Background orphan asset detection/cleanup for local device storage.
-    - P3: Add waterfowl, dove, and quail prompt packs when the user is ready (App architecture is already prepared for this).
+    - P3: Add waterfowl, dove, and quail prompt packs.
 
 **Completed work in this session**
-- Built the Raven Scout Profile page using Iron Stag UX references but properly themed (DONE)
-- Implemented  for Google-only users to attach an email/password without leaving the app (DONE)
-- Resized Login Logo to 375x375 and updated biometric text (DONE)
-- Updated Pro tier limits: 100 -> 40 analyses/month, added 12-month accumulate-mode rollover (DONE)
-- Built Species Expansion Architecture () and added Elk, Bear, Moose, Antelope, Coyote (DONE)
-- Deepened prompt packs by adding  and  regional modifiers, plus new hunt styles (blind, saddle, etc.) (DONE)
-- Configured 4 MapTiler styles (Outdoor, Satellite Hybrid, Satellite Plain, Topo) and wired persistence (DONE)
+- MapTiler Landscape (v4) added as 5th map style. (DONE)
+- Centralized Plan-tier feature gating for map styles and uploads. (DONE)
+- Replaced Face ID with Fingerprint everywhere in UI. (DONE)
+- Fixed biometric login Android read/write mismatch & removed PIN fallback. (DONE)
+- Fixed map UI chip width (all 5 fit) and  bug on Android WebView. (DONE)
+- Fixed Edit Hunt modal so marker buttons are visible (flexbox height bug resolved). (DONE)
+- Cascading Hunt Deletion:  now deletes from local, MongoDB, and S3 simultaneously. (DONE)
+- AWS S3 image upload secured: presigned URLs, MIME whitelist, HEIC support, and fixed swapped env vars. (DONE)
+- Implemented Non-Expiring Extra Hunt Analytics Packs (ledger, API endpoints, Profile UI, OutOfCreditsModal). (DONE)
+- Rewired  out-of-credits response on frontend to allow buying extra analytics. (DONE)
 
 **Earlier issues found/mentioned but not fixed**
    - None.
 
 **Known issue recurrence from previous fork**
-  - Issue recurrence in previous fork: None newly recurring.
+  - Issue recurrence in previous fork: None.
   - Recurrence count: 0
   - Status: N/A
 
 **Code Architecture**
 app/
 ├── backend/
-│   ├── server.py 
-│   ├── password_auth.py 
-│   ├── species_registry.py (NEW - central config for species)
-│   ├── species_prompts/
-│   │   ├── regions.py (Added PNW and Northeast)
-│   │   └── elk.py, bear.py, moose.py, antelope.py, coyote.py (NEW)
+│   ├── server.py (Updated: Extra credits logic, cascade delete, S3 validations)
+│   ├── s3_service.py 
+│   ├── AWS_S3_SETUP.md (NEW - S3 Runbook)
 │   └── tests/
 ├── frontend/
-│   ├── app/ (profile.tsx, setup.tsx)
+│   ├── app/ (profile.tsx, setup.tsx, history.tsx, results.tsx, login.tsx)
 │   ├── src/
-│   │   ├── constants/ (mapStyles.ts, species.tsx)
-│   │   ├── hooks/ (useMapStylePreference.ts)
-│   │   ├── map/ (TacticalMapView.tsx, MapProvider.ts)
-│   │   └── media/ (storageStats.ts)
-│   ├── jest.config.js / jest.setup.js (NEW - Failing)
-│   └── __tests__/mapStyles.test.ts (NEW - Failing)
-└── .env.example (NEW)
+│   │   ├── api/ (analyticsApi.ts - NEW)
+│   │   ├── components/ (OutOfCreditsModal.tsx - NEW)
+│   │   ├── constants/ (mapStyles.ts, planCapabilities.ts - NEW)
+│   │   ├── hooks/ (useAnalyticsUsage.ts - NEW)
+│   │   ├── map/ (TacticalMapView.tsx)
+│   │   ├── media/ (huntHydration.ts, cloudPresignClient.ts)
+│   │   └── utils/ (biometric.ts)
+│   └── __tests__/ (analyticsApi.test.ts, planCapabilities.test.ts, mapStyles.test.ts)
 
 **Key Technical Concepts**
-React Native (Expo Router), FastAPI, MongoDB, MapLibre GL JS (running inside a WebView in ), MapTiler, OpenAI, Jest. 
+React Native (Expo Router), FastAPI, MongoDB, MapLibre GL JS, MapTiler, AWS S3 (Presigned URLs), RevenueCat (Mocked).
 
 **key DB schema**
-  - : Added  boolean. Tracking tier limits (Pro is now 40 limit,  handles 12-month retention).
-  - : No structural changes, but AI analysis outputs now heavily influenced by the new species definitions.
+  - : Added  (non-expiring count).
+  - : New collection for webhook idempotency.
+  - : New collection tracking credit history.
+  - : Stores  used for cascade deletion.
 
 **changes in tech stack**
-  - Added  and  to the frontend. (Currently encountering configuration errors).
+  - None.
 
 **All files of reference**
-  - , ,  (Active failing files that need fixing)
-  -  (Contains MapTiler implementation and UI polish to verify)
-  - ,  (Reference for the new species architecture)
+  -  (Contains core analytics ledger, S3 validations, and delete cascade)
+  -  (New modal for extra pack purchases)
+  -  (Contains legacy  screen wired to new modal)
+  -  (Runbook for S3 configuration)
 
 **Areas that need refactoring**: 
-  - Frontend Jest testing environment: The Babel configuration or module resolution is failing when trying to run Jest tests within the Expo React Native environment.
+  - RevenueCat integration is currently mocked.
 
 **key api endpoints**
-  -  (New)
-  -  (Updated to fetch from )
+  -  (Cascades to S3 and DB)
+  -  (NEW)
+  -  (NEW - atomic credit consumer)
+  -  (NEW)
+  -  (NEW)
 
 **Critical Info for New Agent**
-  - **CRITICAL MAP DECISION**: The user explicitly requested to keep the current MapLibre GL JS WebView implementation (). **DO NOT** attempt to migrate the app to the native  library.
-  - The MS Graph email implementation still needs real credentials (, etc.) added to the  to send real OTPs.
-  - RevenueCat is currently mocked in the app. Restore Purchases button exists but doesn't hit real native SDKs yet.
+  - **CRITICAL AWS ISSUE**: The user's production AWS credentials ( and ) were swapped in their . This caused  errors during S3 uploads. The agent fixed them locally, but the user MUST be reminded to swap them in their production environment.
+  - **CRITICAL APK BUILD ISSUE**: The user's installed Android APK showed blank maps and old biometric text because  was not baked into their build. The user must run An Expo user account is required to proceed.
+Either log in with eas login or set the EXPO_TOKEN environment variable if you're using EAS CLI on CI (Learn more: https://docs.expo.dev/accounts/programmatic-access/) to see all the map tile and UI fixes on their physical device.
+  - **REVENUECAT**: Pack purchases are strictly MOCKED with synthetic transaction IDs. When moving to real RevenueCat, inject  into  and . Ensure  is set in production.
 
 **documents and test reports created in this job**
-  -  (Documentation on how to add future species like waterfowl/dove).
-  -  (Updated with species expansion and password auth test blocks).
+  - 
+  -  (Updated with S3 and Analytics backend test reports)
 
 **Last 10 User Messages and any pending HUMAN messages** 
- 1. (User) Asked how Google users can set up an email/password later.
- 2. (Agent) Suggested option C: In-app  endpoint. Built it.
- 3. (User) Provided new logo, asked to resize to 375x375 and change biometric text.
- 4. (Agent) Tweaked UI and swapped logo.
- 5. (User) Asked about missing satellite views in APK.
- 6. (Agent) Clarified --platform is required when building in non-interactive mode was needed to bake the key into the APK; no code changes needed.
- 7. (User) Requested Pro tier limits change to 40 analyses and 1-year unused rollover.
- 8. (Agent) Updated tier configuration in backend and frontend copy.
- 9. (User) Requested Species Expansion (Elk, Bear, Moose, Antelope, Coyote) + regional/hunt-style prompts.
- 10. (Agent) Built species architecture, deepened prompt packs, added PNW/Northeast regions.
- 11. (User) Requested MapTiler map styles integration + persistent selection + UI polish + Jest tests.
- 12. (Agent) Built MapTiler styles, but got stuck failing to run the newly added Jest tests. *(Pending: Fix Jest and verify map UI polish).*
+ 1. (User) Asked to add Landscape (v4) map style. (DONE)
+ 2. (User) Asked to gate map styles/uploads by Free/Core/Pro tiers. (DONE)
+ 3. (User) Reported Face ID needs to change to Fingerprint, map tiles are blank. (DONE)
+ 4. (User) Reported fingerprint scan does nothing, Use PIN shows up. (DONE)
+ 5. (User) Reported only 4 out of 5 map chips show, tapping them does nothing. (DONE)
+ 6. (User) Reported edit on saved hunt doesn't show marker options. (DONE)
+ 7. (User) Reported deleting a hunt needs to cascade to local, DB, and S3. (DONE)
+ 8. (User) Asked to verify and complete AWS S3 image upload setup. (DONE)
+ 9. (User) Requested Non-Expiring Extra Hunt Analytics Packs via RevenueCat. (DONE)
+ 10. (User) Confirmed the agent should tackle auto-showing the OutOfCredits modal in  when limits are reached. (DONE - Pending visual test)
 
 **Project Health Check:**
-  - Broken: Frontend Jest testing environment.
-  - Mocked: RevenueCat ().
+  - Broken: None.
+  - Mocked: RevenueCat (, extra analytics pack purchases).
 
 **3rd Party Integrations**
+  - MapTiler (Maps) — requires User API Key ()
+  - AWS S3 (Image Storage) — requires User AWS Credentials
+  - RevenueCat (Subscriptions/Purchases) — requires User API Key ()
   - OpenAI GPT-5.2 Vision — uses User LLM Key directly
-  - MapTiler — requires User API Key ()
   - Microsoft Graph — requires User Credentials (OTP Emails)
 
 **Testing status**
-  - Testing agent used after significant changes: YES (backend testing agent used multiple times for auth and species prompts)
+  - Testing agent used after significant changes: YES ( ran comprehensive matrices for S3 cascade deletion and Analytics Ledger).
   - Troubleshoot agent used after agent stuck in loop: NO
   - Test files created: , 
-  - Known regressions: Jest test suite is broken locally.
+  - Known regressions: None. Jest is 38/38 passing.
 
 **Credentials to test flow:**
-  - Check 
+  - Check  (Agent reseeded users , , ).
 
 **What agent forgot to execute**
-  - The agent ran out of context while fighting Jest configuration errors. The agent successfully modified  to include an active glow and tooltip for the Map Styles, but failed to actually look at it via the screenshot tool to confirm if the CSS/Styles are rendering correctly.
+  - The agent updated  to add a BUY EXTRA ANALYTICS button to the legacy  screen so users can buy packs directly from the hunt flow, but ran out of tokens before doing a final visual check with . Jest tests verify the code works.
 
 **Debugging checklist for current issue**
-    Issue: Jest tests failing ( or module import errors outside test scope).
-
+    Issue: Visual verification of OutOfCredits modal triggered from  screen.
     Frontend files to check: 
-    - 
-    - 
-    - 
-    - 
-
+    -  (Lines handling  state)
     Checklist:
-    1. Ensure  is the preset being used.
-    2. Check  in  to ensure React Native/Expo modules are properly transpiled by Babel.
-    3. Validate if the  file is mistakenly importing UI components that require native bridging, and mock them if necessary.</analysis>
+    1. Force a test user into a state with 0 monthly and 0 extra analytics.
+    2. Attempt to run an analysis.
+    3. Take a screenshot to verify the BUY EXTRA ANALYTICS button renders nicely on the Limit Reached UI and properly opens the .</analysis>

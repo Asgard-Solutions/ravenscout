@@ -711,7 +711,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://raven-scout-v2.preview.emergentagent.com).
+          https://tactical-hunt-app.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -1463,7 +1463,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://raven-scout-v2.preview.emergentagent.com
+          https://tactical-hunt-app.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -1527,7 +1527,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://raven-scout-v2.preview.emergentagent.com). Harness:
+          https://tactical-hunt-app.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -1927,7 +1927,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://raven-scout-v2.preview.emergentagent.com/api/auth/verify-otp
+            POST https://tactical-hunt-app.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -2209,7 +2209,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://raven-scout-v2.preview.emergentagent.com/api). Test
+      URL (https://tactical-hunt-app.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -2548,7 +2548,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://raven-scout-v2.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://tactical-hunt-app.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -2802,7 +2802,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://raven-scout-v2.preview.emergentagent.com).
+          https://tactical-hunt-app.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
