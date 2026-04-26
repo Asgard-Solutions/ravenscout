@@ -18,6 +18,13 @@ import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { MapStyleSwitcher } from '../src/map/MapStyleSwitcher';
 import { useMapStylePreference } from '../src/hooks/useMapStylePreference';
+import StateRegionPicker from '../src/components/StateRegionPicker';
+import {
+  defaultRegionForState,
+  resolveStateFromGeocode,
+  HUNTING_REGION_LABELS,
+  type HuntingRegionId,
+} from '../src/constants/huntingRegions';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
 import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
@@ -108,7 +115,14 @@ export default function SetupScreen() {
   const [precipitation, setPrecipitation] = useState('none');
   const [cloudCover, setCloudCover] = useState('');
   const [propertyType, setPropertyType] = useState('public');
-  const [region, setRegion] = useState('');
+  const [region, setRegion] = useState(''); // legacy free-form (still saved for hunts created before the state/region picker)
+  // New structured location fields. `stateCode` is the 2-letter US
+  // state code; `huntingRegion` is the canonical region id derived
+  // from the state (auto for single-region states, user-pickable for
+  // multi-region states). Both ride alongside the legacy `region`
+  // string until backfilled.
+  const [stateCode, setStateCode] = useState<string | null>(null);
+  const [huntingRegion, setHuntingRegion] = useState<HuntingRegionId | null>(null);
   // Canonical hunt-style id (archery/rifle/blind/saddle/public_land/
   // spot_and_stalk) or null when unselected. ONLY canonical ids leave
   // this screen — see src/constants/huntStyles.ts.
@@ -304,6 +318,15 @@ export default function SetupScreen() {
         if (geocode[0]) {
           const g = geocode[0];
           setLocationName(`${g.city || g.name || ''}, ${g.region || ''}`);
+          // Auto-pick the state from the geocoded `region` field.
+          // expo-location returns the full state name on iOS and on
+          // most Android geocoders ("Oklahoma"), but occasionally a
+          // 2-letter code — resolveStateFromGeocode handles both.
+          const matched = resolveStateFromGeocode(g.region);
+          if (matched) {
+            setStateCode(matched.code);
+            setHuntingRegion(defaultRegionForState(matched.code));
+          }
         }
       } catch {}
     } catch (err) {
@@ -423,7 +446,16 @@ export default function SetupScreen() {
             temperature: temperature || null,
             precipitation: precipitation !== 'none' ? precipitation : null,
             property_type: propertyType,
-            region: region || null,
+            // Build the legacy free-form `region` string from the
+            // structured state + region picker so older backends and
+            // analysis prompts continue to work. Fall back to the
+            // raw legacy `region` value (unused in current UI) if no
+            // state was picked.
+            region: stateCode
+              ? region.trim() || `${HUNTING_REGION_LABELS[huntingRegion as HuntingRegionId] || ''}${stateCode ? ` (${stateCode})` : ''}`.trim()
+              : (region || null),
+            state_code: stateCode || null,
+            hunting_region: huntingRegion || null,
             // Canonical id only — never display text.
             hunt_style: huntStyle,
           },
@@ -1224,8 +1256,15 @@ export default function SetupScreen() {
                 ))}
               </View>
 
-              <Text style={styles.fieldLabel}>REGION / STATE (OPTIONAL)</Text>
-              <TextInput testID="region-input" style={styles.textInput} placeholder="e.g., East Texas, Southern Ohio" placeholderTextColor={COLORS.fogGray} value={region} onChangeText={setRegion} />
+              {/* State + Hunting Region picker. State drives the
+                  hunting region so the AI prompt can lean on regional
+                  patterns. Auto-filled from GPS reverse-geocode. */}
+              <StateRegionPicker
+                stateCode={stateCode}
+                onStateChange={setStateCode}
+                regionId={huntingRegion}
+                onRegionChange={setHuntingRegion}
+              />
 
               {/* Hunt Style — optional, canonical-only. Unselected by default. */}
               <View style={styles.fieldRow}>
