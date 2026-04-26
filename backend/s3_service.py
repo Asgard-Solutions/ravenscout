@@ -196,3 +196,29 @@ def delete_object(key: str) -> bool:
         return True
     except (BotoCoreError, ClientError):
         return False
+
+
+def head_bucket() -> Tuple[bool, Optional[str]]:
+    """Round-trip a HeadBucket call to verify the configured bucket is
+    reachable with the current credentials. Returns (ok, error_msg).
+
+    Used by /api/media/health to quickly diagnose:
+      - missing / wrong credentials  -> InvalidAccessKeyId / SignatureDoesNotMatch
+      - swapped access key / secret  -> SignatureDoesNotMatch
+      - wrong region                 -> 301 / PermanentRedirect
+      - typo'd bucket name           -> NoSuchBucket / 404
+    """
+    _ensure_loaded()
+    if not _ready:
+        return False, "S3 not configured (missing AWS_REGION or S3_BUCKET_NAME)"
+    try:
+        _client.head_bucket(Bucket=get_bucket())  # type: ignore[union-attr]
+        return True, None
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "ClientError")
+        msg = e.response.get("Error", {}).get("Message", str(e))
+        return False, f"{code}: {msg}"
+    except BotoCoreError as e:
+        return False, f"BotoCoreError: {e}"
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"Unexpected: {e}"

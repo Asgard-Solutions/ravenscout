@@ -1046,8 +1046,12 @@ async def presign_media_upload(body: PresignUploadBody, request: Request):
 
     try:
         upload_url, asset_url, expires_in = s3_service.presign_upload(key, mime)
+        logger.info(
+            f"presign_upload OK user={user['user_id']} hunt={body.huntId} "
+            f"role={role} key={key} ttl={expires_in}"
+        )
     except Exception as e:
-        logger.error(f"presign_upload failed: {e}")
+        logger.exception(f"presign_upload failed user={user.get('user_id')} key={key} mime={mime}: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate upload URL")
 
     return {
@@ -1058,6 +1062,34 @@ async def presign_media_upload(body: PresignUploadBody, request: Request):
         "privateDelivery": s3_service.is_private_delivery(),
         "mime": mime,
     }
+
+
+@api_router.get("/media/health")
+async def media_health(request: Request):
+    """Quick S3 health check — runs a HeadBucket round-trip with the
+    server's currently-loaded credentials. Useful to immediately
+    diagnose whether Pro uploads will work without doing a full upload
+    flow on a real device.
+
+    Returns 200 with `{ ok: true, bucket, region }` when the bucket is
+    reachable. Returns 200 with `{ ok: false, error }` when the bucket
+    is misconfigured / unreachable so the caller can render the error
+    instead of having to parse a 500.
+    """
+    # Authenticated to avoid leaking bucket existence to unauthenticated
+    # callers, but we DO NOT gate on Pro tier — admins / Trial / Core
+    # users with valid sessions can also probe the integration.
+    await get_current_user(request)
+    cfg = {
+        "configured": s3_service.is_configured(),
+        "bucket": s3_service.get_bucket(),
+        "region": s3_service.get_region(),
+        "private_delivery": s3_service.is_private_delivery(),
+    }
+    if not cfg["configured"]:
+        return {"ok": False, "error": "S3 not configured", **cfg}
+    ok, err = s3_service.head_bucket()
+    return {"ok": ok, "error": err, **cfg}
 
 
 @api_router.post("/media/presign-download")
