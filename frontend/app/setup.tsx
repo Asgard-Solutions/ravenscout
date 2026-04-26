@@ -10,7 +10,15 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
 import { useSpeciesCatalog, groupSpeciesByCategory } from '../src/constants/species';
-import { HUNT_STYLES, type HuntStyleId, getHuntStyleLabel } from '../src/constants/huntStyles';
+import {
+  HUNT_STYLES,
+  HUNT_WEAPONS,
+  HUNT_METHODS,
+  type HuntStyleId,
+  type HuntWeaponId,
+  type HuntMethodId,
+  getHuntStyleLabel,
+} from '../src/constants/huntStyles';
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
 import { RavenSpinner } from '../src/components/RavenSpinner';
@@ -18,6 +26,13 @@ import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import TacticalMapView from '../src/map/TacticalMapView';
 import { MapStyleSwitcher } from '../src/map/MapStyleSwitcher';
 import { useMapStylePreference } from '../src/hooks/useMapStylePreference';
+import StateRegionPicker from '../src/components/StateRegionPicker';
+import {
+  defaultRegionForState,
+  resolveStateFromGeocode,
+  HUNTING_REGION_LABELS,
+  type HuntingRegionId,
+} from '../src/constants/huntingRegions';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
 import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
@@ -63,7 +78,9 @@ export default function SetupScreen() {
   const [primaryMapIndex, setPrimaryMapIndex] = useState(0);
   const [mapInputMode, setMapInputMode] = useState<'upload' | 'interactive'>('upload');
   const [showInteractiveMap, setShowInteractiveMap] = useState(false);
-  const [coordInput, setCoordInput] = useState('');
+  const [coordInput, setCoordInput] = useState(''); // legacy, kept for compat
+  const [latInput, setLatInput] = useState('');
+  const [lonInput, setLonInput] = useState('');
   const [mapKey, setMapKey] = useState(0);
   const [captureCount, setCaptureCount] = useState(0);
   const [huntDate, setHuntDate] = useState(new Date().toISOString().split('T')[0]);
@@ -106,11 +123,42 @@ export default function SetupScreen() {
   const [precipitation, setPrecipitation] = useState('none');
   const [cloudCover, setCloudCover] = useState('');
   const [propertyType, setPropertyType] = useState('public');
-  const [region, setRegion] = useState('');
+  const [region, setRegion] = useState(''); // legacy free-form (still saved for hunts created before the state/region picker)
+  // New structured location fields. `stateCode` is the 2-letter US
+  // state code; `huntingRegion` is the canonical region id derived
+  // from the state (auto for single-region states, user-pickable for
+  // multi-region states). Both ride alongside the legacy `region`
+  // string until backfilled.
+  const [stateCode, setStateCode] = useState<string | null>(null);
+  const [huntingRegion, setHuntingRegion] = useState<HuntingRegionId | null>(null);
   // Canonical hunt-style id (archery/rifle/blind/saddle/public_land/
   // spot_and_stalk) or null when unselected. ONLY canonical ids leave
   // this screen — see src/constants/huntStyles.ts.
-  const [huntStyle, setHuntStyle] = useState<HuntStyleId | null>(null);
+  // Hunt-style flow is split into a 2-step natural progression:
+  // Step 1 — Weapon (archery / rifle / shotgun)
+  // Step 2 — Method (blind / saddle / spot_and_stalk)
+  // Both ride alongside the analyze payload. The legacy `hunt_style`
+  // field is filled from the more specific selection (method first,
+  // then weapon) so existing prompt packs keep working unchanged
+  // until the backend learns to read both fields independently.
+  const [huntWeapon, setHuntWeapon] = useState<HuntWeaponId | null>(null);
+  const [huntMethod, setHuntMethod] = useState<HuntMethodId | null>(null);
+  // Derived legacy id for back-compat with persistence + analyze body.
+  const huntStyle: HuntStyleId | null = huntMethod || huntWeapon || null;
+  const setHuntStyle = (next: HuntStyleId | null) => {
+    // Keep legacy clear-all behavior when a downstream consumer
+    // (e.g. an old test or the "Clear" button) tries to reset.
+    if (next == null) {
+      setHuntWeapon(null);
+      setHuntMethod(null);
+      return;
+    }
+    if (['archery', 'rifle', 'shotgun'].includes(next)) {
+      setHuntWeapon(next as HuntWeaponId);
+    } else if (['blind', 'saddle', 'spot_and_stalk'].includes(next)) {
+      setHuntMethod(next as HuntMethodId);
+    }
+  };
 
   // Weather auto-fill
   const [locationCoords, setLocationCoords] = useState<{lat: number; lon: number} | null>(null);
@@ -251,21 +299,33 @@ export default function SetupScreen() {
   }, [mapImages.length]);
 
   const goToCoordinates = () => {
-    const input = coordInput.trim();
-    if (!input) return;
-    // Parse formats: "38.5, -96.7" or "38.5 -96.7" or "38.5,-96.7"
-    const parts = input.split(/[\s,]+/).filter(Boolean);
-    if (parts.length >= 2) {
-      const lat = parseFloat(parts[0]);
-      const lon = parseFloat(parts[1]);
-      if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-        setLocationCoords({ lat, lon });
-        setCoordInput(`${lat}, ${lon}`);
-        setMapKey(prev => prev + 1);
-        return;
-      }
+    const lat = parseFloat(latInput.trim());
+    const lon = parseFloat(lonInput.trim());
+    if (
+      !isNaN(lat) && !isNaN(lon) &&
+      lat >= -90 && lat <= 90 &&
+      lon >= -180 && lon <= 180
+    ) {
+      setLocationCoords({ lat, lon });
+      setCoordInput(`${lat}, ${lon}`); // legacy mirror for any consumer
+      setMapKey(prev => prev + 1);
+      return;
     }
-    Alert.alert('Invalid Coordinates', 'Enter latitude and longitude, e.g., "38.573, -96.726"');
+    Alert.alert(
+      'Invalid Coordinates',
+      'Latitude must be between −90 and 90; longitude between −180 and 180. Use a minus sign (−) for South / West.',
+    );
+  };
+
+  // Toggle the sign of whatever is currently in a coord input. Lets
+  // the user enter negatives without needing the punctuation keyboard
+  // (decimal-pad on Android does not surface "−").
+  const toggleSign = (which: 'lat' | 'lon') => {
+    const cur = which === 'lat' ? latInput : lonInput;
+    if (!cur.trim()) return;
+    const next = cur.startsWith('-') ? cur.slice(1) : `-${cur}`;
+    if (which === 'lat') setLatInput(next);
+    else setLonInput(next);
   };
 
   // --- Location ---
@@ -277,15 +337,28 @@ export default function SetupScreen() {
         return;
       }
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setLocationCoords({ lat: loc.coords.latitude, lon: loc.coords.longitude });
-      setCoordInput(`${loc.coords.latitude.toFixed(6)}, ${loc.coords.longitude.toFixed(6)}`);
+      const lat = loc.coords.latitude;
+      const lon = loc.coords.longitude;
+      setLocationCoords({ lat, lon });
+      setLatInput(lat.toFixed(6));
+      setLonInput(lon.toFixed(6));
+      setCoordInput(`${lat.toFixed(6)}, ${lon.toFixed(6)}`); // legacy mirror
       setMapKey(prev => prev + 1);
       // Try to get location name via reverse geocode
       try {
-        const geocode = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        const geocode = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
         if (geocode[0]) {
           const g = geocode[0];
           setLocationName(`${g.city || g.name || ''}, ${g.region || ''}`);
+          // Auto-pick the state from the geocoded `region` field.
+          // expo-location returns the full state name on iOS and on
+          // most Android geocoders ("Oklahoma"), but occasionally a
+          // 2-letter code — resolveStateFromGeocode handles both.
+          const matched = resolveStateFromGeocode(g.region);
+          if (matched) {
+            setStateCode(matched.code);
+            setHuntingRegion(defaultRegionForState(matched.code));
+          }
         }
       } catch {}
     } catch (err) {
@@ -405,9 +478,24 @@ export default function SetupScreen() {
             temperature: temperature || null,
             precipitation: precipitation !== 'none' ? precipitation : null,
             property_type: propertyType,
-            region: region || null,
-            // Canonical id only — never display text.
+            // Build the legacy free-form `region` string from the
+            // structured state + region picker so older backends and
+            // analysis prompts continue to work. Fall back to the
+            // raw legacy `region` value (unused in current UI) if no
+            // state was picked.
+            region: stateCode
+              ? region.trim() || `${HUNTING_REGION_LABELS[huntingRegion as HuntingRegionId] || ''}${stateCode ? ` (${stateCode})` : ''}`.trim()
+              : (region || null),
+            state_code: stateCode || null,
+            hunting_region: huntingRegion || null,
+            // Canonical id only — never display text. Method takes
+            // precedence over weapon for back-compat with existing
+            // prompt packs that key on saddle / blind / stalk.
             hunt_style: huntStyle,
+            // New structured weapon + method ride alongside; backend
+            // can read these once prompt packs split shotgun out.
+            hunt_weapon: huntWeapon,
+            hunt_method: huntMethod,
           },
           map_image_base64: mapImages[primaryMapIndex],
           additional_images: isPaidTier && user?.tier === 'pro'
@@ -850,29 +938,92 @@ export default function SetupScreen() {
               {/* Interactive Map Mode — Core/Pro only */}
               {mapInputMode === 'interactive' && showInteractiveMap && (
                 <View>
-                  {/* GPS Coordinate Input */}
-                  <View style={styles.coordInputRow}>
-                    <Ionicons name="location" size={18} color={COLORS.accent} />
-                    <TextInput
-                      testID="coord-input"
-                      style={styles.coordInput}
-                      placeholder="Enter GPS: 38.573, -96.726"
-                      placeholderTextColor={COLORS.fogGray}
-                      value={coordInput}
-                      onChangeText={setCoordInput}
-                      keyboardType="numbers-and-punctuation"
-                      returnKeyType="go"
-                      onSubmitEditing={goToCoordinates}
-                    />
-                    <TouchableOpacity
-                      testID="go-to-coords-button"
-                      style={[styles.goButton, !coordInput.trim() && styles.goButtonDisabled]}
-                      onPress={goToCoordinates}
-                      disabled={!coordInput.trim()}
-                    >
-                      <Text style={styles.goButtonText}>GO</Text>
-                    </TouchableOpacity>
+                  {/* Use Current Location — primary CTA */}
+                  <TouchableOpacity
+                    testID="use-current-location-button"
+                    style={styles.useLocationButton}
+                    onPress={getLocation}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="navigate" size={18} color={COLORS.primary} />
+                    <Text style={styles.useLocationText}>USE MY CURRENT LOCATION</Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.coordSeparator}>OR ENTER GPS MANUALLY</Text>
+
+                  {/* GPS Coordinate Inputs — Lat / Lon side-by-side, decimal-pad keyboard. */}
+                  <View style={styles.coordPairRow}>
+                    {/* LAT */}
+                    <View style={styles.coordField}>
+                      <Text style={styles.coordFieldLabel}>LAT</Text>
+                      <View style={styles.coordFieldInputRow}>
+                        <TouchableOpacity
+                          testID="lat-sign-toggle"
+                          style={styles.signToggle}
+                          onPress={() => toggleSign('lat')}
+                          accessibilityLabel="Toggle latitude sign"
+                        >
+                          <Text style={styles.signToggleText}>
+                            {latInput.startsWith('-') ? '−' : '+'}
+                          </Text>
+                        </TouchableOpacity>
+                        <TextInput
+                          testID="lat-input"
+                          style={styles.coordFieldInput}
+                          placeholder="38.573"
+                          placeholderTextColor={COLORS.fogGray}
+                          value={latInput}
+                          onChangeText={setLatInput}
+                          keyboardType="decimal-pad"
+                          returnKeyType="next"
+                          maxLength={12}
+                        />
+                      </View>
+                    </View>
+
+                    {/* LON */}
+                    <View style={styles.coordField}>
+                      <Text style={styles.coordFieldLabel}>LON</Text>
+                      <View style={styles.coordFieldInputRow}>
+                        <TouchableOpacity
+                          testID="lon-sign-toggle"
+                          style={styles.signToggle}
+                          onPress={() => toggleSign('lon')}
+                          accessibilityLabel="Toggle longitude sign"
+                        >
+                          <Text style={styles.signToggleText}>
+                            {lonInput.startsWith('-') ? '−' : '+'}
+                          </Text>
+                        </TouchableOpacity>
+                        <TextInput
+                          testID="lon-input"
+                          style={styles.coordFieldInput}
+                          placeholder="-96.726"
+                          placeholderTextColor={COLORS.fogGray}
+                          value={lonInput}
+                          onChangeText={setLonInput}
+                          keyboardType="decimal-pad"
+                          returnKeyType="go"
+                          onSubmitEditing={goToCoordinates}
+                          maxLength={12}
+                        />
+                      </View>
+                    </View>
                   </View>
+
+                  <TouchableOpacity
+                    testID="go-to-coords-button"
+                    style={[
+                      styles.goButtonFull,
+                      (!latInput.trim() || !lonInput.trim()) && styles.goButtonDisabled,
+                    ]}
+                    onPress={goToCoordinates}
+                    disabled={!latInput.trim() || !lonInput.trim()}
+                  >
+                    <Ionicons name="locate" size={16} color={COLORS.primary} />
+                    <Text style={styles.goButtonFullText}>GO TO COORDINATES</Text>
+                  </TouchableOpacity>
+
                   {locationCoords && (
                     <Text style={styles.currentCoordsText}>
                       Current: {locationCoords.lat.toFixed(4)}°, {locationCoords.lon.toFixed(4)}°
@@ -925,16 +1076,6 @@ export default function SetupScreen() {
 
                   {/* Capture / Use GPS buttons */}
                   <View style={styles.interactiveActions}>
-                    {!locationCoords && (
-                      <TouchableOpacity
-                        testID="map-get-location"
-                        style={styles.mapLocationButton}
-                        onPress={getLocation}
-                      >
-                        <Ionicons name="navigate" size={18} color={COLORS.primary} />
-                        <Text style={styles.mapLocationText}>CENTER ON GPS</Text>
-                      </TouchableOpacity>
-                    )}
                     <TouchableOpacity
                       testID="capture-map-button"
                       style={styles.captureMapButton}
@@ -1153,16 +1294,28 @@ export default function SetupScreen() {
                 ))}
               </View>
 
-              <Text style={styles.fieldLabel}>REGION / STATE (OPTIONAL)</Text>
-              <TextInput testID="region-input" style={styles.textInput} placeholder="e.g., East Texas, Southern Ohio" placeholderTextColor={COLORS.fogGray} value={region} onChangeText={setRegion} />
+              {/* State + Hunting Region picker. State drives the
+                  hunting region so the AI prompt can lean on regional
+                  patterns. Auto-filled from GPS reverse-geocode. */}
+              <StateRegionPicker
+                stateCode={stateCode}
+                onStateChange={setStateCode}
+                regionId={huntingRegion}
+                onRegionChange={setHuntingRegion}
+              />
 
-              {/* Hunt Style — optional, canonical-only. Unselected by default. */}
+              {/* Hunt Style — natural 2-step progression: WEAPON, then METHOD.
+                  Both are optional and canonical-only. The method
+                  section unlocks once a weapon is picked so the flow
+                  reads top-to-bottom like a real prep checklist. */}
+
+              {/* STEP 1: WEAPON */}
               <View style={styles.fieldRow}>
-                <Text style={styles.fieldLabel}>HUNT STYLE (OPTIONAL)</Text>
-                {huntStyle && (
+                <Text style={styles.fieldLabel}>WEAPON (OPTIONAL)</Text>
+                {huntWeapon && (
                   <TouchableOpacity
-                    testID="hunt-style-clear"
-                    onPress={() => setHuntStyle(null)}
+                    testID="hunt-weapon-clear"
+                    onPress={() => setHuntWeapon(null)}
                     hitSlop={8}
                   >
                     <Text style={styles.huntStyleClear}>Clear</Text>
@@ -1170,16 +1323,16 @@ export default function SetupScreen() {
                 )}
               </View>
               <View style={styles.huntStyleGrid}>
-                {HUNT_STYLES.map((opt) => {
-                  const active = huntStyle === opt.id;
+                {HUNT_WEAPONS.map((opt) => {
+                  const active = huntWeapon === opt.id;
                   return (
                     <TouchableOpacity
                       key={opt.id}
-                      testID={`hunt-style-${opt.id}`}
+                      testID={`hunt-weapon-${opt.id}`}
                       accessibilityRole="button"
                       accessibilityState={{ selected: active }}
                       style={[styles.huntStyleChip, active && styles.huntStyleChipActive]}
-                      onPress={() => setHuntStyle(active ? null : opt.id)}
+                      onPress={() => setHuntWeapon(active ? null : (opt.id as HuntWeaponId))}
                       activeOpacity={0.8}
                     >
                       <Ionicons
@@ -1187,17 +1340,71 @@ export default function SetupScreen() {
                         size={18}
                         color={active ? COLORS.accent : COLORS.fogGray}
                       />
-                      <Text style={[styles.huntStyleText, active && styles.huntStyleTextActive]} numberOfLines={1}>
+                      <Text
+                        style={[styles.huntStyleText, active && styles.huntStyleTextActive]}
+                        numberOfLines={1}
+                      >
                         {opt.shortLabel}
                       </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
-              {huntStyle && (
-                <Text testID="hunt-style-hint" style={styles.huntStyleHint}>
-                  {HUNT_STYLES.find(s => s.id === huntStyle)?.hint}
+              {huntWeapon && (
+                <Text testID="hunt-weapon-hint" style={styles.huntStyleHint}>
+                  {HUNT_WEAPONS.find(s => s.id === huntWeapon)?.hint}
                 </Text>
+              )}
+
+              {/* STEP 2: METHOD — appears only after a weapon is picked */}
+              {huntWeapon && (
+                <>
+                  <View style={[styles.fieldRow, styles.huntMethodRow]}>
+                    <Text style={styles.fieldLabel}>METHOD (OPTIONAL)</Text>
+                    {huntMethod && (
+                      <TouchableOpacity
+                        testID="hunt-method-clear"
+                        onPress={() => setHuntMethod(null)}
+                        hitSlop={8}
+                      >
+                        <Text style={styles.huntStyleClear}>Clear</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <View style={styles.huntStyleGrid}>
+                    {HUNT_METHODS.map((opt) => {
+                      const active = huntMethod === opt.id;
+                      return (
+                        <TouchableOpacity
+                          key={opt.id}
+                          testID={`hunt-method-${opt.id}`}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          style={[styles.huntStyleChip, active && styles.huntStyleChipActive]}
+                          onPress={() => setHuntMethod(active ? null : (opt.id as HuntMethodId))}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons
+                            name={opt.icon as any}
+                            size={18}
+                            color={active ? COLORS.accent : COLORS.fogGray}
+                          />
+                          <Text
+                            style={[styles.huntStyleText, active && styles.huntStyleTextActive]}
+                            numberOfLines={1}
+                          >
+                            {opt.shortLabel}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  {huntMethod && (
+                    <Text testID="hunt-method-hint" style={styles.huntStyleHint}>
+                      {HUNT_METHODS.find(s => s.id === huntMethod)?.hint}
+                    </Text>
+                  )}
+                </>
               )}
             </View>
           )}
@@ -1424,6 +1631,7 @@ const styles = StyleSheet.create({
   propTextActive: { color: COLORS.accent },
   // Hunt Style (optional) — 3-col grid mirroring wind/precip chip aesthetics.
   huntStyleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  huntMethodRow: { marginTop: 16 },
   huntStyleChip: {
     width: (width - 72) / 3, // 3 per row with ~16 page padding + 10 gap
     flexDirection: 'row',
@@ -1551,6 +1759,55 @@ const styles = StyleSheet.create({
   goButtonDisabled: { backgroundColor: 'rgba(58, 74, 82, 0.5)' },
   goButtonText: { color: COLORS.primary, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
   currentCoordsText: { color: COLORS.fogGray, fontSize: 11, marginBottom: 8, marginLeft: 2 },
+  // GPS coordinate inputs (lat / lon split, decimal-pad keyboards)
+  useLocationButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: COLORS.accent,
+    borderRadius: 10, paddingVertical: 14,
+    marginBottom: 12, minHeight: 48,
+  },
+  useLocationText: {
+    color: COLORS.primary, fontSize: 13, fontWeight: '900', letterSpacing: 1,
+  },
+  coordSeparator: {
+    color: COLORS.fogGray, fontSize: 10, fontWeight: '700',
+    letterSpacing: 1, textAlign: 'center', marginBottom: 10,
+  },
+  coordPairRow: {
+    flexDirection: 'row', gap: 10, marginBottom: 10,
+  },
+  coordField: { flex: 1 },
+  coordFieldLabel: {
+    color: COLORS.fogGray, fontSize: 10, fontWeight: '800',
+    letterSpacing: 1, marginBottom: 4, marginLeft: 2,
+  },
+  coordFieldInputRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', borderRadius: 10,
+    borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.3)',
+    minHeight: 48, overflow: 'hidden',
+  },
+  signToggle: {
+    width: 40, minHeight: 48,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(200, 155, 60, 0.18)',
+    borderRightWidth: 1, borderRightColor: 'rgba(154, 164, 169, 0.25)',
+  },
+  signToggleText: {
+    color: COLORS.accent, fontSize: 20, fontWeight: '900', lineHeight: 22,
+  },
+  coordFieldInput: {
+    flex: 1, color: COLORS.textPrimary, fontSize: 15,
+    paddingHorizontal: 12, paddingVertical: 12,
+  },
+  goButtonFull: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.accent, borderRadius: 10, paddingVertical: 12,
+    marginBottom: 8, minHeight: 44,
+  },
+  goButtonFullText: {
+    color: COLORS.primary, fontSize: 13, fontWeight: '900', letterSpacing: 1,
+  },
   // Date Picker
   datePicker: { marginBottom: 16, marginHorizontal: -20 },
   datePickerContent: { paddingHorizontal: 20, gap: 8 },
