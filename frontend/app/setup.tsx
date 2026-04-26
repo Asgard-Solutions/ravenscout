@@ -10,7 +10,15 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
 import { useSpeciesCatalog, groupSpeciesByCategory } from '../src/constants/species';
-import { HUNT_STYLES, type HuntStyleId, getHuntStyleLabel } from '../src/constants/huntStyles';
+import {
+  HUNT_STYLES,
+  HUNT_WEAPONS,
+  HUNT_METHODS,
+  type HuntStyleId,
+  type HuntWeaponId,
+  type HuntMethodId,
+  getHuntStyleLabel,
+} from '../src/constants/huntStyles';
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
 import { RavenSpinner } from '../src/components/RavenSpinner';
@@ -126,7 +134,31 @@ export default function SetupScreen() {
   // Canonical hunt-style id (archery/rifle/blind/saddle/public_land/
   // spot_and_stalk) or null when unselected. ONLY canonical ids leave
   // this screen — see src/constants/huntStyles.ts.
-  const [huntStyle, setHuntStyle] = useState<HuntStyleId | null>(null);
+  // Hunt-style flow is split into a 2-step natural progression:
+  // Step 1 — Weapon (archery / rifle / shotgun)
+  // Step 2 — Method (blind / saddle / spot_and_stalk)
+  // Both ride alongside the analyze payload. The legacy `hunt_style`
+  // field is filled from the more specific selection (method first,
+  // then weapon) so existing prompt packs keep working unchanged
+  // until the backend learns to read both fields independently.
+  const [huntWeapon, setHuntWeapon] = useState<HuntWeaponId | null>(null);
+  const [huntMethod, setHuntMethod] = useState<HuntMethodId | null>(null);
+  // Derived legacy id for back-compat with persistence + analyze body.
+  const huntStyle: HuntStyleId | null = huntMethod || huntWeapon || null;
+  const setHuntStyle = (next: HuntStyleId | null) => {
+    // Keep legacy clear-all behavior when a downstream consumer
+    // (e.g. an old test or the "Clear" button) tries to reset.
+    if (next == null) {
+      setHuntWeapon(null);
+      setHuntMethod(null);
+      return;
+    }
+    if (['archery', 'rifle', 'shotgun'].includes(next)) {
+      setHuntWeapon(next as HuntWeaponId);
+    } else if (['blind', 'saddle', 'spot_and_stalk'].includes(next)) {
+      setHuntMethod(next as HuntMethodId);
+    }
+  };
 
   // Weather auto-fill
   const [locationCoords, setLocationCoords] = useState<{lat: number; lon: number} | null>(null);
@@ -456,8 +488,14 @@ export default function SetupScreen() {
               : (region || null),
             state_code: stateCode || null,
             hunting_region: huntingRegion || null,
-            // Canonical id only — never display text.
+            // Canonical id only — never display text. Method takes
+            // precedence over weapon for back-compat with existing
+            // prompt packs that key on saddle / blind / stalk.
             hunt_style: huntStyle,
+            // New structured weapon + method ride alongside; backend
+            // can read these once prompt packs split shotgun out.
+            hunt_weapon: huntWeapon,
+            hunt_method: huntMethod,
           },
           map_image_base64: mapImages[primaryMapIndex],
           additional_images: isPaidTier && user?.tier === 'pro'
@@ -1266,13 +1304,18 @@ export default function SetupScreen() {
                 onRegionChange={setHuntingRegion}
               />
 
-              {/* Hunt Style — optional, canonical-only. Unselected by default. */}
+              {/* Hunt Style — natural 2-step progression: WEAPON, then METHOD.
+                  Both are optional and canonical-only. The method
+                  section unlocks once a weapon is picked so the flow
+                  reads top-to-bottom like a real prep checklist. */}
+
+              {/* STEP 1: WEAPON */}
               <View style={styles.fieldRow}>
-                <Text style={styles.fieldLabel}>HUNT STYLE (OPTIONAL)</Text>
-                {huntStyle && (
+                <Text style={styles.fieldLabel}>WEAPON (OPTIONAL)</Text>
+                {huntWeapon && (
                   <TouchableOpacity
-                    testID="hunt-style-clear"
-                    onPress={() => setHuntStyle(null)}
+                    testID="hunt-weapon-clear"
+                    onPress={() => setHuntWeapon(null)}
                     hitSlop={8}
                   >
                     <Text style={styles.huntStyleClear}>Clear</Text>
@@ -1280,16 +1323,16 @@ export default function SetupScreen() {
                 )}
               </View>
               <View style={styles.huntStyleGrid}>
-                {HUNT_STYLES.map((opt) => {
-                  const active = huntStyle === opt.id;
+                {HUNT_WEAPONS.map((opt) => {
+                  const active = huntWeapon === opt.id;
                   return (
                     <TouchableOpacity
                       key={opt.id}
-                      testID={`hunt-style-${opt.id}`}
+                      testID={`hunt-weapon-${opt.id}`}
                       accessibilityRole="button"
                       accessibilityState={{ selected: active }}
                       style={[styles.huntStyleChip, active && styles.huntStyleChipActive]}
-                      onPress={() => setHuntStyle(active ? null : opt.id)}
+                      onPress={() => setHuntWeapon(active ? null : (opt.id as HuntWeaponId))}
                       activeOpacity={0.8}
                     >
                       <Ionicons
@@ -1297,17 +1340,71 @@ export default function SetupScreen() {
                         size={18}
                         color={active ? COLORS.accent : COLORS.fogGray}
                       />
-                      <Text style={[styles.huntStyleText, active && styles.huntStyleTextActive]} numberOfLines={1}>
+                      <Text
+                        style={[styles.huntStyleText, active && styles.huntStyleTextActive]}
+                        numberOfLines={1}
+                      >
                         {opt.shortLabel}
                       </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
-              {huntStyle && (
-                <Text testID="hunt-style-hint" style={styles.huntStyleHint}>
-                  {HUNT_STYLES.find(s => s.id === huntStyle)?.hint}
+              {huntWeapon && (
+                <Text testID="hunt-weapon-hint" style={styles.huntStyleHint}>
+                  {HUNT_WEAPONS.find(s => s.id === huntWeapon)?.hint}
                 </Text>
+              )}
+
+              {/* STEP 2: METHOD — appears only after a weapon is picked */}
+              {huntWeapon && (
+                <>
+                  <View style={[styles.fieldRow, styles.huntMethodRow]}>
+                    <Text style={styles.fieldLabel}>METHOD (OPTIONAL)</Text>
+                    {huntMethod && (
+                      <TouchableOpacity
+                        testID="hunt-method-clear"
+                        onPress={() => setHuntMethod(null)}
+                        hitSlop={8}
+                      >
+                        <Text style={styles.huntStyleClear}>Clear</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <View style={styles.huntStyleGrid}>
+                    {HUNT_METHODS.map((opt) => {
+                      const active = huntMethod === opt.id;
+                      return (
+                        <TouchableOpacity
+                          key={opt.id}
+                          testID={`hunt-method-${opt.id}`}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          style={[styles.huntStyleChip, active && styles.huntStyleChipActive]}
+                          onPress={() => setHuntMethod(active ? null : (opt.id as HuntMethodId))}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons
+                            name={opt.icon as any}
+                            size={18}
+                            color={active ? COLORS.accent : COLORS.fogGray}
+                          />
+                          <Text
+                            style={[styles.huntStyleText, active && styles.huntStyleTextActive]}
+                            numberOfLines={1}
+                          >
+                            {opt.shortLabel}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  {huntMethod && (
+                    <Text testID="hunt-method-hint" style={styles.huntStyleHint}>
+                      {HUNT_METHODS.find(s => s.id === huntMethod)?.hint}
+                    </Text>
+                  )}
+                </>
               )}
             </View>
           )}
@@ -1534,6 +1631,7 @@ const styles = StyleSheet.create({
   propTextActive: { color: COLORS.accent },
   // Hunt Style (optional) — 3-col grid mirroring wind/precip chip aesthetics.
   huntStyleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  huntMethodRow: { marginTop: 16 },
   huntStyleChip: {
     width: (width - 72) / 3, // 3 per row with ~16 page padding + 10 gap
     flexDirection: 'row',

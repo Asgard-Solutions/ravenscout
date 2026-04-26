@@ -11,10 +11,17 @@
 export type HuntStyleId =
   | 'archery'
   | 'rifle'
+  | 'shotgun'
   | 'blind'
   | 'saddle'
   | 'public_land'
   | 'spot_and_stalk';
+
+/** Subset of HuntStyleId representing weapons (Step 1 of the hunt-style flow). */
+export type HuntWeaponId = Extract<HuntStyleId, 'archery' | 'rifle' | 'shotgun'>;
+
+/** Subset of HuntStyleId representing setup methods (Step 2 of the flow). */
+export type HuntMethodId = Extract<HuntStyleId, 'blind' | 'saddle' | 'spot_and_stalk'>;
 
 export interface HuntStyleOption {
   id: HuntStyleId;
@@ -38,8 +45,15 @@ export const HUNT_STYLES: HuntStyleOption[] = [
     id: 'rifle',
     label: 'Rifle',
     shortLabel: 'Rifle',
-    hint: 'Centerfire / muzzleloader / shotgun — longer sightlines, glassing-friendly.',
+    hint: 'Centerfire / muzzleloader — long sightlines, glassing-friendly.',
     icon: 'flash',
+  },
+  {
+    id: 'shotgun',
+    label: 'Shotgun',
+    shortLabel: 'Shotgun',
+    hint: 'Shotgun / slug gun — short-to-mid range, dense-cover capable.',
+    icon: 'thunderstorm',
   },
   {
     id: 'blind',
@@ -70,6 +84,20 @@ export const HUNT_STYLES: HuntStyleOption[] = [
     icon: 'eye',
   },
 ];
+
+/**
+ * Two-step hunt-style flow — Step 1 (Weapon) is shown first, Step 2
+ * (Method) appears after a weapon is picked. Both surfaces resolve
+ * to canonical HuntStyleId values from HUNT_STYLES so the existing
+ * persistence + AI-prompt pipeline keeps working unchanged.
+ */
+export const HUNT_WEAPONS: HuntStyleOption[] = HUNT_STYLES.filter(s =>
+  ['archery', 'rifle', 'shotgun'].includes(s.id),
+);
+
+export const HUNT_METHODS: HuntStyleOption[] = HUNT_STYLES.filter(s =>
+  ['blind', 'saddle', 'spot_and_stalk'].includes(s.id),
+);
 
 export const CANONICAL_HUNT_STYLE_IDS: ReadonlyArray<HuntStyleId> = HUNT_STYLES.map(
   s => s.id,
@@ -132,8 +160,9 @@ export function normalizeHuntStyleId(value: unknown): HuntStyleId | null {
     'muzzle loader': 'rifle',
     'black powder': 'rifle',
     blackpowder: 'rifle',
-    shotgun: 'rifle',
-    'slug gun': 'rifle',
+    shotgun: 'shotgun',
+    'slug gun': 'shotgun',
+    slug: 'shotgun',
 
     blind: 'blind',
     'ground blind': 'blind',
