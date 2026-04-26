@@ -31,6 +31,15 @@ interface TacticalMapViewProps {
   initialStyle?: RavenScoutMapStyleId;
   /** Optional callback fired when a Free user taps the upsell. */
   onUpgradePress?: () => void;
+  /**
+   * Controlled-mode style id. When provided (with onControlledStyleChange),
+   * TacticalMapView skips its internal useMapStylePreference hook and uses
+   * the parent's state instead. Used when the style switcher is rendered
+   * OUTSIDE the map (e.g. below it, to avoid the WebView responder
+   * stealing chip taps on Android).
+   */
+  controlledStyleId?: RavenScoutMapStyleId;
+  onControlledStyleChange?: (next: RavenScoutMapStyleId) => void;
 }
 
 export default function TacticalMapView({
@@ -42,12 +51,21 @@ export default function TacticalMapView({
   onCapture,
   initialStyle,
   onUpgradePress,
+  controlledStyleId,
+  onControlledStyleChange,
 }: TacticalMapViewProps) {
   const useMaptiler = hasMapTilerKey();
   const { user } = useAuth();
   const planId = normalizePlanId(user?.tier);
   const allowedStyleIds = useMemo(() => getAllowedMapStylesForPlan(planId), [planId]);
-  const { styleId, setStyleId } = useMapStylePreference(initialStyle);
+  const internal = useMapStylePreference(initialStyle);
+  // Controlled mode overrides the internal hook so the parent screen
+  // can render the chip switcher OUTSIDE the WebView wrapper (avoids
+  // the Android responder-capture issue where chip taps were silently
+  // swallowed by the parent's onStartShouldSetResponderCapture).
+  const isControlled = controlledStyleId != null && typeof onControlledStyleChange === 'function';
+  const styleId = isControlled ? (controlledStyleId as RavenScoutMapStyleId) : internal.styleId;
+  const setStyleId = isControlled ? (onControlledStyleChange as (n: RavenScoutMapStyleId) => void) : internal.setStyleId;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const webviewRef = useRef<any>(null);
   const lastCaptureRef = useRef(0);

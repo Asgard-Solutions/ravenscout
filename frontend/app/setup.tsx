@@ -16,6 +16,8 @@ import { useAuth } from '../src/hooks/useAuth';
 import { RavenSpinner } from '../src/components/RavenSpinner';
 import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import TacticalMapView from '../src/map/TacticalMapView';
+import { MapStyleSwitcher } from '../src/map/MapStyleSwitcher';
+import { useMapStylePreference } from '../src/hooks/useMapStylePreference';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
 import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
@@ -65,6 +67,13 @@ export default function SetupScreen() {
   const [mapKey, setMapKey] = useState(0);
   const [captureCount, setCaptureCount] = useState(0);
   const [huntDate, setHuntDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Lifted map-style state — owned here so the chip switcher can render
+  // OUTSIDE the WebView wrapper (the wrapper steals all touches via
+  // its onStartShouldSetResponderCapture handlers to protect map pinch
+  // /pan from the parent ScrollView, which previously prevented chip
+  // taps from ever firing on Android).
+  const { styleId: mapStyleId, setStyleId: setMapStyleId } = useMapStylePreference();
 
   const isPaidTier = user?.tier === 'core' || user?.tier === 'pro';
 
@@ -872,33 +881,16 @@ export default function SetupScreen() {
 
                   <View
                     style={styles.interactiveMapContainer}
-                    // On Android, the parent ScrollView will steal pinch/pan
-                    // gestures from the WebView unless the map claims them
-                    // at the earliest responder phase. Returning true here
-                    // tells the ResponderSystem "this View handles its own
-                    // touches — parent, stop capturing". Without this the
-                    // whole page scrolls when the user tries to move the map.
-                    //
-                    // EXCEPTION: the bottom strip houses the map-style chips
-                    // (Pressables at bottom:24, maxHeight:36 inside the
-                    // TacticalMapView overlay). If we capture there too, the
-                    // chip onPress never fires and the user is stuck on the
-                    // default style. So we explicitly let touches in the
-                    // bottom ~72px bubble down to the chip Pressables while
-                    // still capturing pan/pinch over the rest of the map.
-                    onStartShouldSetResponder={(e) => {
-                      const y = e.nativeEvent.locationY ?? 0;
-                      return y < 300 - 72;
-                    }}
+                    // Claim touches at the earliest responder phase so the
+                    // parent ScrollView doesn't steal pinch / pan from the
+                    // WebView. The chip switcher is now rendered OUTSIDE
+                    // this wrapper (right below it) so it never has to
+                    // compete with these capture handlers — that was the
+                    // original Android chip-tap-no-op bug.
+                    onStartShouldSetResponder={() => true}
                     onMoveShouldSetResponder={() => true}
-                    onStartShouldSetResponderCapture={(e) => {
-                      const y = e.nativeEvent.locationY ?? 0;
-                      return y < 300 - 72;
-                    }}
-                    onMoveShouldSetResponderCapture={(e) => {
-                      const y = e.nativeEvent.locationY ?? 0;
-                      return y < 300 - 72;
-                    }}
+                    onStartShouldSetResponderCapture={() => true}
+                    onMoveShouldSetResponderCapture={() => true}
                   >
                     <TacticalMapView
                       key={mapKey}
@@ -908,8 +900,24 @@ export default function SetupScreen() {
                       captureRequested={captureCount}
                       onCapture={handleMapCapture}
                       onUpgradePress={() => router.push('/subscription')}
+                      // Controlled-mode: parent owns the style state so
+                      // MapStyleSwitcher (rendered below, OUTSIDE this
+                      // touch-stealing wrapper) can drive it.
+                      controlledStyleId={mapStyleId}
+                      onControlledStyleChange={setMapStyleId}
+                      showStyleSwitcher={false}
                     />
                   </View>
+
+                  {/* Map style picker — rendered OUTSIDE the WebView wrapper
+                      so its Pressable taps are never intercepted by the
+                      responder-capture handlers above. Free tier sees the
+                      upsell, Core/Pro see their tier-allowed chips. */}
+                  <MapStyleSwitcher
+                    styleId={mapStyleId}
+                    onChange={setMapStyleId}
+                    onUpgradePress={() => router.push('/subscription')}
+                  />
 
                   <Text style={styles.interactiveMapHint}>
                     Pan & zoom to your hunting area, then capture
