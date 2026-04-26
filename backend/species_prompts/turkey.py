@@ -161,26 +161,47 @@ TURKEY_PACK = SpeciesPromptPack(
                 "Flag that most calling-run tactics don't translate well to archery.",
             ),
         ),
-        "rifle": HuntStyleModifier(
-            style_id="rifle",
-            name="Shotgun / Rifle (Turkey)",
+        "shotgun": HuntStyleModifier(
+            style_id="shotgun",
+            name="Shotgun (Turkey)",
             behavior_adjustments=(
-                "Shotgun / rimfire effective window extends to ~40-50 yards for shotgun and further for legal rifle states — setups can work birds that hang up further than archery tolerates.",
+                "Shotgun is the default turkey weapon — effective pattern window is ~30-45 yards (40-50 with TSS / extended-range loads).",
                 "Patterning discipline matters: setups that seem strong on a map can be beyond pattern density at actual range.",
+                "Birds inside 25 yards detect head movement on the gun-mount — setups must engineer a moment-of-stillness commitment, not assume it.",
             ),
             tactical_adjustments=(
-                "Favor setups with clear sightlines into likely strut zones at 30-45 yards where a bird can stop, periscope, and be taken without requiring full commitment.",
-                "Running-and-gunning (move, call, sit, move) is more viable because shot windows forgive a longer hang-up.",
-                "Logging roads, pipeline right-of-ways, and field edges are especially effective — they deliver shot windows without requiring tight commitment.",
-                "Note: some turkey seasons are shotgun-only — if imagery/context doesn't confirm legality, flag rifle assumptions in key_assumptions.",
+                "Favor setups with clear sightlines into likely strut zones at 30-45 yards where a bird can stop, periscope, and be taken.",
+                "Running-and-gunning (move, call, sit, move) is more viable than for archery — shot windows forgive longer hang-ups.",
+                "Logging roads, pipeline right-of-ways, and field edges are especially productive — they deliver shot windows without requiring tight commitment.",
+                "Plan for multiple sightline arcs from the setup tree — a hung-up bird often skirts the predicted path.",
             ),
             caution_adjustments=(
-                "Do NOT describe birds as 'in range' at distances beyond a realistic pattern envelope (40-45 yards for most shotgun setups).",
-                "Do NOT assume rifle legality — default to shotgun framing unless confirmed.",
+                "Do NOT describe birds as 'in range' at distances beyond a realistic pattern envelope (40-45 yards for most shotgun setups, 50 with TSS).",
+                "Do NOT recommend rifle-style 75-100 yard glassing setups as 'shotgun' setups — that's a different game.",
             ),
             species_tips_adjustments=(
-                "Emphasize 30-45 yard sightline setups and the value of running-and-gunning.",
-                "Call out the shotgun-only legal default and flag rifle assumptions.",
+                "Emphasize 30-45 yard sightline setups, decoy placement inside that envelope, and the value of running-and-gunning.",
+                "Call out shotgun-only as the legal default for most turkey seasons.",
+            ),
+        ),
+        "rifle": HuntStyleModifier(
+            style_id="rifle",
+            name="Rifle (Turkey)",
+            behavior_adjustments=(
+                "Rifle for turkey is legal in only a minority of states (most require shotgun-only) — confirm legality before committing to a rifle plan.",
+                "Where legal, rimfire / centerfire extends the effective range to 75-100+ yards and shifts the encounter from 'commit-to-call' to 'glass-and-stalk'.",
+            ),
+            tactical_adjustments=(
+                "Favor open setups: ridge benches, field-corner overlooks, and logging-road glassing where birds strut and feed at distance.",
+                "Calling is supplemental — many rifle takes are glassing-driven, not call-committed.",
+                "Shot placement (head/neck for clean kills; vitals on body for legal-states-with-different-rules) is even more critical at extended range.",
+            ),
+            caution_adjustments=(
+                "Do NOT assume rifle legality for turkey — the majority of states are shotgun-only. Flag prominently as key_assumption unless confirmed.",
+                "Do NOT collapse rifle setups onto shotgun-tight 30-45 yard pinch points when the weapon enables much broader coverage.",
+            ),
+            species_tips_adjustments=(
+                "Lead with the legality flag, then emphasize open-sight glassing setups with broader sightlines than shotgun setups would warrant.",
             ),
         ),
         "blind": HuntStyleModifier(
