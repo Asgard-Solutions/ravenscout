@@ -1046,6 +1046,34 @@ async def presign_media_upload(body: PresignUploadBody, request: Request):
 
     try:
         upload_url, asset_url, expires_in = s3_service.presign_upload(key, mime)
+        # Track this presign as a pending upload. If the user
+        # eventually saves a hunt that references this key, the row
+        # is removed (committed). If not, the orphan-cleanup sweep
+        # will delete the S3 object after `older_than_seconds` has
+        # elapsed — preventing forever-orphaned objects from
+        # abandoned/crashed hunt-creation flows.
+        try:
+            await db.pending_uploads.update_one(
+                {"user_id": user["user_id"], "s3_key": key},
+                {
+                    "$setOnInsert": {"created_at": datetime.now(timezone.utc)},
+                    "$set": {
+                        "user_id": user["user_id"],
+                        "s3_key": key,
+                        "image_id": body.imageId,
+                        "hunt_id": body.huntId,
+                        "role": role,
+                        "mime": mime,
+                    },
+                },
+                upsert=True,
+            )
+        except Exception:  # noqa: BLE001
+            # Tracking is best-effort — failing here must NOT block
+            # the actual presign response.
+            logger.warning(
+                "pending_uploads tracking failed for key=%s (non-fatal)", key,
+            )
         logger.info(
             f"presign_upload OK user={user['user_id']} hunt={body.huntId} "
             f"role={role} key={key} ttl={expires_in}"
@@ -1090,6 +1118,134 @@ async def media_health(request: Request):
         return {"ok": False, "error": "S3 not configured", **cfg}
     ok, err = s3_service.head_bucket()
     return {"ok": ok, "error": err, **cfg}
+
+
+# Default age threshold for orphan cleanup. A presigned upload URL
+# is good for 15 minutes; we give the client a generous 24-hour
+# completion window before considering an object abandoned. Anything
+# fresher than this stays for the next sweep.
+ORPHAN_DEFAULT_AGE_SECONDS = 24 * 60 * 60  # 24h
+ORPHAN_MIN_AGE_SECONDS = 15 * 60           # 15m floor (presign TTL)
+ORPHAN_MAX_BATCH = 500                     # cap per call
+
+
+@api_router.post("/media/cleanup-orphans")
+async def cleanup_orphan_media(request: Request):
+    """Delete S3 objects that were presigned but never committed to a
+    saved hunt. Scoped to the calling user — never touches another
+    account's keys.
+
+    The sweep walks `pending_uploads` for the caller, filters to rows
+    older than `older_than_seconds` (default 24h, min 15m to respect
+    the presign TTL), confirms each key is NOT referenced in any of
+    the user's saved hunts (defense-in-depth join), then deletes the
+    S3 object and the pending row.
+
+    Safe to call repeatedly. Returns counts and any failed keys so
+    the caller can render a status banner.
+    """
+    user = await get_current_user(request)
+    _require_cloud_media_user(user)
+    uid = user["user_id"]
+
+    # Optional override via query string. Floors at 15 minutes so we
+    # never race with a still-active presign URL.
+    older_than = ORPHAN_DEFAULT_AGE_SECONDS
+    raw = request.query_params.get("older_than_seconds")
+    if raw:
+        try:
+            older_than = max(ORPHAN_MIN_AGE_SECONDS, int(raw))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid older_than_seconds")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than)
+    pending_cursor = db.pending_uploads.find(
+        {"user_id": uid, "created_at": {"$lt": cutoff}},
+    ).limit(ORPHAN_MAX_BATCH)
+    pending = await pending_cursor.to_list(length=ORPHAN_MAX_BATCH)
+
+    if not pending:
+        return {
+            "ok": True,
+            "scanned": 0,
+            "deleted": 0,
+            "kept_committed": 0,
+            "failed": [],
+            "older_than_seconds": older_than,
+        }
+
+    # Defense in depth: never delete a key that is referenced by any
+    # of the user's saved hunts, even if its pending row somehow
+    # survived the commit cleanup. A single $in lookup is cheap.
+    candidate_keys = [p["s3_key"] for p in pending]
+    committed_cursor = db.hunts.find(
+        {"user_id": uid, "image_s3_keys": {"$in": candidate_keys}},
+        {"image_s3_keys": 1, "_id": 0},
+    )
+    committed_set: set[str] = set()
+    async for h in committed_cursor:
+        for k in (h.get("image_s3_keys") or []):
+            committed_set.add(k)
+
+    deleted = 0
+    failed: list[dict] = []
+    kept_committed = 0
+    s3_ready = s3_service.is_configured()
+
+    for row in pending:
+        key = row["s3_key"]
+        if key in committed_set:
+            # Object is now actually used — drop the stale pending row
+            # and keep the S3 object. Self-healing path.
+            try:
+                await db.pending_uploads.delete_one({"_id": row["_id"]})
+            except Exception:  # noqa: BLE001
+                pass
+            kept_committed += 1
+            continue
+
+        # Ownership guard — paranoia, since user_id is in the query
+        # already, but proves to ourselves we never delete cross-user.
+        try:
+            _guard_storage_key_owner(user, key)
+        except HTTPException:
+            failed.append({"key": key, "reason": "ownership_mismatch"})
+            continue
+
+        if not s3_ready:
+            failed.append({"key": key, "reason": "s3_not_configured"})
+            continue
+
+        try:
+            ok = s3_service.delete_object(key)
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            logger.warning("orphan_cleanup: s3 delete failed for %s: %s", key, exc)
+        if not ok:
+            failed.append({"key": key, "reason": "s3_delete_failed"})
+            continue
+
+        try:
+            await db.pending_uploads.delete_one({"_id": row["_id"]})
+        except Exception:  # noqa: BLE001
+            # The S3 object is already gone — leaving the pending row
+            # behind is harmless (next sweep will retry the delete and
+            # find a 404, which we treat as success).
+            pass
+        deleted += 1
+
+    logger.info(
+        "orphan_cleanup user=%s scanned=%d deleted=%d kept_committed=%d failed=%d older_than=%ds",
+        uid, len(pending), deleted, kept_committed, len(failed), older_than,
+    )
+    return {
+        "ok": True,
+        "scanned": len(pending),
+        "deleted": deleted,
+        "kept_committed": kept_committed,
+        "failed": failed,
+        "older_than_seconds": older_than,
+    }
 
 
 @api_router.post("/media/presign-download")
@@ -1887,6 +2043,24 @@ async def upsert_hunt(body: HuntUpsertBody, request: Request):
     except Exception as e:
         logger.error(f"hunts upsert failed for user={uid} hunt={body.hunt_id}: {e}")
         raise HTTPException(status_code=500, detail="Could not save hunt")
+
+    # Clear pending_uploads rows for any keys this hunt now references.
+    # Once a key lives inside a saved hunt's image_s3_keys, the orphan
+    # cleanup sweep must NOT delete it — removing the row here is what
+    # makes that distinction. Best-effort: a transient failure leaves
+    # the row pending and the sweep will see the key is now committed
+    # (it joins against `hunts.image_s3_keys` before deleting anything).
+    keys_to_commit = body.image_s3_keys or []
+    if keys_to_commit:
+        try:
+            await db.pending_uploads.delete_many(
+                {"user_id": uid, "s3_key": {"$in": list(keys_to_commit)}},
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "pending_uploads cleanup failed for hunt=%s (non-fatal)",
+                body.hunt_id,
+            )
 
     saved = await db.hunts.find_one(
         {"user_id": uid, "hunt_id": body.hunt_id},

@@ -26,6 +26,7 @@ from .pack import HuntStyleModifier, SpeciesPromptPack
 CANONICAL_HUNT_STYLES: Mapping[str, str] = {
     "archery":         "Archery",
     "rifle":           "Rifle",
+    "shotgun":         "Shotgun",
     "blind":           "Ground Blind",
     "saddle":          "Tree Saddle",
     "public_land":     "Public Land",
@@ -58,7 +59,7 @@ _ALIAS_MAP: Mapping[str, str] = {
     "traditional": "archery",
     "crossbow": "archery",
 
-    # Rifle (including muzzleloader / centerfire)
+    # Rifle (centerfire / muzzleloader — long, precise rounds)
     "rifle": "rifle",
     "gun": "rifle",
     "firearm": "rifle",
@@ -67,8 +68,17 @@ _ALIAS_MAP: Mapping[str, str] = {
     "muzzle loader": "rifle",
     "black powder": "rifle",
     "blackpowder": "rifle",
-    "shotgun": "rifle",
-    "slug gun": "rifle",
+
+    # Shotgun (its own canonical id — short-to-mid range, dense-cover
+    # capable, slug or shot). Behaviorally distinct from rifle: tighter
+    # effective range, more cover-tolerant, often the only legal firearm
+    # in shotgun-only seasons / counties.
+    "shotgun": "shotgun",
+    "shot gun": "shotgun",
+    "slug gun": "shotgun",
+    "slug": "shotgun",
+    "scattergun": "shotgun",
+    "smoothbore": "shotgun",
 
     # Blind
     "blind": "blind",
@@ -112,6 +122,7 @@ _ALIAS_MAP: Mapping[str, str] = {
     # Canonical pass-through (from admin / API inputs)
     "archery_": "archery",
     "rifle_": "rifle",
+    "shotgun_": "shotgun",
     "blind_": "blind",
     "saddle_": "saddle",
     "public_land": "public_land",

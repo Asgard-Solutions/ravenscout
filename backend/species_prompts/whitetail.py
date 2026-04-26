@@ -237,6 +237,30 @@ WHITETAIL_PACK = SpeciesPromptPack(
                 "Call out that shot-lane breadth outweighs archery-tight funnel geometry here.",
             ),
         ),
+        "shotgun": HuntStyleModifier(
+            style_id="shotgun",
+            name="Shotgun (Whitetail)",
+            behavior_adjustments=(
+                "Effective shot window for slugs / sabots is roughly 50-100 yards in most setups (75-150 with optics) — far longer than archery, but tighter than centerfire rifle.",
+                "Buckshot setups collapse the effective range to ~30-40 yards and demand archery-style geometry with broader pattern tolerance.",
+                "Shotgun-only zones (e.g., shotgun-only counties in IL/IN/OH/MI/IA, NY-southern zone) are common — local regulations frequently dictate this choice rather than preference.",
+            ),
+            tactical_adjustments=(
+                "Favor mid-range setups: short ridge benches, narrow field corners, clearcut seams, and dense-cover travel breaks where 60-100 yard shots are realistic but the cover supports the deer.",
+                "Slugs are dense-cover capable in a way rifles are not — second-growth, thicket edges, and tight bottomland funnels are productive.",
+                "Stand placement should bias toward broadside shot opportunity inside 100 yards rather than maximum-range glassing — slug ballistics fall off fast past 125 yards.",
+                "Buckshot setups: treat geometry like archery (tight, in-cover, 30-40 yards) but expect a broader, more forgiving pattern.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend long-range, open-terrain stands as 'shotgun' setups when slug ballistics realistically max out near 125 yards — that's a rifle play.",
+                "Do NOT assume rifle legality from a shotgun selection — many shotgun-zone hunters are there because rifles are illegal locally; flag rifle alternatives as key_assumptions only.",
+                "Do NOT collapse shotgun onto archery-tight pinch points unless the user is using buckshot — slug shooters lose breadth that mid-range setups give them.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize mid-range, dense-cover-capable shot lanes and edge geometry inside 100 yards.",
+                "Call out shotgun-zone legality as the likely driver and treat it as a strength (cover tolerance) rather than a limitation.",
+            ),
+        ),
         "blind": HuntStyleModifier(
             style_id="blind",
             name="Ground Blind (Whitetail)",
