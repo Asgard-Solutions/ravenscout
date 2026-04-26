@@ -78,21 +78,21 @@ export const RAVEN_SCOUT_MAP_STYLES: ReadonlyArray<RavenScoutMapStyle> = [
     label: 'HYBRID',
     description: 'Satellite imagery with labels and road / place context.',
     icon: 'globe',
-    styleUrl: buildStyleUrl('hybrid-v4'),
+    styleUrl: buildStyleUrl('hybrid'),
   },
   {
     id: 'satellitePlain',
     label: 'SAT',
     description: 'Clean satellite imagery without extra label clutter.',
     icon: 'earth',
-    styleUrl: buildStyleUrl('satellite-v4'),
+    styleUrl: buildStyleUrl('satellite'),
   },
   {
     id: 'topo',
     label: 'TOPO',
     description: 'Topographic map for elevation, contours, and terrain planning.',
     icon: 'analytics',
-    styleUrl: buildStyleUrl('topo-v4'),
+    styleUrl: buildStyleUrl('topo-v2'),
   },
 ] as const;
 

@@ -53,13 +53,17 @@ describe('mapStyles config', () => {
       }
     });
 
-    it('uses the v4 slugs the spec calls out', () => {
+    it('uses the MapTiler slugs the spec calls out', () => {
+      // outdoor-v4 and landscape-v4 are the new-generation v4 styles.
+      // hybrid / satellite / topo-v2 do NOT have a -v4 variant per
+      // MapTiler's API (verified Feb 2026) — using -v4 there returns
+      // 404 and the map silently fails to switch on Android.
       const byId = Object.fromEntries(mod.RAVEN_SCOUT_MAP_STYLES.map(s => [s.id, s]));
       expect(byId.outdoor.styleUrl).toContain('/maps/outdoor-v4/style.json');
       expect(byId.landscape.styleUrl).toContain('/maps/landscape-v4/style.json');
-      expect(byId.satelliteHybrid.styleUrl).toContain('/maps/hybrid-v4/style.json');
-      expect(byId.satellitePlain.styleUrl).toContain('/maps/satellite-v4/style.json');
-      expect(byId.topo.styleUrl).toContain('/maps/topo-v4/style.json');
+      expect(byId.satelliteHybrid.styleUrl).toContain('/maps/hybrid/style.json');
+      expect(byId.satellitePlain.styleUrl).toContain('/maps/satellite/style.json');
+      expect(byId.topo.styleUrl).toContain('/maps/topo-v2/style.json');
     });
 
     it('defaults brand-new users to Outdoor', () => {
