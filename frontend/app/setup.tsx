@@ -63,7 +63,9 @@ export default function SetupScreen() {
   const [primaryMapIndex, setPrimaryMapIndex] = useState(0);
   const [mapInputMode, setMapInputMode] = useState<'upload' | 'interactive'>('upload');
   const [showInteractiveMap, setShowInteractiveMap] = useState(false);
-  const [coordInput, setCoordInput] = useState('');
+  const [coordInput, setCoordInput] = useState(''); // legacy, kept for compat
+  const [latInput, setLatInput] = useState('');
+  const [lonInput, setLonInput] = useState('');
   const [mapKey, setMapKey] = useState(0);
   const [captureCount, setCaptureCount] = useState(0);
   const [huntDate, setHuntDate] = useState(new Date().toISOString().split('T')[0]);
@@ -251,21 +253,33 @@ export default function SetupScreen() {
   }, [mapImages.length]);
 
   const goToCoordinates = () => {
-    const input = coordInput.trim();
-    if (!input) return;
-    // Parse formats: "38.5, -96.7" or "38.5 -96.7" or "38.5,-96.7"
-    const parts = input.split(/[\s,]+/).filter(Boolean);
-    if (parts.length >= 2) {
-      const lat = parseFloat(parts[0]);
-      const lon = parseFloat(parts[1]);
-      if (!isNaN(lat) && !isNaN(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-        setLocationCoords({ lat, lon });
-        setCoordInput(`${lat}, ${lon}`);
-        setMapKey(prev => prev + 1);
-        return;
-      }
+    const lat = parseFloat(latInput.trim());
+    const lon = parseFloat(lonInput.trim());
+    if (
+      !isNaN(lat) && !isNaN(lon) &&
+      lat >= -90 && lat <= 90 &&
+      lon >= -180 && lon <= 180
+    ) {
+      setLocationCoords({ lat, lon });
+      setCoordInput(`${lat}, ${lon}`); // legacy mirror for any consumer
+      setMapKey(prev => prev + 1);
+      return;
     }
-    Alert.alert('Invalid Coordinates', 'Enter latitude and longitude, e.g., "38.573, -96.726"');
+    Alert.alert(
+      'Invalid Coordinates',
+      'Latitude must be between −90 and 90; longitude between −180 and 180. Use a minus sign (−) for South / West.',
+    );
+  };
+
+  // Toggle the sign of whatever is currently in a coord input. Lets
+  // the user enter negatives without needing the punctuation keyboard
+  // (decimal-pad on Android does not surface "−").
+  const toggleSign = (which: 'lat' | 'lon') => {
+    const cur = which === 'lat' ? latInput : lonInput;
+    if (!cur.trim()) return;
+    const next = cur.startsWith('-') ? cur.slice(1) : `-${cur}`;
+    if (which === 'lat') setLatInput(next);
+    else setLonInput(next);
   };
 
   // --- Location ---
@@ -277,12 +291,16 @@ export default function SetupScreen() {
         return;
       }
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setLocationCoords({ lat: loc.coords.latitude, lon: loc.coords.longitude });
-      setCoordInput(`${loc.coords.latitude.toFixed(6)}, ${loc.coords.longitude.toFixed(6)}`);
+      const lat = loc.coords.latitude;
+      const lon = loc.coords.longitude;
+      setLocationCoords({ lat, lon });
+      setLatInput(lat.toFixed(6));
+      setLonInput(lon.toFixed(6));
+      setCoordInput(`${lat.toFixed(6)}, ${lon.toFixed(6)}`); // legacy mirror
       setMapKey(prev => prev + 1);
       // Try to get location name via reverse geocode
       try {
-        const geocode = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        const geocode = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
         if (geocode[0]) {
           const g = geocode[0];
           setLocationName(`${g.city || g.name || ''}, ${g.region || ''}`);
@@ -850,29 +868,92 @@ export default function SetupScreen() {
               {/* Interactive Map Mode — Core/Pro only */}
               {mapInputMode === 'interactive' && showInteractiveMap && (
                 <View>
-                  {/* GPS Coordinate Input */}
-                  <View style={styles.coordInputRow}>
-                    <Ionicons name="location" size={18} color={COLORS.accent} />
-                    <TextInput
-                      testID="coord-input"
-                      style={styles.coordInput}
-                      placeholder="Enter GPS: 38.573, -96.726"
-                      placeholderTextColor={COLORS.fogGray}
-                      value={coordInput}
-                      onChangeText={setCoordInput}
-                      keyboardType="numbers-and-punctuation"
-                      returnKeyType="go"
-                      onSubmitEditing={goToCoordinates}
-                    />
-                    <TouchableOpacity
-                      testID="go-to-coords-button"
-                      style={[styles.goButton, !coordInput.trim() && styles.goButtonDisabled]}
-                      onPress={goToCoordinates}
-                      disabled={!coordInput.trim()}
-                    >
-                      <Text style={styles.goButtonText}>GO</Text>
-                    </TouchableOpacity>
+                  {/* Use Current Location — primary CTA */}
+                  <TouchableOpacity
+                    testID="use-current-location-button"
+                    style={styles.useLocationButton}
+                    onPress={getLocation}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="navigate" size={18} color={COLORS.primary} />
+                    <Text style={styles.useLocationText}>USE MY CURRENT LOCATION</Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.coordSeparator}>OR ENTER GPS MANUALLY</Text>
+
+                  {/* GPS Coordinate Inputs — Lat / Lon side-by-side, decimal-pad keyboard. */}
+                  <View style={styles.coordPairRow}>
+                    {/* LAT */}
+                    <View style={styles.coordField}>
+                      <Text style={styles.coordFieldLabel}>LAT</Text>
+                      <View style={styles.coordFieldInputRow}>
+                        <TouchableOpacity
+                          testID="lat-sign-toggle"
+                          style={styles.signToggle}
+                          onPress={() => toggleSign('lat')}
+                          accessibilityLabel="Toggle latitude sign"
+                        >
+                          <Text style={styles.signToggleText}>
+                            {latInput.startsWith('-') ? '−' : '+'}
+                          </Text>
+                        </TouchableOpacity>
+                        <TextInput
+                          testID="lat-input"
+                          style={styles.coordFieldInput}
+                          placeholder="38.573"
+                          placeholderTextColor={COLORS.fogGray}
+                          value={latInput}
+                          onChangeText={setLatInput}
+                          keyboardType="decimal-pad"
+                          returnKeyType="next"
+                          maxLength={12}
+                        />
+                      </View>
+                    </View>
+
+                    {/* LON */}
+                    <View style={styles.coordField}>
+                      <Text style={styles.coordFieldLabel}>LON</Text>
+                      <View style={styles.coordFieldInputRow}>
+                        <TouchableOpacity
+                          testID="lon-sign-toggle"
+                          style={styles.signToggle}
+                          onPress={() => toggleSign('lon')}
+                          accessibilityLabel="Toggle longitude sign"
+                        >
+                          <Text style={styles.signToggleText}>
+                            {lonInput.startsWith('-') ? '−' : '+'}
+                          </Text>
+                        </TouchableOpacity>
+                        <TextInput
+                          testID="lon-input"
+                          style={styles.coordFieldInput}
+                          placeholder="-96.726"
+                          placeholderTextColor={COLORS.fogGray}
+                          value={lonInput}
+                          onChangeText={setLonInput}
+                          keyboardType="decimal-pad"
+                          returnKeyType="go"
+                          onSubmitEditing={goToCoordinates}
+                          maxLength={12}
+                        />
+                      </View>
+                    </View>
                   </View>
+
+                  <TouchableOpacity
+                    testID="go-to-coords-button"
+                    style={[
+                      styles.goButtonFull,
+                      (!latInput.trim() || !lonInput.trim()) && styles.goButtonDisabled,
+                    ]}
+                    onPress={goToCoordinates}
+                    disabled={!latInput.trim() || !lonInput.trim()}
+                  >
+                    <Ionicons name="locate" size={16} color={COLORS.primary} />
+                    <Text style={styles.goButtonFullText}>GO TO COORDINATES</Text>
+                  </TouchableOpacity>
+
                   {locationCoords && (
                     <Text style={styles.currentCoordsText}>
                       Current: {locationCoords.lat.toFixed(4)}°, {locationCoords.lon.toFixed(4)}°
@@ -925,16 +1006,6 @@ export default function SetupScreen() {
 
                   {/* Capture / Use GPS buttons */}
                   <View style={styles.interactiveActions}>
-                    {!locationCoords && (
-                      <TouchableOpacity
-                        testID="map-get-location"
-                        style={styles.mapLocationButton}
-                        onPress={getLocation}
-                      >
-                        <Ionicons name="navigate" size={18} color={COLORS.primary} />
-                        <Text style={styles.mapLocationText}>CENTER ON GPS</Text>
-                      </TouchableOpacity>
-                    )}
                     <TouchableOpacity
                       testID="capture-map-button"
                       style={styles.captureMapButton}
@@ -1551,6 +1622,55 @@ const styles = StyleSheet.create({
   goButtonDisabled: { backgroundColor: 'rgba(58, 74, 82, 0.5)' },
   goButtonText: { color: COLORS.primary, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
   currentCoordsText: { color: COLORS.fogGray, fontSize: 11, marginBottom: 8, marginLeft: 2 },
+  // GPS coordinate inputs (lat / lon split, decimal-pad keyboards)
+  useLocationButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: COLORS.accent,
+    borderRadius: 10, paddingVertical: 14,
+    marginBottom: 12, minHeight: 48,
+  },
+  useLocationText: {
+    color: COLORS.primary, fontSize: 13, fontWeight: '900', letterSpacing: 1,
+  },
+  coordSeparator: {
+    color: COLORS.fogGray, fontSize: 10, fontWeight: '700',
+    letterSpacing: 1, textAlign: 'center', marginBottom: 10,
+  },
+  coordPairRow: {
+    flexDirection: 'row', gap: 10, marginBottom: 10,
+  },
+  coordField: { flex: 1 },
+  coordFieldLabel: {
+    color: COLORS.fogGray, fontSize: 10, fontWeight: '800',
+    letterSpacing: 1, marginBottom: 4, marginLeft: 2,
+  },
+  coordFieldInputRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(58, 74, 82, 0.5)', borderRadius: 10,
+    borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.3)',
+    minHeight: 48, overflow: 'hidden',
+  },
+  signToggle: {
+    width: 40, minHeight: 48,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(200, 155, 60, 0.18)',
+    borderRightWidth: 1, borderRightColor: 'rgba(154, 164, 169, 0.25)',
+  },
+  signToggleText: {
+    color: COLORS.accent, fontSize: 20, fontWeight: '900', lineHeight: 22,
+  },
+  coordFieldInput: {
+    flex: 1, color: COLORS.textPrimary, fontSize: 15,
+    paddingHorizontal: 12, paddingVertical: 12,
+  },
+  goButtonFull: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.accent, borderRadius: 10, paddingVertical: 12,
+    marginBottom: 8, minHeight: 44,
+  },
+  goButtonFullText: {
+    color: COLORS.primary, fontSize: 13, fontWeight: '900', letterSpacing: 1,
+  },
   // Date Picker
   datePicker: { marginBottom: 16, marginHorizontal: -20 },
   datePickerContent: { paddingHorizontal: 20, gap: 8 },
