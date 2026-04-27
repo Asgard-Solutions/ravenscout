@@ -34,6 +34,13 @@ import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
 import { grantExtraCreditsPurchase } from '../src/api/analyticsApi';
 import OutOfCreditsModal from '../src/components/OutOfCreditsModal';
+import {
+  isPurchasesAvailable,
+  purchaseProduct as rcPurchaseProduct,
+  restorePurchases as rcRestorePurchases,
+  entitlementsPayload,
+  tierFromCustomerInfo,
+} from '../src/lib/purchases';
 
 // ---------------------------------------------------------------------
 // Config — tweak these if legal/marketing URLs change.
@@ -103,23 +110,46 @@ export default function ProfileScreen() {
   const { usage, refresh: refreshUsage } = useAnalyticsUsage(true);
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
 
-  // Pack purchase handler. RevenueCat is currently MOCKED in this
-  // build (per the project handoff — real `Purchases.purchaseProduct`
-  // wiring is the upcoming P1). When that lands, replace the body
-  // below with the real `Purchases.purchaseProduct(packId)` call and
-  // pass the platform-issued `transactionIdentifier` as the
-  // idempotency key. The server-side grant + idempotency contract
-  // does not change.
+  // Pack purchase handler. On native builds (Expo dev-client / EAS
+  // preview / EAS production) this drives a real StoreKit / Play
+  // Billing purchase via RevenueCat and forwards the platform-issued
+  // transaction id to the backend as the idempotency key. On Expo
+  // Go / web (no native module) it falls back to a synthetic
+  // transaction id so the rest of the UX can still be exercised
+  // — the server enforces idempotency on (source='in_app', txn_id)
+  // either way so replays are safe.
   const handlePackPurchase = useCallback(async (pack: { id: string; credits: number }) => {
-    // MOCK: simulate a successful StoreKit/RevenueCat purchase by
-    // synthesising a deterministic-enough transaction id. Replaying
-    // the same id is safe (server enforces idempotency).
+    // Native build → real RC purchase.
+    if (isPurchasesAvailable()) {
+      const result = await rcPurchaseProduct(pack.id);
+
+      if (result.status === 'cancelled') {
+        return 'cancelled' as const;
+      }
+      if (result.status === 'error') {
+        // Surface to the modal so the caller can render an inline error.
+        throw new Error(result.message || 'Purchase failed');
+      }
+      if (result.status === 'success' && result.transactionId) {
+        try {
+          await grantExtraCreditsPurchase(pack.id, result.transactionId);
+          await refreshUsage();
+          return 'success' as const;
+        } catch (e: any) {
+          throw new Error(e?.message || 'Could not credit purchase');
+        }
+      }
+      // status === 'unavailable' falls through to preview path.
+    }
+
+    // Preview path (Expo Go / web): synthesise a deterministic-enough
+    // transaction id. Server still de-duplicates on it.
     const txnId = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     try {
       await grantExtraCreditsPurchase(pack.id, txnId);
       await refreshUsage();
       return 'success' as const;
-    } catch (e) {
+    } catch {
       return 'cancelled' as const;
     }
   }, [refreshUsage]);
@@ -250,13 +280,63 @@ export default function ProfileScreen() {
   };
 
   const onRestore = async () => {
+    // Branch A: native build → drive a real Purchases.restorePurchases()
+    // and sync the resulting entitlements with the backend so the user
+    // sees their tier flip immediately.
+    if (isPurchasesAvailable()) {
+      setBusy(true);
+      try {
+        const result = await rcRestorePurchases();
+        if (result.status === 'unavailable') {
+          // Fall through to preview-mode message below.
+        } else if (result.status === 'error') {
+          Alert.alert('Could not restore purchases', result.message || 'Try again later.');
+          return;
+        } else if (result.status === 'success') {
+          const ents = entitlementsPayload(result.customerInfo);
+          const restoredTier = tierFromCustomerInfo(result.customerInfo);
+          // Forward to backend regardless — even an empty entitlements
+          // map signals "no active subs found" so the server can clear
+          // a stale tier flag.
+          try {
+            await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/subscription/sync-revenuecat`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${sessionToken}`,
+              },
+              body: JSON.stringify({
+                revenuecat_user_id: user?.user_id,
+                entitlements: ents,
+              }),
+            });
+          } catch { /* offline — backend will catch up via webhook */ }
+          await refreshUser();
+          await refreshUsage();
+          if (restoredTier) {
+            Alert.alert(
+              'Purchases restored',
+              `Welcome back — your ${restoredTier.toUpperCase()} subscription is now active on this device.`,
+            );
+          } else {
+            Alert.alert(
+              'No active subscriptions',
+              'We didn’t find any active Raven Scout subscriptions linked to this Apple ID / Google account.',
+            );
+          }
+          return;
+        }
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    // Branch B: preview / web — best-effort tier resync from the backend.
     Alert.alert(
       'Restore Purchases',
       'Checking the store for active Raven Scout subscriptions linked to your Apple ID or Google account…',
       [{ text: 'OK' }],
     );
-    // In a real production build this would call RevenueCat.restorePurchases();
-    // in Expo Go/preview we re-sync tier from the backend as a best-effort.
     try { await refreshUser(); } catch { /* noop */ }
   };
 

@@ -80,6 +80,7 @@ Raven Scout is a mobile hunting planning application that uses GPT-5.2 Vision AI
 - [x] Weather API gated to Core+ tiers (trial users get manual-only)
 - [x] Rollover support (unused analyses carry over 1 month, capped at tier limit)
 - [x] RevenueCat integration ready (preview mode in Expo Go, real purchases in production build)
+- [x] RevenueCat real SDK wiring — `Purchases.purchaseProduct()` for tier upgrades and extra-credit packs, `Purchases.restorePurchases()` driving real entitlement sync via `/api/subscription/sync-revenuecat`. Defensive wrapper in `src/lib/purchases.ts` degrades gracefully on Expo Go / web.
 - [x] RevenueCat webhook endpoint for server-to-server subscription events
 - [x] Login screen with Google sign-in, auth-gated home screen
 - [x] Usage bar on home screen showing remaining analyses

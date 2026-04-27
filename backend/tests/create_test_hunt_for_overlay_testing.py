@@ -5,7 +5,7 @@ import requests
 import json
 import os
 
-BASE_URL = "https://tactical-hunt-app.preview.emergentagent.com"
+BASE_URL = "https://tactical-gps-picker.preview.emergentagent.com"
 TEST_TOKEN = "test_session_rs_001"
 
 # Simple 1x1 pixel PNG
@@ -64,7 +64,7 @@ if response.status_code == 200:
         
         print(f"\n📝 Hunt data saved for frontend testing")
         print(f"Use hunt ID: {hunt_id}")
-        print(f"Navigate to: https://tactical-hunt-app.preview.emergentagent.com/results?huntId={hunt_id}")
+        print(f"Navigate to: https://tactical-gps-picker.preview.emergentagent.com/results?huntId={hunt_id}")
         
         # Output JSON for easy copying
         with open("/tmp/test_hunt_data.json", "w") as f:

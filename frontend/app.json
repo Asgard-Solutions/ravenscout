@@ -28,10 +28,7 @@
         "READ_MEDIA_IMAGES",
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
-        "READ_EXTERNAL_STORAGE",
-        "READ_MEDIA_IMAGES",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "com.android.vending.BILLING"
       ]
     },
     "web": {

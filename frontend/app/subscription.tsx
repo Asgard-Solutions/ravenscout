@@ -6,6 +6,11 @@ import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
+import {
+  isPurchasesAvailable,
+  purchaseProduct,
+  entitlementsPayload,
+} from '../src/lib/purchases';
 
 const TIER_DATA = [
   {
@@ -40,20 +45,77 @@ export default function SubscriptionScreen() {
     if (tierId === 'trial') return;
     if (tierId === currentTier) return;
 
+    const productId = `${tierId}_${billingCycle}`; // e.g. pro_annual
+    const tierLabel = tierId.charAt(0).toUpperCase() + tierId.slice(1);
+
+    // Branch A: native build with the RevenueCat SDK loaded — drive a
+    // real StoreKit / Play Billing purchase. The wrapper resolves to
+    // status === 'cancelled' on user cancel so we silently dismiss.
+    if (isPurchasesAvailable()) {
+      setPurchasing(true);
+      try {
+        const result = await purchaseProduct(productId);
+
+        if (result.status === 'cancelled') {
+          return;
+        }
+        if (result.status === 'error') {
+          Alert.alert('Purchase failed', result.message || 'Please try again.');
+          return;
+        }
+        if (result.status === 'unavailable') {
+          // Race: SDK said available, but a sub-call returned unavailable.
+          // Fall through to the preview-mode confirmation below.
+        } else {
+          // Success — sync entitlements with our backend so the user's
+          // tier flips immediately, and refresh the cached User.
+          try {
+            const resp = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/subscription/sync-revenuecat`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${await getSessionToken()}`,
+              },
+              body: JSON.stringify({
+                revenuecat_user_id: user?.user_id,
+                entitlements: entitlementsPayload(result.customerInfo),
+              }),
+            });
+            if (resp.ok) {
+              await refreshUser();
+              Alert.alert('Success', `Upgraded to ${tierLabel} plan!`);
+            } else {
+              Alert.alert(
+                'Purchase complete',
+                'Your purchase succeeded but we could not sync your tier yet. Pull to refresh in a few seconds.',
+              );
+            }
+          } catch {
+            Alert.alert(
+              'Purchase complete',
+              'Your purchase succeeded but the network is unreachable. Tier will update once back online.',
+            );
+          }
+          return;
+        }
+      } finally {
+        setPurchasing(false);
+      }
+    }
+
+    // Branch B: preview mode (Expo Go / web) — confirm + simulate the
+    // tier upgrade via the same backend sync endpoint so the rest of
+    // the UX can still be exercised without StoreKit.
     setPurchasing(true);
     try {
-      // RevenueCat purchase flow
-      // In Expo Go preview mode, this will show a mock purchase
-      // In production builds, this triggers real App Store / Play Store purchase
       Alert.alert(
         'Subscription',
-        `This will initiate a ${billingCycle} subscription for the ${tierId.charAt(0).toUpperCase() + tierId.slice(1)} plan via App Store / Google Play.\n\nIn preview mode (Expo Go), purchases are simulated. Real purchases require a production build.`,
+        `This will initiate a ${billingCycle} subscription for the ${tierLabel} plan via App Store / Google Play.\n\nIn preview mode (Expo Go), purchases are simulated. Real purchases require a production / preview build with the RevenueCat SDK.`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
             text: 'Subscribe',
             onPress: async () => {
-              // In preview mode, simulate tier upgrade
               try {
                 const resp = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/subscription/sync-revenuecat`, {
                   method: 'POST',
@@ -66,14 +128,14 @@ export default function SubscriptionScreen() {
                     entitlements: {
                       [`${tierId}_entitlement`]: {
                         isActive: true,
-                        productIdentifier: `${tierId}_${billingCycle}`,
+                        productIdentifier: productId,
                       },
                     },
                   }),
                 });
                 if (resp.ok) {
                   await refreshUser();
-                  Alert.alert('Success', `Upgraded to ${tierId.charAt(0).toUpperCase() + tierId.slice(1)} plan!`);
+                  Alert.alert('Success', `Upgraded to ${tierLabel} plan!`);
                 }
               } catch {}
             },

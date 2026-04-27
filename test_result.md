@@ -711,7 +711,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com).
+          https://tactical-gps-picker.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -1035,16 +1035,132 @@ agent_communication:
 
 metadata:
   created_by: "main_agent"
-  version: "3.3"
+  version: "3.4"
   test_sequence: 2
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Extra Hunt Analytics Packs — endpoints + idempotency + consumption ordering"
+    - "RevenueCat real-SDK wiring (Purchases.purchaseProduct + restorePurchases)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+revenuecat_real_sdk_integration:
+  - task: "RevenueCat real-SDK wiring (Purchases.purchaseProduct + restorePurchases)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/lib/purchases.ts, /app/frontend/app/profile.tsx, /app/frontend/app/subscription.tsx, /app/frontend/src/hooks/useAuth.tsx, /app/frontend/app/_layout.tsx, /app/frontend/app.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          P1 — Replaced mocked RevenueCat hooks with real
+          `react-native-purchases` SDK calls behind a defensive
+          wrapper in /app/frontend/src/lib/purchases.ts.
+
+          What was wired up:
+
+          1. NEW WRAPPER MODULE `src/lib/purchases.ts`:
+             • Lazy `require('react-native-purchases')` inside try/catch
+               so Expo Go, web preview, and jest never crash. Exposes
+               `isPurchasesAvailable()` for branchable callers.
+             • `initPurchases()` — `Purchases.configure({apiKey})` once
+               at app start, idempotent.
+             • `identifyUser(userId)` / `logoutPurchases()` — alias the
+               anonymous RC user to our backend `user_id` so subscription
+               entitlements survive reinstalls and cross-device logins.
+             • `purchaseProduct(productId)` — drives a real
+               `Purchases.purchaseProduct()` (with a fallback to
+               `getProducts() + purchaseStoreProduct()` on platforms
+               that only expose the latter). Returns a structured
+               `{status, transactionId, customerInfo, message}` so
+               callers don't have to introspect RC error codes.
+             • `purchasePackage(pkg)` — same shape but for pre-fetched
+               offerings/packages.
+             • `restorePurchases()` — wraps `Purchases.restorePurchases()`
+               and returns the raw `customerInfo` for backend sync.
+             • Helpers `tierFromCustomerInfo(ci)` and
+               `entitlementsPayload(ci)` to translate RC → our backend
+               `/api/subscription/sync-revenuecat` shape.
+             • Cancellation detection covers `userCancelled`, the RC
+               error-code enum, and the string-based code RN emits on
+               older versions.
+
+          2. App boot — `app/_layout.tsx` now calls `initPurchases()` in
+             a `useEffect` so the SDK is configured before any screen
+             tries to purchase.
+
+          3. Auth lifecycle — `src/hooks/useAuth.tsx` now mirrors auth
+             state into RC: when `user.user_id` is set we call
+             `Purchases.logIn(userId)`; on logout we call
+             `Purchases.logOut()`. The effect waits for `loading=false`
+             before logging out so cold-start doesn't briefly de-alias
+             a logged-in user.
+
+          4. Subscription paywall — `app/subscription.tsx` now branches:
+             • Native build → real `purchaseProduct(`${tier}_${cycle}`)`,
+               then sync entitlements with `/api/subscription/sync-revenuecat`
+               using the new `entitlementsPayload()` helper, and
+               `refreshUser()` so the tier flips immediately.
+             • Cancelled purchases dismiss silently.
+             • Errors surface in an `Alert`.
+             • Expo Go / web → unchanged simulated upgrade dialog so
+               testers can still validate UX.
+
+          5. Extra-credit pack purchases — `app/profile.tsx`'s
+             `handlePackPurchase` now calls `purchaseProduct(packId)` on
+             native and forwards the platform-issued `transactionId` to
+             `grantExtraCreditsPurchase()` as the idempotency key. On
+             Expo Go / web it falls back to the existing synthetic id.
+
+          6. Restore Purchases — `app/profile.tsx`'s `onRestore` now
+             calls the real `Purchases.restorePurchases()`, syncs the
+             returned entitlements with the backend, refreshes the
+             user/usage, and shows a tier-aware confirmation alert.
+             On Expo Go / web it falls back to the previous best-effort
+             `refreshUser()` flow.
+
+          7. P2 — EAS production Android build prep (no rebuild
+             triggered, just configuration audit):
+             • Verified `eas.json` `production` profile already bakes
+               `EXPO_PUBLIC_MAPTILER_KEY`, `EXPO_PUBLIC_REVENUECAT_KEY`,
+               `EXPO_PUBLIC_BACKEND_URL`, `EXPO_PUBLIC_GOOGLE_CLIENT_ID`
+               into the build env. No edits required.
+             • `app.json` Android permissions cleaned up (removed
+               4 duplicate entries, added `com.android.vending.BILLING`
+               for Google Play Billing).
+             • `react-native-purchases@10.0.1` installed via yarn.
+             • To trigger the actual Android production build the user
+               runs from /app/frontend:
+                 `eas build --platform android --profile production`
+               (requires interactive `eas login`, so it cannot be
+               executed inside this container).
+
+          Tests (all green):
+             • Created `__tests__/purchases.test.ts` (5 cases) covering
+               the Expo Go fallback path, web platform fallback, and
+               the entitlement / tier helpers.
+             • Full Jest suite: 6 suites / 62 tests pass (was 57).
+             • `yarn lint` shows only pre-existing warnings/errors
+               unrelated to this change (apostrophe escaping, etc.).
+
+          What still needs production-side configuration (out-of-scope
+          for this PR — flagged for ops):
+             • RC dashboard must list product ids
+               `core_monthly`, `core_annual`, `pro_monthly`, `pro_annual`
+               and `ravenscout_extra_analytics_{5,10,15}` with their
+               StoreKit / Play counterparts, exposed via an Offering.
+             • The `EXPO_PUBLIC_REVENUECAT_KEY` baked into `eas.json` is
+               currently a TEST key (`test_…`). Swap to the live public
+               SDK key (`appl_…` / `goog_…`) before the production
+               release goes to the App Store / Play Store.
+             • Backend `/api/subscription/sync-revenuecat` and the RC
+               server-to-server webhook (already present) remain the
+               source of truth and are unchanged.
 
 extra_hunt_analytics_packs:
   - task: "Extra Hunt Analytics Packs (one-time, non-expiring)"
@@ -1463,7 +1579,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com
+          https://tactical-gps-picker.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -1527,7 +1643,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com). Harness:
+          https://tactical-gps-picker.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -1927,7 +2043,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://tactical-hunt-app.preview.emergentagent.com/api/auth/verify-otp
+            POST https://tactical-gps-picker.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -2209,7 +2325,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://tactical-hunt-app.preview.emergentagent.com/api). Test
+      URL (https://tactical-gps-picker.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -2548,7 +2664,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://tactical-hunt-app.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://tactical-gps-picker.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -2802,7 +2918,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com).
+          https://tactical-gps-picker.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
