@@ -261,6 +261,36 @@ def _resolve_pack_id(species_id: Optional[str]) -> Optional[str]:
     return species_id
 
 
+# Bridge between the legacy region taxonomy used by the GPS resolver
+# (`species_prompts.regions`) and the enhanced regional registry keys
+# (`species_prompts.enhanced.regional_modifiers`). The legacy resolver
+# returns coarse buckets like `"midwest"`; the enhanced overlays are
+# more specific (e.g. `"midwest_agricultural"`). Mapping here lets the
+# allowlist stay in enhanced-id space without forcing every caller
+# to translate.
+_LEGACY_TO_ENHANCED_REGION: Dict[str, str] = {
+    "midwest": "midwest_agricultural",
+    "mountain_west": "colorado_high_country",
+    "south_texas": "south_texas",
+    "pacific_northwest": "pacific_northwest",
+    # Identity passes (lets callers feed enhanced ids directly).
+    "midwest_agricultural": "midwest_agricultural",
+    "colorado_high_country": "colorado_high_country",
+}
+
+
+def _normalize_region_id(region_id: Optional[str]) -> Optional[str]:
+    """Translate a legacy GPS-resolver region id to its enhanced-registry
+    counterpart. Returns the input unchanged if no mapping is registered
+    so callers using new enhanced ids work transparently."""
+    if not region_id:
+        return None
+    rid = region_id.strip().lower()
+    if not rid:
+        return None
+    return _LEGACY_TO_ENHANCED_REGION.get(rid, rid)
+
+
 # ----------------------------------------------------------------------
 # Public API
 # ----------------------------------------------------------------------
@@ -288,7 +318,11 @@ def evaluate_enhanced_rollout(
     try:
         tier_norm = (user_subscription_tier or "").strip().lower() or "unknown"
         species_norm = (species or "").strip().lower() or "unknown"
-        region_norm = (region_id or "").strip().lower() or None
+        # Translate the legacy GPS-resolver region id (e.g. "midwest")
+        # into its enhanced-registry counterpart (e.g.
+        # "midwest_agricultural") BEFORE the allowlist check, so callers
+        # don't have to know which taxonomy they're in.
+        region_norm = _normalize_region_id(region_id)
         species_pack_id = _resolve_pack_id(species_norm) if species_norm != "unknown" else None
     except Exception:  # noqa: BLE001
         return _legacy_decision(

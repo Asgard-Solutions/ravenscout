@@ -4127,12 +4127,91 @@ agent_communication:
 enhanced_rollout_wiring:
   - task: "Enhanced Species Prompt rollout layer wired into /api/analyze-hunt"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/enhanced_rollout.py, /app/backend/server.py"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
     status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          RE-VALIDATION after the `_LEGACY_TO_ENHANCED_REGION` translation
+          map was added in /app/backend/enhanced_rollout.py. ALL four
+          requested checks PASS. The previously-blocking GPS-resolver →
+          rollout-allowlist mismatch is fully resolved.
+
+          === CHECK 1 — Pro + deer + Iowa GPS (41.5, -93.0)  PASS ===
+          POST /api/analyze-hunt with Bearer test_session_rs_001,
+            conditions.animal="deer", latitude=41.5, longitude=-93.0,
+            hunt_style="archery", time_window="morning", etc., plus
+            a 256x256 PNG map_image_base64.
+          → 200, success=true.
+          ✅ region_resolution = {"resolvedRegionId":"midwest",
+             "resolvedRegionLabel":"Midwest","regionResolutionSource":"gps",
+             "latitude":41.5,"longitude":-93.0}
+          ✅ result.meta.enhanced_analysis = {
+               "enhanced_analysis_enabled": true,
+               "enhanced_modules_used": ["behavior","access","regional"],
+               "enhanced_rollout_reason": "ok"
+             }
+          ✅ Server log line emitted (verified in
+             /var/log/supervisor/backend.err.log):
+               "enhanced_rollout decision tier=pro species=deer
+                pack=whitetail region=midwest_agricultural enabled=True
+                modules=behavior,access,regional reason=ok"
+             — note `region=midwest_agricultural` (the translated
+             enhanced id), NOT `region=midwest`. The translation map is
+             being applied BEFORE the allowlist check exactly as
+             intended, and the canonical legacy region id from the GPS
+             resolver ("midwest") is correctly mapped to the enhanced
+             registry id ("midwest_agricultural").
+
+          === CHECK 2 — Pro + deer + East Texas (31.5, -94.5)  PASS ===
+          POST /api/analyze-hunt with the same Bearer + body but
+            latitude=31.5, longitude=-94.5.
+          → 200, success=true.
+          ✅ region_resolution.resolvedRegionId == "east_texas"
+          ✅ result.meta.enhanced_analysis = {
+               "enhanced_analysis_enabled": false,
+               "enhanced_modules_used": [],
+               "enhanced_rollout_reason": "region_not_allowlisted"
+             }
+          ✅ Fallback path still works — "east_texas" is correctly NOT
+             in the enhanced region allowlist (no translation entry),
+             so the rollout reports region_not_allowlisted and the
+             legacy prompt is used.
+
+          === CHECK 3 — Unit tests  PASS (37/37) ===
+          cd /app/backend && python -m pytest tests/test_enhanced_rollout.py -v
+          → 37 passed in 0.04s
+          The +3 vs the previous run are exactly the new
+          resolver→rollout integration tests:
+            • test_legacy_region_id_translates_to_enhanced
+            • test_iowa_gps_resolves_then_rollout_enables
+            • test_east_texas_gps_resolves_then_rollout_falls_back
+          All three PASS, locking in the fix at the unit level so
+          future regressions cannot reintroduce this wiring bug
+          silently.
+
+          === CHECK 4 — /api/health  PASS ===
+          GET /api/health (public, no auth) → 200
+            {"status":"ok","service":"ravenscout-api"}
+
+          === SUMMARY ===
+          • Iowa GPS now correctly enables enhanced analysis with all
+            three modules (behavior/access/regional) and reason "ok". ✓
+          • East Texas GPS still correctly falls back with reason
+            "region_not_allowlisted". ✓
+          • All 37 unit tests pass (was 34, +3 integration tests). ✓
+          • /api/health unchanged (200 ok). ✓
+          • Backend log emits the expected canonical decision line
+            with `region=midwest_agricultural enabled=True
+            modules=behavior,access,regional reason=ok`. ✓
+
+          The previously-blocking integration bug is fully fixed. No
+          source files modified by the testing agent.
+
       - working: false
         agent: "testing"
         comment: |

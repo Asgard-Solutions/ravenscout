@@ -334,3 +334,75 @@ def test_tier_with_no_modules_falls_back():
     )
     assert decision.enabled is False
     assert decision.reason == REASON_TIER_HAS_NO_MODULES
+
+
+# ----------------------------------------------------------------------
+# Resolver → rollout integration (no LLM required)
+# ----------------------------------------------------------------------
+
+
+def test_legacy_region_id_translates_to_enhanced(monkeypatch):
+    """The GPS resolver returns the legacy id `"midwest"`. The rollout
+    must transparently treat that as the enhanced overlay
+    `"midwest_agricultural"` so the allowlist actually matches."""
+    monkeypatch.delenv("ENHANCED_ROLLOUT_KILL_SWITCH", raising=False)
+    decision = evaluate_enhanced_rollout(
+        user_subscription_tier="pro",
+        species="deer",
+        region_id="midwest",  # canonical legacy resolver id
+    )
+    assert decision.enabled is True
+    assert decision.reason == REASON_OK
+    # Allowlist match worked.
+    assert decision.region_evaluated == "midwest_agricultural"
+    # And the kwargs we splat into assemble_system_prompt also carry
+    # the enhanced id so the regional registry lookup hits.
+    assert decision.kwargs["enhanced_region_id"] == "midwest_agricultural"
+
+
+def test_iowa_gps_resolves_then_rollout_enables(monkeypatch):
+    """End-to-end resolver→rollout boundary test using the same path
+    `analyze_map_with_ai` walks. No LLM call is made.
+
+    This is the test the live `/api/analyze-hunt` integration check
+    surfaced as missing; running it offline catches the same regression
+    that the integration test would catch.
+    """
+    monkeypatch.delenv("ENHANCED_ROLLOUT_KILL_SWITCH", raising=False)
+    from species_prompts import resolve_effective_region
+
+    region_resolution = resolve_effective_region(
+        gps_lat=41.5,
+        gps_lon=-93.0,        # central Iowa → midwest
+        map_centroid=None,
+        manual_override=None,
+    )
+    decision = evaluate_enhanced_rollout(
+        user_subscription_tier="pro",
+        species="deer",
+        region_id=region_resolution.region_id,
+    )
+    assert decision.enabled is True
+    assert set(decision.modules) == {"behavior", "access", "regional"}
+    assert decision.kwargs["enhanced_region_id"] == "midwest_agricultural"
+    assert decision.species_pack_id == "whitetail"
+
+
+def test_east_texas_gps_resolves_then_rollout_falls_back(monkeypatch):
+    """Negative case: East Texas should NOT enable the rollout."""
+    monkeypatch.delenv("ENHANCED_ROLLOUT_KILL_SWITCH", raising=False)
+    from species_prompts import resolve_effective_region
+
+    region_resolution = resolve_effective_region(
+        gps_lat=31.5,
+        gps_lon=-94.5,        # East Texas
+        map_centroid=None,
+        manual_override=None,
+    )
+    decision = evaluate_enhanced_rollout(
+        user_subscription_tier="pro",
+        species="deer",
+        region_id=region_resolution.region_id,
+    )
+    assert decision.enabled is False
+    assert decision.reason == REASON_REGION_NOT_ALLOWLISTED
