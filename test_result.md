@@ -1035,16 +1035,77 @@ agent_communication:
 
 metadata:
   created_by: "main_agent"
-  version: "3.5"
+  version: "3.6"
   test_sequence: 2
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Enhanced species prompt framework (additive, OFF by default)"
+    - "Orphan S3 cleanup wiring (auto on-launch + manual Profile button)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+orphan_s3_cleanup_wiring:
+  - task: "Orphan S3 cleanup — auto on-launch + manual Profile button"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/api/mediaCleanupApi.ts, /app/frontend/src/lib/useOrphanCleanupOnLaunch.ts, /app/frontend/app/_layout.tsx, /app/frontend/app/profile.tsx, /app/frontend/__tests__/mediaCleanupApi.test.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Wired the existing `POST /api/media/cleanup-orphans` endpoint
+          into the app via two complementary triggers:
+
+          1) AUTO fire-and-forget on launch (silent, Pro-only):
+             /app/frontend/src/lib/useOrphanCleanupOnLaunch.ts
+             - Hook + invisible `<OrphanCleanupOnLaunch />` component
+               mounted inside `AuthProvider` in app/_layout.tsx.
+             - Triggers exactly once per cold start, gated by both a
+               module-scoped boolean and an AsyncStorage timestamp
+               with a 6h floor — repeated relaunches in a single
+               session never re-call the endpoint.
+             - Pro-tier check is client-side too (skip non-Pro users
+               instead of letting them eat a 403).
+             - All errors swallowed via cleanupOrphanMediaSafe — never
+               throws, never alerts the user.
+
+          2) MANUAL "Clean Up Orphaned Uploads" button on Profile
+             (Pro-tier card only):
+             /app/frontend/app/profile.tsx
+             - New CLOUD STORAGE card rendered after the existing
+               LOCAL STORAGE card, hidden for Free/Core users so the
+               option doesn't dangle as a hard 403.
+             - Confirmation dialog explains exactly what gets removed
+               (uploaded but never attached to a saved hunt) and that
+               saved hunt images are never affected.
+             - Result alerts cover three branches: nothing-to-clean,
+               clean-with-deletions, and partial-with-failures.
+             - Maps backend 403 to a friendly "Pro plan only" message.
+
+          API client:
+             /app/frontend/src/api/mediaCleanupApi.ts
+             - `cleanupOrphanMedia(olderThanSeconds?)` — throwing
+               variant for the manual button path. Auth header pulled
+               from AsyncStorage. Optional override floored to int.
+             - `cleanupOrphanMediaSafe(olderThanSeconds?)` — returns
+               null on any failure for the silent on-launch path.
+
+          Tests (5/5 PASS in __tests__/mediaCleanupApi.test.ts):
+             - URL + auth header injection
+             - older_than_seconds query string flooring
+             - non-2xx surface in throwing variant
+             - safe variant swallows network errors
+             - safe variant swallows non-2xx (401)
+          Full Jest suite: 7/7 suites, 67/67 tests pass (was 62).
+
+          Backend impact: ZERO. The endpoint and pending_uploads
+          collection were already in production (built in the previous
+          fork session). This PR is purely the frontend wiring + tests.
 
 enhanced_prompt_framework:
   - task: "Enhanced species prompt framework (behaviour + access + regional + master)"

@@ -41,6 +41,7 @@ import {
   entitlementsPayload,
   tierFromCustomerInfo,
 } from '../src/lib/purchases';
+import { cleanupOrphanMedia } from '../src/api/mediaCleanupApi';
 
 // ---------------------------------------------------------------------
 // Config — tweak these if legal/marketing URLs change.
@@ -246,6 +247,61 @@ export default function ProfileScreen() {
       ],
     );
   };
+
+  /**
+   * Manual cloud-storage cleanup for Pro users. Calls
+   * `POST /api/media/cleanup-orphans` and reports the outcome inline.
+   * The backend already enforces the Pro-tier gate, scopes to the
+   * caller's keys, and refuses to delete keys referenced by any saved
+   * hunt — this handler just renders the result to the user.
+   */
+  const [cloudCleaning, setCloudCleaning] = useState(false);
+  const onCleanupCloud = useCallback(() => {
+    Alert.alert(
+      'Clean up cloud storage?',
+      'This sweeps map images that were uploaded to the cloud but never attached to a saved hunt — usually because the upload was started and then cancelled. Saved hunt images are never touched.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clean Up',
+          onPress: async () => {
+            setCloudCleaning(true);
+            try {
+              const result = await cleanupOrphanMedia();
+              const failedCount = (result.failed || []).length;
+              if (result.deleted === 0 && failedCount === 0) {
+                Alert.alert(
+                  'Cloud storage clean',
+                  result.scanned === 0
+                    ? 'No orphaned uploads were waiting to be cleaned.'
+                    : 'Nothing to remove — all recent uploads are linked to saved hunts.',
+                );
+              } else if (failedCount === 0) {
+                Alert.alert(
+                  'Cleanup complete',
+                  `Removed ${result.deleted} orphaned image${result.deleted === 1 ? '' : 's'} from cloud storage.`,
+                );
+              } else {
+                Alert.alert(
+                  'Cleanup partial',
+                  `Removed ${result.deleted} orphaned image${result.deleted === 1 ? '' : 's'}. ${failedCount} item${failedCount === 1 ? '' : 's'} could not be removed and will retry on the next sweep.`,
+                );
+              }
+            } catch (err: any) {
+              Alert.alert(
+                'Cleanup failed',
+                err?.message?.includes('403')
+                  ? 'Cloud storage cleanup is available on the Pro plan.'
+                  : 'Cleanup could not run right now. Please try again in a moment.',
+              );
+            } finally {
+              setCloudCleaning(false);
+            }
+          },
+        },
+      ],
+    );
+  }, []);
 
   const doChangePw = async () => {
     // Branch: Google-only users call setPassword (no current_password);
@@ -554,6 +610,51 @@ export default function ProfileScreen() {
             </>
           )}
         </View>
+
+        {/* Cloud Storage \u2014 Pro tier only. The orphan-cleanup endpoint
+            is Pro-gated server-side; we hide the card for non-Pro users
+            so the option doesn't dangle as a hard 403. */}
+        {tier === 'pro' && (
+          <>
+            <Text style={styles.sectionLabel}>CLOUD STORAGE</Text>
+            <View style={styles.card}>
+              <View style={styles.storageHeader}>
+                <Ionicons name="cloud-outline" size={20} color={COLORS.accent} />
+                <Text style={styles.storageTitle}>Cloud Storage</Text>
+              </View>
+              <Text style={styles.statLine}>
+                Pro plan map images sync to secure cloud storage so your hunts are
+                available across devices.
+              </Text>
+
+              <TouchableOpacity
+                style={styles.cleanupRow}
+                onPress={onCleanupCloud}
+                disabled={cloudCleaning}
+                activeOpacity={0.7}
+              >
+                {cloudCleaning ? (
+                  <ActivityIndicator size="small" color={COLORS.accent} />
+                ) : (
+                  <Ionicons name="cloud-done-outline" size={18} color={COLORS.accent} />
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.cleanupText, cloudCleaning && { opacity: 0.6 }]}>
+                    Clean Up Orphaned Uploads
+                  </Text>
+                  <Text style={styles.cleanupHint}>
+                    Removes images uploaded but never attached to a saved hunt
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <Text style={styles.helpText}>
+                A background sweep runs automatically once every few hours. Use this
+                button to run it on demand. Saved hunt images are never affected.
+              </Text>
+            </View>
+          </>
+        )}
 
         {/* Manage Subscription + About */}
         <View style={styles.groupedList}>

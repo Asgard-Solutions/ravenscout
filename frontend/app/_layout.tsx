@@ -8,6 +8,7 @@ import { AuthProvider } from '../src/hooks/useAuth';
 import { SpeciesCatalogProvider } from '../src/constants/species';
 import { useWebBlocked, WebBlockerScreen } from '../src/components/WebBlocker';
 import { initPurchases } from '../src/lib/purchases';
+import { OrphanCleanupOnLaunch } from '../src/lib/useOrphanCleanupOnLaunch';
 
 export default function RootLayout() {
   const webBlocked = useWebBlocked();
@@ -41,6 +42,11 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <SpeciesCatalogProvider>
+          {/* Pro-only background sweep of S3 objects that were
+              presigned-uploaded but never committed to a saved hunt.
+              Renders nothing; throttled to once per cold start with a
+              6h floor backed by AsyncStorage. */}
+          <OrphanCleanupOnLaunch />
           <GestureHandlerRootView style={styles.container}>
             <StatusBar style="light" />
             <Stack
