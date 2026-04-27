@@ -35,11 +35,45 @@ export interface SpeciesIconImagePair {
 }
 
 export const SPECIES_ICON_IMAGES: Record<string, SpeciesIconImagePair> = {
-  // Whitetail / mule deer share the same `deer` species id on the
-  // backend registry, so the same custom icon applies to both.
+  // Big game
   deer: {
     active: require('../../assets/icons/species/deer-gold.png'),
     inactive: require('../../assets/icons/species/deer-white.png'),
+  },
+  elk: {
+    active: require('../../assets/icons/species/elk-gold.png'),
+    inactive: require('../../assets/icons/species/elk-white.png'),
+  },
+  hog: {
+    active: require('../../assets/icons/species/hog-gold.png'),
+    inactive: require('../../assets/icons/species/hog-white.png'),
+  },
+  moose: {
+    active: require('../../assets/icons/species/moose-gold.png'),
+    inactive: require('../../assets/icons/species/moose-white.png'),
+  },
+  // Backend species id is `bear`; brand asset filename is `black-bear-*`.
+  bear: {
+    active: require('../../assets/icons/species/black-bear-gold.png'),
+    inactive: require('../../assets/icons/species/black-bear-white.png'),
+  },
+  // Backend species id is `antelope` (pronghorn antelope); the brand
+  // asset uses the more common common-name `pronghorn-*`.
+  antelope: {
+    active: require('../../assets/icons/species/pronghorn-gold.png'),
+    inactive: require('../../assets/icons/species/pronghorn-white.png'),
+  },
+
+  // Predator
+  coyote: {
+    active: require('../../assets/icons/species/coyote-gold.png'),
+    inactive: require('../../assets/icons/species/coyote-white.png'),
+  },
+
+  // Bird / wingshooting
+  turkey: {
+    active: require('../../assets/icons/species/turkey-gold.png'),
+    inactive: require('../../assets/icons/species/turkey-white.png'),
   },
 };
 

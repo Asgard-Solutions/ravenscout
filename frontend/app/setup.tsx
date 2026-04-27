@@ -11,6 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
 import { useSpeciesCatalog, groupSpeciesByCategory } from '../src/constants/species';
 import { getSpeciesIconImage } from '../src/constants/speciesIcons';
+import { getHuntStyleIconImage } from '../src/constants/huntStyleIcons';
 import {
   HUNT_STYLES,
   HUNT_WEAPONS,
@@ -1348,6 +1349,7 @@ export default function SetupScreen() {
               <View style={styles.huntStyleGrid}>
                 {HUNT_WEAPONS.map((opt) => {
                   const active = huntWeapon === opt.id;
+                  const iconImage = getHuntStyleIconImage(opt.id);
                   return (
                     <TouchableOpacity
                       key={opt.id}
@@ -1358,11 +1360,20 @@ export default function SetupScreen() {
                       onPress={() => setHuntWeapon(active ? null : (opt.id as HuntWeaponId))}
                       activeOpacity={0.8}
                     >
-                      <Ionicons
-                        name={opt.icon as any}
-                        size={18}
-                        color={active ? COLORS.accent : COLORS.fogGray}
-                      />
+                      {iconImage ? (
+                        <Image
+                          source={active ? iconImage.active : iconImage.inactive}
+                          style={styles.huntStyleChipIconImage}
+                          resizeMode="contain"
+                          accessibilityLabel={opt.shortLabel}
+                        />
+                      ) : (
+                        <Ionicons
+                          name={opt.icon as any}
+                          size={18}
+                          color={active ? COLORS.accent : COLORS.fogGray}
+                        />
+                      )}
                       <Text
                         style={[styles.huntStyleText, active && styles.huntStyleTextActive]}
                         numberOfLines={1}
@@ -1397,6 +1408,7 @@ export default function SetupScreen() {
                   <View style={styles.huntStyleGrid}>
                     {HUNT_METHODS.map((opt) => {
                       const active = huntMethod === opt.id;
+                      const iconImage = getHuntStyleIconImage(opt.id);
                       return (
                         <TouchableOpacity
                           key={opt.id}
@@ -1407,11 +1419,20 @@ export default function SetupScreen() {
                           onPress={() => setHuntMethod(active ? null : (opt.id as HuntMethodId))}
                           activeOpacity={0.8}
                         >
-                          <Ionicons
-                            name={opt.icon as any}
-                            size={18}
-                            color={active ? COLORS.accent : COLORS.fogGray}
-                          />
+                          {iconImage ? (
+                            <Image
+                              source={active ? iconImage.active : iconImage.inactive}
+                              style={styles.huntStyleChipIconImage}
+                              resizeMode="contain"
+                              accessibilityLabel={opt.shortLabel}
+                            />
+                          ) : (
+                            <Ionicons
+                              name={opt.icon as any}
+                              size={18}
+                              color={active ? COLORS.accent : COLORS.fogGray}
+                            />
+                          )}
                           <Text
                             style={[styles.huntStyleText, active && styles.huntStyleTextActive]}
                             numberOfLines={1}
@@ -1676,6 +1697,10 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   huntStyleChipActive: { borderColor: COLORS.accent, backgroundColor: 'rgba(200, 155, 60, 0.08)' },
+  // Custom chip icon image (gold/white pair). Sized to match the
+  // 18 px Ionicons glyph footprint so chip width stays stable when
+  // a style swaps from a glyph to an image.
+  huntStyleChipIconImage: { width: 22, height: 22 },
   huntStyleText: { color: COLORS.textPrimary, fontSize: 13, fontWeight: '700' },
   huntStyleTextActive: { color: COLORS.accent },
   huntStyleClear: { color: COLORS.fogGray, fontSize: 12, fontWeight: '700', letterSpacing: 0.4 },
