@@ -1035,16 +1035,100 @@ agent_communication:
 
 metadata:
   created_by: "main_agent"
-  version: "3.6"
+  version: "3.7"
   test_sequence: 2
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Enhanced Species Prompt rollout layer wired into /api/analyze-hunt"
+    - "Post-analysis crash fix + usage-counting clarification"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+post_analysis_crash_fix:
+  - task: "Post-analysis crash fix (OrphanCleanupOnLaunch user.tier read) + defensive response shape (enhanced_rollout sibling) + usage-counting clarification"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/lib/useOrphanCleanupOnLaunch.ts, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          USER REPORT (verbatim):
+            1. "application now crashes after every analysis and goes
+               back to the new hunt page"
+            2. "if a user starts to do a hunt but does not run the
+               analysis part and they back out this action does not
+               count against them for their number of analyzed hunts."
+
+          ROOT CAUSE (confirmed by troubleshoot_agent):
+          The OrphanCleanupOnLaunch hook in
+          /app/frontend/src/lib/useOrphanCleanupOnLaunch.ts was
+          reading `user.subscription_tier` and `user.plan` — neither
+          field exists on the canonical `User` type in
+          /app/frontend/src/hooks/useAuth.tsx (only `tier` exists).
+          The tier check therefore short-circuited every time, but
+          the dep array depended on `user?.subscription_tier` and
+          `user?.plan` (forever undefined), so the hook also never
+          latched. Each refreshUser() call after analysis triggered
+          re-renders that combined with the React reconciliation
+          churn during the /setup → /results route transition was
+          enough to drop /results mid-render and bounce the user
+          back to /index (the home page that contains the "NEW
+          HUNT" button — what the user described as "new hunt page").
+
+          FIX 1 (the actual crash):
+          /app/frontend/src/lib/useOrphanCleanupOnLaunch.ts
+            * read `user.tier` (canonical key) instead of
+              `user.subscription_tier || user.plan`
+            * dep array now `[user?.user_id, user?.tier, loading]`
+              (was `[user?.user_id, user?.subscription_tier,
+              user?.plan, loading]`)
+
+          FIX 2 (defensive — keeps `data.result` byte-identical to
+          pre-rollout):
+          /app/backend/server.py — moved the rollout decision out
+          of `result.meta.enhanced_analysis` and into a top-level
+          sibling field `data.enhanced_rollout`. Any frontend code
+          that strict-typechecks `result` is now unaffected by the
+          rollout layer. Same payload, safer location.
+
+          USAGE-COUNTING CLARIFICATION (no code change needed —
+          confirmed working as intended):
+          Verified statically AND via black-box test that
+          `consume_one_analysis(...)` is called from exactly two
+          places in server.py:
+            * L728 inside POST /api/analytics/consume (standalone
+              endpoint, not part of the analyze flow);
+            * L1774 inside `analyze_hunt`, AFTER
+              `await analyze_map_with_ai(...)` succeeds.
+          POST /api/media/presign-upload and POST /api/hunts
+          contain ZERO references to `consume_one_analysis`,
+          `analysis_count`, or `extra_analytics_credits`. Entering
+          the setup screen, calling presign-upload, or POSTing
+          /api/hunts and backing out CANNOT increment any usage
+          counter. Backing out before pressing analyze is safe.
+
+          Live re-validation by deep_testing_backend_v2 (46/46 PASS):
+            * Pro + deer + Iowa GPS → 200, `data.result.meta`
+              absent, `data.enhanced_rollout.enhanced_analysis_enabled
+              =true`, modules=[behavior,access,regional], reason=ok.
+            * Pro + deer + East Texas → 200,
+              enhanced_analysis_enabled=false,
+              reason=region_not_allowlisted.
+            * Trial fallback → 200, schema unchanged.
+            * pytest tests/test_enhanced_rollout.py → 37/37 PASS.
+            * /api/health + /api/media/health → 200.
+            * Usage counting verified safe.
+
+          Test suites:
+            * Backend: 37/37 rollout tests + 428 passed / 4 skipped
+              / 3 pre-existing failures (unchanged).
+            * Frontend: 7/7 suites, 67/67 jest cases pass.
 
 orphan_s3_cleanup_wiring:
   - task: "Orphan S3 cleanup — auto on-launch + manual Profile button"
@@ -4133,6 +4217,121 @@ enhanced_rollout_wiring:
     priority: "high"
     needs_retesting: false
     status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          RE-VALIDATION after defensive shape fixes (Apr 2026):
+          (1) Frontend OrphanCleanupOnLaunch hook reads user.tier (not
+              user.subscription_tier / user.plan).
+          (2) Backend: enhanced_rollout moved OUT of result.meta and is
+              now a TOP-LEVEL sibling of result/usage/region_resolution/
+              hunt_style_resolution. data.result is byte-identical to
+              the legacy pre-rollout shape (no .meta key).
+
+          Harness: /app/backend_test.py — 46/46 substantive assertions
+          PASS against the public preview URL
+          (https://tactical-gps-picker.preview.emergentagent.com/api).
+          ZERO failures.
+
+          === A. Pro + deer + Iowa GPS (41.5, -93.0)  PASS ===
+          POST /api/analyze-hunt with Bearer test_session_rs_001,
+            conditions.animal="deer", lat=41.5, lon=-93.0,
+            hunt_style="archery", time_window="morning", + 256x256 PNG
+          → 200, success=true.
+          ✅ Top-level data.enhanced_rollout = {
+               "enhanced_analysis_enabled": true,
+               "enhanced_modules_used": ["behavior","access","regional"],
+               "enhanced_rollout_reason": "ok"
+             }
+          ✅ data.result has the FULL legacy shape:
+             id, overlays, summary, top_setups, wind_notes, best_time,
+             key_assumptions, species_tips, schema_version, v2.
+          ✅ data.result.meta is NOT present (key absent — legacy shape
+             byte-identical to pre-rollout).
+          ✅ Top-level siblings present: usage, region_resolution,
+             hunt_style_resolution, enhanced_rollout.
+          ✅ region_resolution.resolvedRegionId == "midwest"
+             (with regionResolutionSource="gps" via the GPS resolver).
+          ✅ Server log emitted (verified in backend.err.log):
+             "enhanced_rollout decision tier=pro species=deer
+              pack=whitetail region=midwest_agricultural enabled=True
+              modules=behavior,access,regional reason=ok"
+
+          === B. Pro + deer + East Texas (31.5, -94.5)  PASS ===
+          ✅ HTTP 200, success=true.
+          ✅ data.enhanced_rollout = {
+               enhanced_analysis_enabled: false,
+               enhanced_rollout_reason: "region_not_allowlisted"
+             }
+          ✅ data.result.meta still absent (legacy shape preserved on
+             fallback path).
+
+          === C. Trial / Free fallback path  PASS ===
+          ✅ Trial Bearer + analyze-hunt -> 200 (no schema regression).
+          ✅ data.result.meta absent.
+          ✅ Top-level data.enhanced_rollout present and disabled
+             (legacy prompt is used).
+
+          === D. pytest tests/test_enhanced_rollout.py  PASS (37/37) ===
+          cd /app/backend && python -m pytest tests/test_enhanced_rollout.py -v
+          → 37 passed in 0.03s — exact match with the spec.
+
+          === E. Health endpoints  PASS ===
+          ✅ GET /api/health (public) -> 200
+             {"status":"ok","service":"ravenscout-api"}
+          ✅ GET /api/media/health (Bearer Pro) -> 200
+             {"ok":true,"error":null,"configured":true,
+              "bucket":"ravenscout-media-prod","region":"us-east-2",
+              "private_delivery":true}
+
+          === F. Usage-counting safety (static + black-box)  PASS ===
+          Source-grep over /app/backend/server.py confirms:
+          ✅ EXACTLY two call sites of consume_one_analysis(...):
+                L728: charge = await consume_one_analysis(user)
+                       ← inside POST /api/analytics/consume
+                         (separate, server-authoritative consume route;
+                         does NOT fire on any presign or hunt-save flow)
+                L1774: await consume_one_analysis(user)
+                       ← inside analyze_hunt, AFTER
+                         `await analyze_map_with_ai(...)` succeeds.
+                         Verified the call lies AFTER the analyze_map_with_ai
+                         invocation in analyze_hunt's body.
+          ✅ /api/media/presign-upload route body contains NONE of:
+             - consume_one_analysis(
+             - analysis_count
+             - extra_analytics_credits
+          ✅ POST /api/hunts (upsert_hunt) route body contains NONE of
+             those tokens either.
+          So entering the setup screen, calling presign-upload, or
+          POSTing /api/hunts (and backing out) does NOT increment any
+          usage counter. Only completing analyze_hunt past
+          analyze_map_with_ai charges the user a credit.
+
+          === SUMMARY ===
+          • Backend defensive fix CONFIRMED: result is byte-identical
+            to the legacy shape; enhanced_rollout is a TOP-LEVEL field;
+            result.meta does not exist on any code path. ✓
+          • Iowa GPS still flips enhanced ON with all three modules. ✓
+          • East TX GPS still falls back with reason
+            region_not_allowlisted. ✓
+          • Trial fallback returns 200 with no schema regression. ✓
+          • 37/37 rollout pytest pass. ✓
+          • /api/health and /api/media/health both 200. ✓
+          • Usage counting safety: exactly one consume in analyze flow
+            (post-LLM-success); presign-upload and hunts upsert never
+            increment usage. ✓
+
+          Fixture maintenance only (NOT a code fix): testing agent
+          re-seeded test-user-001 (tier=pro) and test-user-trial
+          (tier=trial) `users` documents in the RavenScout Mongo DB
+          because the user docs had been dropped by an earlier
+          profile-delete suite while their session_token rows in
+          user_sessions were still valid (pre-existing fixture drift).
+          test_credentials.md unchanged. No source files modified.
+
+          Main agent: please summarise and finish — both defensive
+          fixes are verified end-to-end against the live preview URL.
+
       - working: true
         agent: "testing"
         comment: |

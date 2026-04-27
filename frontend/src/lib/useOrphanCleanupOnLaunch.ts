@@ -29,9 +29,13 @@ export function useOrphanCleanupOnLaunch(): void {
     if (hasRunRef.current || firedThisProcess) return;
     if (!user?.user_id) return;
 
-    // Pro-tier only. The backend would 403 anyway, but skipping the
-    // request entirely avoids a noisy log line for free / core users.
-    const tier = String(user.subscription_tier || user.plan || '').toLowerCase();
+    // Pro-tier only. The User type carries `tier` — there is NO
+    // `subscription_tier` / `plan` field on the canonical user
+    // object. Reading the wrong key here was the cause of a
+    // post-analysis crash because the effect kept re-running on
+    // every refreshUser() call instead of latching once. Match the
+    // canonical key and the dep array below.
+    const tier = String(user.tier || '').toLowerCase();
     if (tier !== 'pro') return;
 
     hasRunRef.current = true;
@@ -61,7 +65,7 @@ export function useOrphanCleanupOnLaunch(): void {
         // hook is fire-and-forget — silently swallow
       }
     })();
-  }, [user?.user_id, user?.subscription_tier, user?.plan, loading]);
+  }, [user?.user_id, user?.tier, loading]);
 }
 
 /**

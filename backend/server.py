@@ -1797,13 +1797,14 @@ async def analyze_hunt(request: Request):
         if raw_result.get("v2"):
             result["v2"] = raw_result["v2"]
 
-        # Attach the (safe) enhanced-rollout decision so the client can
-        # surface a debug indicator without leaking any user data. Only
-        # contains: enhanced_analysis_enabled, enhanced_modules_used,
-        # enhanced_rollout_reason. No coordinates, no prompts, no images.
+        # Enhanced-rollout decision is exposed as a TOP-LEVEL sibling
+        # field on the response, NOT as a nested key on `result`. This
+        # keeps `data.result` byte-identical to the pre-rollout shape
+        # so older frontend builds that strictly typecheck `result`
+        # don't trip on an unknown property. Contains only the safe
+        # subset (enabled / modules / reason) — no coordinates,
+        # no prompts, no images.
         enhanced_meta = raw_result.get("enhanced_rollout")
-        if enhanced_meta:
-            result.setdefault("meta", {})["enhanced_analysis"] = enhanced_meta
 
         return JSONResponse({
             "success": True,
@@ -1811,6 +1812,7 @@ async def analyze_hunt(request: Request):
             "usage": updated_usage,
             "region_resolution": raw_result.get("region_resolution"),
             "hunt_style_resolution": raw_result.get("hunt_style_resolution"),
+            "enhanced_rollout": enhanced_meta,
         })
     except json.JSONDecodeError:
         return JSONResponse({"success": False, "error": "Failed to parse AI response. Please try again.", "usage": None})
