@@ -711,7 +711,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-gps-picker.preview.emergentagent.com).
+          https://map-legend.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -1033,13 +1033,259 @@ agent_communication:
       summarise and finish — the AWS S3 cloud media pipeline is
       production-ready against the real bucket.
 
+test_plan:
+  current_focus:
+    - "Overlay Taxonomy unification (single source of truth) — backend validator + LLM prompt"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+overlay_taxonomy_unification:
+  - task: "Overlay taxonomy: single source of truth + validator color stamping + frontend renderer alignment"
+    implemented: true
+    working: true
+    file: "/app/backend/overlay_taxonomy.py, /app/backend/schema_validator.py, /app/backend/prompt_builder.py, /app/frontend/src/constants/overlayTaxonomy.ts, /app/frontend/app/results.tsx, /app/backend/tests/test_overlay_taxonomy.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Resumed from broken handoff state. Two backend issues fixed:
+
+          1) prompt_builder.build_output_schema_block() had an unclosed
+             `(` paren — `return ("""..."""` opened but the closing `)`
+             after `}"""` was missing. SyntaxError prevented prompt_builder
+             from importing. Added the closing paren.
+
+          2) schema_validator did not export normalize_v2_response (the
+             tests expected a 2-tuple `(normalized, errors)` wrapper).
+             Added it on top of the existing 3-tuple `validate_and_normalize`
+             so server.py callers stay unchanged. Updated the one
+             test that was incorrectly unpacking the 3-tuple.
+
+          Verified:
+          • All 18 tests in tests/test_overlay_taxonomy.py PASS.
+          • The full backend suite shows only 3 PRE-EXISTING failures
+            unrelated to this task (reproduced with my changes stashed):
+              - 2x test_overlay_rendering.py (live-server URL scheme,
+                pre-existing test setup problem)
+              - 1x test_species_prompt_packs.py:test_includes_whitetail_specific_text
+                (asserts 'wallow' not in whitetail prompt — pre-existing)
+          • /api/ healthcheck responds 200 OK.
+
+          Validator contract (now enforced):
+            • Every overlay's `type` is normalized to one of the 8
+              canonical slugs (stand|corridor|access_route|avoid|
+              bedding|food|water|trail).
+            • Every overlay's `color` is stamped with the canonical
+              hex from overlay_taxonomy.OVERLAY_TYPES, regardless of
+              whether the LLM echoed it. This is what keeps the legend
+              and the rendered overlays in lock-step.
+            • convert_v2_to_v1 also carries the canonical color into
+              the legacy v1 shape.
+
+          Prompt contract (now enforced):
+            • assemble_system_prompt embeds the OVERLAY TAXONOMY
+              directive block which lists every type id, label,
+              geometry, hex, and description so the LLM is told the
+              colors and asked to echo them.
+
+          Frontend contract (already wired before this fork):
+            • /app/frontend/app/results.tsx imports OVERLAY_COLORS,
+              OVERLAY_ICONS, OVERLAY_LABELS, and resolveOverlayColor
+              from /app/frontend/src/constants/overlayTaxonomy.ts.
+            • resolveOverlayColor prefers the color carried on the
+              overlay payload (server-stamped), falling back to the
+              static map for legacy payloads.
+
+          Please retest the analyze-hunt flow end-to-end and confirm
+          that every overlay in the response has both a valid `type`
+          and a canonical `color`, and that the validator overwrites
+          a non-canonical color with the canonical hex.
+      - working: true
+        agent: "testing"
+        comment: |
+          Backend overlay-taxonomy unification VERIFIED end-to-end
+          against the preview URL (EXPO_PUBLIC_BACKEND_URL =
+          https://map-legend.preview.emergentagent.com) + the local
+          pytest suite. Harness: /app/backend_test.py — 13/13
+          substantive assertions PASS, 0 failures.
+
+          === 1. Pytest suite (/app/backend) ===
+          • tests/test_overlay_taxonomy.py — 18/18 PASS (0.03s)
+            - taxonomy has 8 required overlay types
+            - every OverlayType has canonical hex (8 parametrized)
+            - overlay_color_for returns canonical hex for all 4
+              sampled ids + None for unknown/empty/None
+            - prompt directives contain every type id + label + hex
+            - prompt table renders markdown pipes w/ expected header
+              and exactly len(OVERLAY_TYPES)+2 lines
+            - assemble_system_prompt embeds OVERLAY TAXONOMY block
+              with every canonical hex AND the pipe-list
+              "stand|corridor|access_route|avoid|bedding|food|water|trail"
+            - validator stamps canonical color when LLM omitted it
+            - validator OVERWRITES wrong color ("rebeccapurple" ->
+              "#F57C00" for corridor)
+            - validator stamps color for all 8 types
+            - convert_v2_to_v1 carries canonical color through
+          • Full backend suite: 449 passed / 4 skipped / 3 failures
+            — the 3 failures are EXACTLY the pre-existing ones the
+            review brief flagged to ignore:
+              - tests/test_overlay_rendering.py (2 MissingSchema
+                failures — relative '/api/analyze-hunt' URL)
+              - tests/test_species_prompt_packs.py:test_includes_
+                whitetail_specific_text ('wallow' substring)
+            No new failures introduced.
+
+          === 2. Unit-level validator override ===
+          schema_validator.normalize_v2_response({overlays:[{
+            type:"corridor", color:"rebeccapurple", ...}]}) ->
+            overlays[0].color == "#F57C00"  ✅
+          Repeated across all 8 canonical types with a seeded
+          "rebeccapurple" on every overlay — every one was stamped
+          to the canonical hex per overlay_taxonomy.OVERLAY_TYPES:
+            stand        -> #2E7D32  ✅
+            corridor     -> #F57C00  ✅
+            access_route -> #42A5F5  ✅
+            avoid        -> #C62828  ✅
+            bedding      -> #8D6E63  ✅
+            food         -> #66BB6A  ✅
+            water        -> #29B6F6  ✅
+            trail        -> #FFCA28  ✅
+
+          === 3. Live POST /api/analyze-hunt smoke ===
+          Request body (Bearer test_session_rs_001 / Pro):
+            POST https://map-legend.preview.emergentagent.com/api/analyze-hunt
+            {
+              "map_image_base64": "<256x256 deterministic PNG, base64>",
+              "conditions": {
+                "animal": "deer",
+                "hunt_date": "2026-11-15",
+                "time_window": "morning",
+                "wind_direction": "NW",
+                "temperature": "38F",
+                "property_type": "private",
+                "hunt_style": "archery",
+                "latitude": 31.2956,
+                "longitude": -95.9778
+              }
+            }
+          Response: HTTP 200 in 39.7s (second run: 45.9s — variance
+          is OpenAI side).  Backend logs show the expected canonical
+          resolution chain:
+            "Analyzing hunt for deer (user: test-user-001, tier: pro ...)"
+            "Region resolved: id=east_texas source=gps label='East Texas'"
+            "Hunt style resolved: id=archery ... source=user_selected"
+            "enhanced_rollout decision tier=pro ... enabled=False
+             reason=region_not_allowlisted"
+            "Prompt built: tier=pro, images=1, species=deer, schema=v2"
+            "AI response received: len=10696"
+
+          Response assertions:
+          ✅ success == true
+          ✅ result.overlays is a non-empty list (4–5 overlays)
+          ✅ every overlay.type ∈ {stand, corridor, access_route,
+             avoid, bedding, food, water, trail}
+             Observed types across 2 runs: {stand, corridor,
+             access_route, avoid, bedding}
+          ✅ every overlay.color is EXACTLY the canonical hex for
+             its type, per overlay_taxonomy.py. Zero drift.
+          ✅ convert_v2_to_v1 on the normalized v2 payload carries
+             the canonical color through to the legacy v1 overlays
+             array (all 4 v1 overlays had canonical hex).
+          ✅ region_resolution present with
+             resolvedRegionId="east_texas", source=gps
+          ✅ hunt_style_resolution present with styleId="archery",
+             source=user_selected (post-analysis crash fix holds)
+          ✅ enhanced_rollout top-level SIBLING present with
+             enhanced_analysis_enabled=False,
+             reason="region_not_allowlisted"
+          ✅ result.meta does NOT leak "enhanced_analysis" (i.e. the
+             rollout decision has been moved to the top-level
+             envelope as intended — confirms the previous post-
+             analysis crash fix is still intact).
+
+          === Verdict ===
+          Overlay taxonomy unification is production-ready:
+            • overlay_taxonomy.py IS the single source of truth.
+            • schema_validator stamps the canonical hex on every
+              overlay on the way out (v2 + v1 paths).
+            • prompt_builder embeds the OVERLAY TAXONOMY block so
+              the LLM is told the canonical colors.
+            • /api/analyze-hunt returns canonical type+color for
+              every overlay end-to-end against a real OpenAI run.
+            • No regression on hunt_style_resolution,
+              region_resolution, or enhanced_rollout envelopes.
+
+          No source files modified by the testing agent. The harness
+          /app/backend_test.py contains the 13 live smoke checks and
+          can be re-run with `python /app/backend_test.py`. Main
+          agent: please summarise and finish — the overlay taxonomy
+          is unified and working correctly.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Backend overlay-taxonomy unification work is complete.
+      • Fixed prompt_builder syntax error (unclosed paren in
+        build_output_schema_block).
+      • Added normalize_v2_response 2-tuple wrapper to
+        schema_validator.
+      • All 18 tests in tests/test_overlay_taxonomy.py pass.
+      • 3 remaining backend test failures are pre-existing
+        (reproduced with my changes stashed).
+
+      Please run a focused backend smoke test of the analyze-hunt
+      pipeline to confirm overlays come back with the canonical
+      colors and the canonical 8 type slugs. Use the existing test
+      session in /app/memory/test_credentials.md.
+    -agent: "testing"
+    -message: |
+      Overlay-taxonomy unification VERIFIED on backend end-to-end.
+      Harness: /app/backend_test.py — 13/13 PASS, 0 failures. No
+      source files modified.
+
+      • Pytest tests/test_overlay_taxonomy.py — 18/18 PASS (0.03s).
+      • Full backend suite — 449 passed / 4 skipped / 3 failures.
+        The 3 failures are EXACTLY the pre-existing set flagged in
+        the review brief (2x test_overlay_rendering MissingSchema,
+        1x test_species_prompt_packs 'wallow'); no new regressions.
+      • Validator override — normalize_v2_response stamps the
+        canonical hex over a bogus "rebeccapurple" color, and over
+        all 8 canonical type ids in one seeded payload.
+      • Live POST /api/analyze-hunt (Pro, Bearer
+        test_session_rs_001, 256x256 PNG, deer, East Texas GPS,
+        archery):
+          - HTTP 200, success=true, real OpenAI AI response
+            (len=10696 first run, 9881 second run).
+          - Every overlay.type ∈ {stand, corridor, access_route,
+            avoid, bedding, food, water, trail}.
+          - Every overlay.color == canonical hex per
+            overlay_taxonomy.py (zero drift).
+          - Observed types across runs: {stand, corridor,
+            access_route, avoid, bedding}.
+          - convert_v2_to_v1 carries canonical color through to
+            the legacy shape (verified against the LIVE overlay
+            types).
+          - region_resolution (east_texas / gps) and
+            hunt_style_resolution (archery / user_selected)
+            still populated as designed.
+          - enhanced_rollout top-level sibling envelope present
+            (reason=region_not_allowlisted); result.meta does
+            NOT leak enhanced_analysis — post-analysis crash fix
+            still intact.
+
+      Main agent: please summarise and finish.
+
 metadata:
   created_by: "main_agent"
-  version: "3.7"
-  test_sequence: 2
+  version: "3.8"
+  test_sequence: 3
   run_ui: false
 
-test_plan:
+prior_test_plan:
   current_focus:
     - "Post-analysis crash fix + usage-counting clarification"
   stuck_tasks: []
@@ -2038,7 +2284,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-gps-picker.preview.emergentagent.com
+          https://map-legend.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -2102,7 +2348,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-gps-picker.preview.emergentagent.com). Harness:
+          https://map-legend.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -2502,7 +2748,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://tactical-gps-picker.preview.emergentagent.com/api/auth/verify-otp
+            POST https://map-legend.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -2784,7 +3030,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://tactical-gps-picker.preview.emergentagent.com/api). Test
+      URL (https://map-legend.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -3123,7 +3369,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://tactical-gps-picker.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://map-legend.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -3377,7 +3623,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-gps-picker.preview.emergentagent.com).
+          https://map-legend.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
@@ -4230,7 +4476,7 @@ enhanced_rollout_wiring:
 
           Harness: /app/backend_test.py — 46/46 substantive assertions
           PASS against the public preview URL
-          (https://tactical-gps-picker.preview.emergentagent.com/api).
+          (https://map-legend.preview.emergentagent.com/api).
           ZERO failures.
 
           === A. Pro + deer + Iowa GPS (41.5, -93.0)  PASS ===
@@ -4415,7 +4661,7 @@ enhanced_rollout_wiring:
         agent: "testing"
         comment: |
           Enhanced rollout wiring validated end-to-end against the
-          preview URL (https://tactical-gps-picker.preview.emergentagent.com)
+          preview URL (https://map-legend.preview.emergentagent.com)
           via /app/backend_test.py. RESULT: 21/24 substantive
           assertions PASS, BUT 3 critical assertions FAIL on the
           canonical "Pro + whitetail (deer) + Midwest Agricultural"

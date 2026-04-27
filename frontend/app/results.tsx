@@ -67,38 +67,10 @@ interface HuntRecord {
   locationCoords?: { lat: number; lon: number };
 }
 
-const OVERLAY_COLORS: Record<string, string> = {
-  stand: COLORS.stands,
-  corridor: COLORS.corridors,
-  access_route: COLORS.accessRoutes,
-  avoid: COLORS.avoidZones,
-  bedding: '#8D6E63',
-  food: '#66BB6A',
-  water: '#29B6F6',
-  trail: '#FFCA28',
-};
-
-const OVERLAY_ICONS: Record<string, string> = {
-  stand: 'pin',
-  corridor: 'trail-sign',
-  access_route: 'walk',
-  avoid: 'warning',
-  bedding: 'bed',
-  food: 'nutrition',
-  water: 'water',
-  trail: 'footsteps',
-};
-
-const OVERLAY_LABELS: Record<string, string> = {
-  stand: 'Stand / Blind',
-  corridor: 'Travel Corridor',
-  access_route: 'Access Route',
-  avoid: 'Avoid Zone',
-  bedding: 'Bedding Area',
-  food: 'Food Source',
-  water: 'Water Source',
-  trail: 'Trail / Path',
-};
+const OVERLAY_COLORS = require('../src/constants/overlayTaxonomy').OVERLAY_COLORS as Record<string, string>;
+const OVERLAY_ICONS = require('../src/constants/overlayTaxonomy').OVERLAY_ICONS as Record<string, string>;
+const OVERLAY_LABELS = require('../src/constants/overlayTaxonomy').OVERLAY_LABELS as Record<string, string>;
+const resolveOverlayColor = require('../src/constants/overlayTaxonomy').resolveOverlayColor as (overlay: { type?: string; color?: string }) => string;
 
 const CONFIDENCE_COLORS: Record<string, string> = {
   high: COLORS.stands,
@@ -854,14 +826,14 @@ export default function ResultsScreen() {
 
         {/* Selected Overlay Detail */}
         {selectedOverlay && (
-          <View style={[styles.overlayDetail, { borderLeftColor: OVERLAY_COLORS[selectedOverlay.type] || COLORS.accent }]}>
+          <View style={[styles.overlayDetail, { borderLeftColor: resolveOverlayColor(selectedOverlay) }]}>
             <View style={styles.overlayDetailHeader}>
               <Ionicons
                 name={(OVERLAY_ICONS[selectedOverlay.type] || 'location') as any}
                 size={20}
-                color={OVERLAY_COLORS[selectedOverlay.type] || COLORS.accent}
+                color={resolveOverlayColor(selectedOverlay)}
               />
-              <Text style={[styles.overlayDetailTitle, { color: OVERLAY_COLORS[selectedOverlay.type] || COLORS.accent }]}>
+              <Text style={[styles.overlayDetailTitle, { color: resolveOverlayColor(selectedOverlay) }]}>
                 {selectedOverlay.label}
               </Text>
               {selectedOverlay.isCustom && (
@@ -936,7 +908,7 @@ export default function ResultsScreen() {
               style={[styles.overlayListItem, selectedOverlay?.id === overlay.id && styles.overlayListItemSelected]}
               onPress={() => setSelectedOverlay(selectedOverlay?.id === overlay.id ? null : overlay)}
             >
-              <View style={[styles.overlayListDot, { backgroundColor: OVERLAY_COLORS[overlay.type] || COLORS.accent }]} />
+              <View style={[styles.overlayListDot, { backgroundColor: resolveOverlayColor(overlay) }]} />
               <View style={styles.overlayListContent}>
                 <Text style={styles.overlayListLabel}>{overlay.label}</Text>
                 <Text style={styles.overlayListType}>
@@ -1085,7 +1057,7 @@ function DraggableMarker({
   onDrag: (dx: number, dy: number) => void;
   onDragEnd: () => void;
 }) {
-  const color = OVERLAY_COLORS[overlay.type] || COLORS.accent;
+  const color = resolveOverlayColor(overlay);
   const lastPos = useRef({ x: 0, y: 0 });
 
   const panResponder = useRef(

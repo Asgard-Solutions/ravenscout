@@ -49,7 +49,17 @@ FEATURE_TYPES = [
     "access_point", "pressure_zone", "unknown",
 ]
 
-OVERLAY_TYPES = ["stand", "corridor", "access_route", "avoid"]
+# Overlay types are sourced from the canonical `overlay_taxonomy` module
+# so the prompt schema stays in lock-step with the frontend legend and
+# overlay renderer. NEVER hard-code overlay slugs anywhere else.
+from overlay_taxonomy import (  # noqa: E402  (intentional late import at module top)
+    OVERLAY_TYPE_IDS as _OVERLAY_TYPE_IDS,
+    OVERLAY_TYPE_PIPE_LIST as _OVERLAY_TYPE_PIPE_LIST,
+    render_overlay_type_directives_for_prompt as _render_overlay_directives,
+    overlay_color_for as _overlay_color_for,
+)
+
+OVERLAY_TYPES = list(_OVERLAY_TYPE_IDS)
 
 SETUP_TYPES = ["stand", "saddle", "blind", "observation"]
 
@@ -152,9 +162,11 @@ IMAGE CONTEXT (MULTI-IMAGE ANALYSIS):
 
 
 def build_output_schema_block() -> str:
-    return """
+    return ("""
 OUTPUT SCHEMA (v2):
 Return this exact JSON structure. Do not omit any keys. Use empty arrays [] instead of dropping fields.
+
+""" + _render_overlay_directives() + """
 
 {
   "schema_version": "v2",
@@ -177,9 +189,10 @@ Return this exact JSON structure. Do not omit any keys. Use empty arrays [] inst
   "overlays": [
     {
       "id": "ov_1",
-      "type": "stand|corridor|access_route|avoid",
+      "type": \"""" + _OVERLAY_TYPE_PIPE_LIST + """\",
       "label": "<short tactical label>",
       "reason": "<why this overlay matters>",
+      "color": "<canonical hex from the OVERLAY TAXONOMY table>",
       "x_percent": <5-95>,
       "y_percent": <5-95>,
       "radius_percent": <2-15>,
@@ -229,7 +242,7 @@ Return this exact JSON structure. Do not omit any keys. Use empty arrays [] inst
     "overall_confidence": <0.0-1.0>,
     "main_limitations": ["<limitation 1>"]
   }
-}"""
+}""")
 
 
 def build_output_constraints() -> str:
