@@ -1492,6 +1492,43 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         f"source={hunt_style_resolution['source']}"
     )
 
+    # ------------------------------------------------------------------
+    # Enhanced species prompt rollout — additive, allowlist-gated.
+    # The helper NEVER raises; on any failure we fall back to legacy
+    # kwargs (all use_enhanced_* = False) and the prompt is byte-
+    # identical to the pre-rollout build.
+    # ------------------------------------------------------------------
+    rollout_decision = None
+    enhanced_kwargs: dict = {}
+    try:
+        from enhanced_rollout import evaluate_enhanced_rollout
+        rollout_decision = evaluate_enhanced_rollout(
+            user_subscription_tier=tier,
+            species=conditions.animal,
+            region_id=region_resolution.region_id if region_resolution else None,
+            hunt_context=None,  # no client-supplied trigger inputs yet
+        )
+        enhanced_kwargs = dict(rollout_decision.kwargs or {})
+        # Structured log for analytics dashboards. Never includes
+        # image data, tokens, coordinates, or raw prompts.
+        logger.info(
+            "enhanced_rollout decision tier=%s species=%s pack=%s region=%s "
+            "enabled=%s modules=%s reason=%s",
+            rollout_decision.tier_evaluated,
+            rollout_decision.species_evaluated,
+            rollout_decision.species_pack_id,
+            rollout_decision.region_evaluated,
+            rollout_decision.enabled,
+            ",".join(rollout_decision.modules) or "-",
+            rollout_decision.reason,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Helper is hardened to not raise — but if the import itself
+        # fails (e.g. circular import in dev), fall through cleanly.
+        logger.warning("enhanced_rollout: evaluation failed (%s) — using legacy", exc)
+        rollout_decision = None
+        enhanced_kwargs = {}
+
     # Build prompts using modular builder (region-aware, style-aware)
     system_prompt = assemble_system_prompt(
         animal=conditions.animal,
@@ -1503,6 +1540,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         hunt_style=canonical_hunt_style,
         hunt_weapon=canonical_hunt_weapon,
         hunt_method=canonical_hunt_method,
+        **enhanced_kwargs,
     )
     user_prompt_text = assemble_user_prompt(
         species_name=species["name"],
@@ -1610,6 +1648,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
             "v1": v1_compat,
             "region_resolution": region_resolution.as_dict(),
             "hunt_style_resolution": hunt_style_resolution,
+            "enhanced_rollout": rollout_decision.to_response_meta() if rollout_decision else None,
         }
     else:
         # Old-style v1 response — wrap it
@@ -1620,6 +1659,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
             "v1": parsed,
             "region_resolution": region_resolution.as_dict(),
             "hunt_style_resolution": hunt_style_resolution,
+            "enhanced_rollout": rollout_decision.to_response_meta() if rollout_decision else None,
         }
 
 
@@ -1756,6 +1796,14 @@ async def analyze_hunt(request: Request):
         # Attach v2 data if available
         if raw_result.get("v2"):
             result["v2"] = raw_result["v2"]
+
+        # Attach the (safe) enhanced-rollout decision so the client can
+        # surface a debug indicator without leaking any user data. Only
+        # contains: enhanced_analysis_enabled, enhanced_modules_used,
+        # enhanced_rollout_reason. No coordinates, no prompts, no images.
+        enhanced_meta = raw_result.get("enhanced_rollout")
+        if enhanced_meta:
+            result.setdefault("meta", {})["enhanced_analysis"] = enhanced_meta
 
         return JSONResponse({
             "success": True,

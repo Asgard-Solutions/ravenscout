@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { BACKEND_URL } from '../constants/theme';
+import { identifyUser as rcIdentifyUser, logoutPurchases as rcLogoutPurchases } from '../lib/purchases';
 
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT
 // URLS, THIS BREAKS THE AUTH.
@@ -106,6 +107,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     })();
   }, [fetchUser]);
+
+  // Mirror auth state into RevenueCat: alias the anonymous RC user to
+  // our backend `user_id` after sign-in so that subscription
+  // entitlements survive reinstalls and cross-device installs, then
+  // call `Purchases.logOut()` on sign-out so the next sign-in starts
+  // a fresh session. No-op when the SDK is unavailable (Expo Go / web).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (user?.user_id) {
+        await rcIdentifyUser(user.user_id);
+      } else if (!loading) {
+        await rcLogoutPurchases();
+      }
+      if (cancelled) return;
+    })();
+    return () => { cancelled = true; };
+  }, [user?.user_id, loading]);
 
   const login = async (sessionId: string): Promise<boolean> => {
     try {

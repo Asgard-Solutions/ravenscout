@@ -1,432 +1,259 @@
-"""
-Backend test for Raven Scout AWS S3 image upload pipeline (production bucket).
+"""Backend tests for Enhanced Species Prompt rollout wiring on /api/analyze-hunt.
 
-Tests:
-  1) Auth + tier gating on /api/media/presign-upload
-  2) Input validation (role, extension, mime allowlists)
-  3) Response shape on success (storageKey pattern, sanitization,
-     uploadUrl format, privateDelivery, expiresIn, mime echo)
-  4) Live S3 round-trip (presign-upload -> PUT -> presign-download -> GET
-     -> /api/media/delete -> re-GET 404)
-  5) Owner guard on /api/media/presign-download and /api/media/delete
-  6) DELETE /api/hunts/{hunt_id} S3 cascade with REAL S3 keys
-
-Backend base URL: http://localhost:8001
+Targets the public preview URL via EXPO_PUBLIC_BACKEND_URL.
 """
 
 import os
-import sys
-import uuid
+import io
+import re
+import base64
+from pathlib import Path
+
 import requests
+from PIL import Image
 
-BASE_URL = "http://localhost:8001/api"
-PRO_TOKEN = "test_session_rs_001"
-TRIAL_TOKEN = "test_session_trial_001"
 
-# Real 1x1 PNG (RGBA black) - well-formed bytes
-ONE_BY_ONE_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\x00\x01"
-    b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
-)
+def _resolve_backend_url() -> str:
+    env_path = Path("/app/frontend/.env")
+    text = env_path.read_text()
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
+            return line.split("=", 1)[1].strip()
+        if line.startswith("REACT_APP_BACKEND_URL="):
+            return line.split("=", 1)[1].strip()
+    raise RuntimeError("No backend URL found in /app/frontend/.env")
+
+
+BASE_URL = _resolve_backend_url().rstrip("/")
+API = f"{BASE_URL}/api"
+
+PRO_BEARER = "test_session_rs_001"
+TRIAL_BEARER = "test_session_trial_001"
+
+
+def _png_b64(width: int = 256, height: int = 256) -> str:
+    img = Image.new("RGB", (width, height), color=(34, 110, 34))
+    for x in range(0, width, 8):
+        for y in range(0, height, 16):
+            img.putpixel((x, y), ((x * 5) % 255, (y * 3) % 255, 90))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+PNG_BASE64 = _png_b64(256, 256)
+
+
+def _post_analyze(*, bearer, animal, latitude, longitude, hunt_style="archery"):
+    body = {
+        "conditions": {
+            "animal": animal,
+            "hunt_date": "2025-11-15",
+            "time_window": "morning",
+            "wind_direction": "NW",
+            "temperature": "38F",
+            "property_type": "private",
+            "hunt_style": hunt_style,
+        },
+        "map_image_base64": PNG_BASE64,
+    }
+    if latitude is not None:
+        body["conditions"]["latitude"] = latitude
+    if longitude is not None:
+        body["conditions"]["longitude"] = longitude
+    headers = {
+        "Authorization": f"Bearer {bearer}",
+        "Content-Type": "application/json",
+    }
+    return requests.post(f"{API}/analyze-hunt", headers=headers, json=body, timeout=180)
+
 
 results = []
 
 
-def record(section, name, ok, detail=""):
-    results.append((section, name, ok, detail))
+def record(name, ok, detail=""):
+    results.append((name, ok, detail))
     flag = "PASS" if ok else "FAIL"
-    line = f"[{flag}] {section} :: {name}"
-    if not ok and detail:
-        line += f"  --> {detail}"
-    elif detail and ok:
-        line += f"  ({detail})"
-    print(line, flush=True)
+    print(f"  [{flag}] {name}" + (f" :: {detail}" if detail else ""))
 
 
-def auth(token):
-    return {"Authorization": f"Bearer {token}"}
+def test_health_public():
+    print("\n=== TEST: GET /api/health (public) ===")
+    r = requests.get(f"{API}/health", timeout=15)
+    record("health 200", r.status_code == 200, f"status={r.status_code}")
+    record("health body has status=ok", r.json().get("status") == "ok", f"body={r.json()}")
 
 
-def post(path, *, token=None, json_body=None):
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers.update(auth(token))
-    return requests.post(f"{BASE_URL}{path}", headers=headers, json=json_body, timeout=30)
-
-
-def http_delete(path, *, token=None):
-    headers = {}
-    if token:
-        headers.update(auth(token))
-    return requests.delete(f"{BASE_URL}{path}", headers=headers, timeout=30)
-
-
-# ============================================================
-# SECTION 1 - Auth + tier gating on /api/media/presign-upload
-# ============================================================
-def section_1_auth_tier():
-    section = "1.AuthTier"
-    payload = {
-        "imageId": f"img_{uuid.uuid4().hex[:8]}",
-        "huntId": "hunt_test",
-        "role": "primary",
-        "mime": "image/jpeg",
-        "extension": "jpg",
-    }
-    # No bearer
-    r = post("/media/presign-upload", json_body=payload)
-    record(section, "no Bearer -> 401", r.status_code == 401,
-           f"got {r.status_code} body={r.text[:140]}")
-
-    # Trial -> 403
-    r = post("/media/presign-upload", token=TRIAL_TOKEN, json_body=payload)
-    body = {}
+def test_media_health_auth():
+    print("\n=== TEST: GET /api/media/health (Pro auth) ===")
+    r = requests.get(f"{API}/media/health", headers={"Authorization": f"Bearer {PRO_BEARER}"}, timeout=15)
+    record("media/health 200", r.status_code == 200, f"status={r.status_code}")
     try:
-        body = r.json()
-    except Exception:
-        pass
-    ok = r.status_code == 403 and "Pro" in (body.get("detail") or "")
-    record(section, "trial -> 403 Pro-only", ok, f"got {r.status_code} {body}")
-
-    # Pro -> 200
-    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
-    record(section, "pro -> 200", r.status_code == 200,
-           f"got {r.status_code} body={r.text[:200]}")
+        j = r.json()
+        record("media/health.ok=true", j.get("ok") is True, f"body={j}")
+    except Exception as e:
+        record("media/health body json", False, str(e))
 
 
-# ============================================================
-# SECTION 2 - Input validation
-# ============================================================
-def section_2_validation():
-    section = "2.Validation"
-    base = {
-        "imageId": f"img_{uuid.uuid4().hex[:8]}",
-        "huntId": "hunt_test",
-        "role": "primary",
-        "mime": "image/jpeg",
-        "extension": "jpg",
-    }
+def test_trial_deer_legacy():
+    print("\n=== TEST: Trial + animal=deer + East Texas → legacy ===")
+    r = _post_analyze(bearer=TRIAL_BEARER, animal="deer", latitude=31.5, longitude=-94.5)
+    print(f"  HTTP {r.status_code}")
+    record("trial deer 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        record("trial body", False, f"body={r.text[:300]}")
+        return
+    j = r.json()
+    record("trial success=True", j.get("success") is True, f"err={j.get('error')}")
+    if not j.get("success"):
+        return
+    res = j["result"]
+    record("trial result has id", bool(res.get("id")))
+    record("trial result has overlays", isinstance(res.get("overlays"), list))
+    record("trial result has summary", "summary" in res)
+    record("trial result has v2", "v2" in res)
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    record("trial enhanced_analysis_enabled=False", meta.get("enhanced_analysis_enabled") is False,
+           f"meta={meta}")
+    record("trial reason in {tier_not_eligible, tier_has_no_modules}",
+           meta.get("enhanced_rollout_reason") in ("tier_not_eligible", "tier_has_no_modules"),
+           f"reason={meta.get('enhanced_rollout_reason')}")
 
-    # Unknown role
-    p = {**base, "role": "hero"}
-    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
-    record(section, "unknown role 'hero' -> 400",
-           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
 
-    # Unsupported extensions
-    for ext in ["tiff", "gif", "svg"]:
-        p = {**base, "extension": ext}
-        r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
-        record(section, f"ext '{ext}' -> 400",
-               r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
+def test_pro_elk_species_not_allowlisted():
+    print("\n=== TEST: Pro + animal=elk → species_not_allowlisted ===")
+    # Use Colorado coords (mountain_west). Region also won't be in allowlist
+    # but species check fires first per evaluate_enhanced_rollout ordering.
+    r = _post_analyze(bearer=PRO_BEARER, animal="elk", latitude=39.0, longitude=-106.5, hunt_style="rifle")
+    print(f"  HTTP {r.status_code}")
+    record("pro elk 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        record("pro elk body", False, f"body={r.text[:300]}")
+        return
+    j = r.json()
+    if not j.get("success"):
+        record("pro elk success", False, f"error={j.get('error')}")
+        return
+    res = j["result"]
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    record("pro elk enhanced_analysis_enabled=False", meta.get("enhanced_analysis_enabled") is False,
+           f"meta={meta}")
+    record("pro elk reason=species_not_allowlisted",
+           meta.get("enhanced_rollout_reason") == "species_not_allowlisted",
+           f"reason={meta.get('enhanced_rollout_reason')}")
 
-    # Disallowed mimes
-    for m in ["image/gif", "image/tiff", "application/pdf", "text/plain"]:
-        p = {**base, "mime": m}
-        r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
-        record(section, f"mime '{m}' -> 400",
-               r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
 
-    # Allowed mime+ext combos -> 200
-    combos = [
-        ("image/jpeg", "jpg"),
-        ("image/jpeg", "jpeg"),
-        ("image/png", "png"),
-        ("image/webp", "webp"),
-        ("image/heic", "heic"),
-        ("image/heif", "heif"),
+def test_pro_deer_midwest_iowa():
+    print("\n=== TEST: Pro + animal=deer + Iowa coords (41.5, -93.0) ===")
+    r = _post_analyze(bearer=PRO_BEARER, animal="deer", latitude=41.5, longitude=-93.0)
+    print(f"  HTTP {r.status_code}")
+    record("pro deer iowa 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        record("pro deer body", False, f"body={r.text[:300]}")
+        return
+    j = r.json()
+    if not j.get("success"):
+        record("pro deer iowa success", False, f"error={j.get('error')}")
+        return
+    res = j["result"]
+    region_resolution = j.get("region_resolution") or {}
+    print(f"  region_resolution: {region_resolution}")
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    print(f"  enhanced_analysis meta: {meta}")
+    # Per review request expectation:
+    record("pro deer iowa enhanced_analysis_enabled=True",
+           meta.get("enhanced_analysis_enabled") is True,
+           f"meta={meta}, region={region_resolution.get('resolvedRegionId')}")
+    record("pro deer iowa reason=ok",
+           meta.get("enhanced_rollout_reason") == "ok",
+           f"reason={meta.get('enhanced_rollout_reason')}")
+    modules = meta.get("enhanced_modules_used") or []
+    expected = {"behavior", "access", "regional"}
+    record("pro deer iowa all 3 modules",
+           expected.issubset(set(modules)),
+           f"modules_used={modules}")
+
+
+def test_pro_deer_east_texas_region_not_allowlisted():
+    print("\n=== TEST: Pro + animal=deer + East Texas → region_not_allowlisted ===")
+    r = _post_analyze(bearer=PRO_BEARER, animal="deer", latitude=31.5, longitude=-94.5)
+    print(f"  HTTP {r.status_code}")
+    record("pro deer ETX 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        return
+    j = r.json()
+    if not j.get("success"):
+        record("pro deer ETX success", False, f"error={j.get('error')}")
+        return
+    res = j["result"]
+    region_resolution = j.get("region_resolution") or {}
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    record("pro deer ETX enhanced_analysis_enabled=False",
+           meta.get("enhanced_analysis_enabled") is False,
+           f"meta={meta}, region={region_resolution.get('resolvedRegionId')}")
+    record("pro deer ETX reason=region_not_allowlisted",
+           meta.get("enhanced_rollout_reason") == "region_not_allowlisted",
+           f"reason={meta.get('enhanced_rollout_reason')}")
+
+
+def test_log_inspection_no_sensitive_data():
+    print("\n=== TEST: backend log — enhanced_rollout decision lines free of sensitive data ===")
+    log_paths = [
+        "/var/log/supervisor/backend.err.log",
+        "/var/log/supervisor/backend.out.log",
     ]
-    for mime, ext in combos:
-        p = {**base, "imageId": f"img_{uuid.uuid4().hex[:8]}",
-             "mime": mime, "extension": ext}
-        r = post("/media/presign-upload", token=PRO_TOKEN, json_body=p)
-        ok = r.status_code == 200
-        detail = f"got {r.status_code}"
-        if ok and ext == "jpeg":
-            j = r.json()
-            key = j.get("storageKey", "")
-            normalised = key.endswith(".jpg") and not key.endswith(".jpeg")
-            ok = ok and normalised
-            detail += f" key_ends={key[-8:]} normalised={normalised}"
-        elif not ok:
-            detail += f" body={r.text[:160]}"
-        record(section, f"allowed {mime}+{ext} -> 200", ok, detail)
-
-
-# ============================================================
-# SECTION 3 - Response shape on success
-# ============================================================
-def section_3_response_shape():
-    section = "3.ResponseShape"
-    image_id = "hello world?"
-    payload = {
-        "imageId": image_id,
-        "huntId": None,
-        "role": "primary",
-        "mime": "image/png",
-        "extension": "png",
-    }
-    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
-    if r.status_code != 200:
-        record(section, "presign 200", False, f"got {r.status_code} body={r.text[:200]}")
-        return
-    j = r.json()
-
-    key = j.get("storageKey", "")
-    expected_prefix = "hunts/test-user-001/_unassigned/primary/"
-    record(section, "storageKey starts with expected prefix",
-           key.startswith(expected_prefix), f"key={key}")
-    record(section, "storageKey is sanitised (no space/?)",
-           " " not in key and "?" not in key, f"key={key}")
-    record(section, "storageKey ends in .png",
-           key.endswith(".png"), f"key={key}")
-    last_seg = key.rsplit("/", 1)[-1]
-    record(section, "imageId portion sanitised",
-           "_" in last_seg and "hello" in last_seg,
-           f"last_seg={last_seg}")
-
-    upload_url = j.get("uploadUrl", "")
-    region = "us-east-2"
-    bucket = "ravenscout-media-prod"
-    expected_host = f"https://{bucket}.s3.{region}.amazonaws.com"
-    record(section, f"uploadUrl host = {expected_host}",
-           upload_url.startswith(expected_host),
-           f"upload_url={upload_url[:160]}")
-    record(section, "uploadUrl contains X-Amz-Signature",
-           "X-Amz-Signature" in upload_url, "")
-    record(section, "privateDelivery == true",
-           j.get("privateDelivery") is True,
-           f"got {j.get('privateDelivery')}")
-    record(section, "expiresIn == 900",
-           j.get("expiresIn") == 900, f"got {j.get('expiresIn')}")
-    record(section, "mime echoes input",
-           j.get("mime") == "image/png", f"got {j.get('mime')}")
-
-
-# ============================================================
-# SECTION 4 - Live S3 round trip
-# ============================================================
-def section_4_live_s3():
-    section = "4.LiveS3"
-    payload = {
-        "imageId": f"smoke_{uuid.uuid4().hex[:8]}",
-        "huntId": f"hunt_{uuid.uuid4().hex[:6]}",
-        "role": "primary",
-        "mime": "image/png",
-        "extension": "png",
-    }
-    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
-    if r.status_code != 200:
-        record(section, "presign-upload 200", False,
-               f"got {r.status_code} body={r.text[:160]}")
-        return
-    j = r.json()
-    record(section, "presign-upload 200", True, "")
-    storage_key = j["storageKey"]
-    upload_url = j["uploadUrl"]
-
-    put = requests.put(upload_url, data=ONE_BY_ONE_PNG,
-                       headers={"Content-Type": "image/png"}, timeout=30)
-    record(section, "PUT bytes to S3 -> 200",
-           put.status_code == 200,
-           f"got {put.status_code} body={put.text[:200]}")
-    if put.status_code != 200:
-        return
-
-    rd = post("/media/presign-download", token=PRO_TOKEN,
-              json_body={"storageKey": storage_key})
-    record(section, "presign-download 200",
-           rd.status_code == 200,
-           f"got {rd.status_code} body={rd.text[:200]}")
-    if rd.status_code != 200:
-        return
-    download_url = rd.json()["downloadUrl"]
-
-    g = requests.get(download_url, timeout=30)
-    bytes_match = g.status_code == 200 and g.content == ONE_BY_ONE_PNG
-    record(section, "GET downloadUrl returns same bytes",
-           bytes_match,
-           f"status={g.status_code} len={len(g.content)} expected={len(ONE_BY_ONE_PNG)}")
-
-    rdl = post("/media/delete", token=PRO_TOKEN,
-               json_body={"storageKey": storage_key})
-    body = {}
-    try:
-        body = rdl.json()
-    except Exception:
-        pass
-    record(section, "DELETE -> {success: true}",
-           rdl.status_code == 200 and body.get("success") is True,
-           f"got {rdl.status_code} {body}")
-
-    rd2 = post("/media/presign-download", token=PRO_TOKEN,
-               json_body={"storageKey": storage_key})
-    if rd2.status_code != 200:
-        record(section, "re-presign-download after delete 200",
-               False, f"got {rd2.status_code} {rd2.text[:160]}")
-        return
-    durl2 = rd2.json()["downloadUrl"]
-    g2 = requests.get(durl2, timeout=30)
-    record(section, "re-GET after delete -> 404",
-           g2.status_code == 404, f"got {g2.status_code}")
-
-
-# ============================================================
-# SECTION 5 - Owner guard
-# ============================================================
-def section_5_owner_guard():
-    section = "5.OwnerGuard"
-    foreign = "hunts/SOMEONE_ELSE/h1/primary/img.jpg"
-    bad_no_prefix = "users/test-user-001/foo.jpg"
-    bad_traversal = "hunts/test-user-001/../whoops.jpg"
-
-    r = post("/media/presign-download", token=PRO_TOKEN,
-             json_body={"storageKey": foreign})
-    record(section, "download foreign -> 403",
-           r.status_code == 403, f"got {r.status_code} {r.text[:140]}")
-
-    r = post("/media/presign-download", token=PRO_TOKEN,
-             json_body={"storageKey": bad_no_prefix})
-    record(section, "download non-hunts prefix -> 400",
-           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
-
-    r = post("/media/presign-download", token=PRO_TOKEN,
-             json_body={"storageKey": bad_traversal})
-    record(section, "download '..' traversal -> 400",
-           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
-
-    r = post("/media/delete", token=PRO_TOKEN,
-             json_body={"storageKey": foreign})
-    record(section, "delete foreign -> 403",
-           r.status_code == 403, f"got {r.status_code} {r.text[:140]}")
-
-    r = post("/media/delete", token=PRO_TOKEN,
-             json_body={"storageKey": bad_no_prefix})
-    record(section, "delete non-hunts prefix -> 400",
-           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
-
-    r = post("/media/delete", token=PRO_TOKEN,
-             json_body={"storageKey": bad_traversal})
-    record(section, "delete '..' traversal -> 400",
-           r.status_code == 400, f"got {r.status_code} {r.text[:140]}")
-
-
-# ============================================================
-# SECTION 6 - DELETE /api/hunts/{hunt_id} cascade with REAL S3
-# ============================================================
-def section_6_hunt_cascade():
-    section = "6.HuntCascade"
-    image_id = f"casc_{uuid.uuid4().hex[:8]}"
-    hunt_id = f"rs-cascade-{uuid.uuid4().hex[:8]}"
-
-    payload = {
-        "imageId": image_id, "huntId": hunt_id,
-        "role": "primary", "mime": "image/png", "extension": "png",
-    }
-    r = post("/media/presign-upload", token=PRO_TOKEN, json_body=payload)
-    if r.status_code != 200:
-        record(section, "presign-upload for cascade",
-               False, f"got {r.status_code} {r.text[:160]}")
-        return
-    j = r.json()
-    storage_key = j["storageKey"]
-    upload_url = j["uploadUrl"]
-
-    put = requests.put(upload_url, data=ONE_BY_ONE_PNG,
-                       headers={"Content-Type": "image/png"}, timeout=30)
-    if put.status_code != 200:
-        record(section, "PUT bytes to S3 (cascade)",
-               False, f"got {put.status_code}")
-        return
-    record(section, "Real S3 object created", True, f"key={storage_key}")
-
-    hunt_body = {
-        "hunt_id": hunt_id,
-        "metadata": {
-            "species": "deer", "speciesName": "Whitetail Deer",
-            "date": "2026-02-15", "timeWindow": "morning",
-            "windDirection": "NW", "temperature": "38F",
-            "propertyType": "private", "region": "East Texas",
-            "huntStyle": "archery",
-        },
-        "analysis": {"summary": "cascade test", "overlays": []},
-        "analysis_context": {"prompt_version": "v2"},
-        "media_refs": [storage_key],
-        "primary_media_ref": storage_key,
-        "image_s3_keys": [storage_key],
-        "storage_strategy": "cloud-first",
-        "extra": {},
-    }
-    r = post("/hunts", token=PRO_TOKEN, json_body=hunt_body)
-    record(section, "POST /api/hunts seed -> 200",
-           r.status_code == 200, f"got {r.status_code} {r.text[:160]}")
-
-    rd = http_delete(f"/hunts/{hunt_id}", token=PRO_TOKEN)
-    body = {}
-    try:
-        body = rd.json()
-    except Exception:
-        pass
-    s3 = body.get("s3", {}) if isinstance(body, dict) else {}
-    ok_status = rd.status_code == 200
-    ok_top = body.get("ok") is True and body.get("deleted") == 1
-    ok_s3 = (s3.get("requested") == 1 and s3.get("deleted") == 1
-             and s3.get("failed") == [])
-    record(section, "DELETE /api/hunts cascade response shape",
-           ok_status and ok_top and ok_s3,
-           f"status={rd.status_code} body={body}")
-
-    # Final: GET via fresh download URL should 404
-    rd2 = post("/media/presign-download", token=PRO_TOKEN,
-               json_body={"storageKey": storage_key})
-    if rd2.status_code != 200:
-        record(section, "post-cascade presign-download",
-               False, f"got {rd2.status_code} {rd2.text[:160]}")
-        return
-    durl = rd2.json()["downloadUrl"]
-    g = requests.get(durl, timeout=30)
-    record(section, "post-cascade GET -> 404",
-           g.status_code == 404, f"got {g.status_code}")
+    sensitive_re = re.compile(
+        r"(\blatitude\b|\blongitude\b|map_image_base64|bearer|session_token|api[_-]?key|"
+        r"secret|data:image/|base64,)",
+        re.IGNORECASE,
+    )
+    decision_lines = []
+    sensitive_violations = []
+    for path in log_paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                content = f.read()[-300_000:]
+        except Exception:
+            continue
+        for ln in content.splitlines():
+            if "enhanced_rollout decision" in ln:
+                decision_lines.append(ln)
+                if sensitive_re.search(ln):
+                    sensitive_violations.append(ln)
+    record("backend log contains >=1 enhanced_rollout decision line",
+           len(decision_lines) >= 1, f"count={len(decision_lines)}")
+    if decision_lines:
+        print(f"  Sample decision lines (last 3):")
+        for ln in decision_lines[-3:]:
+            print(f"    {ln[-200:]}")
+    record("decision log lines free of sensitive data",
+           len(sensitive_violations) == 0,
+           f"violations={sensitive_violations[:3]}")
 
 
 def main():
-    print("=" * 78)
-    print("Raven Scout - AWS S3 production bucket end-to-end test")
-    print("Bucket: ravenscout-media-prod  Region: us-east-2")
-    print(f"Backend: {BASE_URL}")
-    print("=" * 78)
+    print(f"Backend URL: {API}")
+    test_health_public()
+    test_media_health_auth()
+    test_trial_deer_legacy()
+    test_pro_elk_species_not_allowlisted()
+    test_pro_deer_midwest_iowa()
+    test_pro_deer_east_texas_region_not_allowlisted()
+    test_log_inspection_no_sensitive_data()
 
-    section_1_auth_tier()
-    section_2_validation()
-    section_3_response_shape()
-    section_4_live_s3()
-    section_5_owner_guard()
-    section_6_hunt_cascade()
-
-    print()
-    print("=" * 78)
-    print("SUMMARY")
-    print("=" * 78)
-    by_section = {}
-    for sec, name, ok, detail in results:
-        by_section.setdefault(sec, []).append((name, ok, detail))
-    total_ok = 0
-    total = 0
-    for sec, items in by_section.items():
-        sec_ok = sum(1 for _, ok, _ in items if ok)
-        sec_total = len(items)
-        total_ok += sec_ok
-        total += sec_total
-        verdict = "PASS" if sec_ok == sec_total else "FAIL"
-        print(f"[{verdict}] {sec}: {sec_ok}/{sec_total}")
-        for name, ok, detail in items:
-            if not ok:
-                print(f"      X {name} :: {detail}")
-    print()
-    print(f"OVERALL: {total_ok}/{total} assertions passed")
-    return 0 if total_ok == total else 1
+    print("\n" + "=" * 72)
+    passed = sum(1 for _, ok, _ in results if ok)
+    failed = [(n, d) for n, ok, d in results if not ok]
+    print(f"Total: {len(results)}, Passed: {passed}, Failed: {len(failed)}")
+    if failed:
+        print("\nFAILURES:")
+        for n, d in failed:
+            print(f"  - {n} :: {d}")
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

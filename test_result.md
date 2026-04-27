@@ -711,7 +711,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com).
+          https://tactical-gps-picker.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -1035,16 +1035,507 @@ agent_communication:
 
 metadata:
   created_by: "main_agent"
-  version: "3.3"
+  version: "3.6"
   test_sequence: 2
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Extra Hunt Analytics Packs — endpoints + idempotency + consumption ordering"
+    - "Enhanced Species Prompt rollout layer wired into /api/analyze-hunt"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+orphan_s3_cleanup_wiring:
+  - task: "Orphan S3 cleanup — auto on-launch + manual Profile button"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/api/mediaCleanupApi.ts, /app/frontend/src/lib/useOrphanCleanupOnLaunch.ts, /app/frontend/app/_layout.tsx, /app/frontend/app/profile.tsx, /app/frontend/__tests__/mediaCleanupApi.test.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Wired the existing `POST /api/media/cleanup-orphans` endpoint
+          into the app via two complementary triggers:
+
+          1) AUTO fire-and-forget on launch (silent, Pro-only):
+             /app/frontend/src/lib/useOrphanCleanupOnLaunch.ts
+             - Hook + invisible `<OrphanCleanupOnLaunch />` component
+               mounted inside `AuthProvider` in app/_layout.tsx.
+             - Triggers exactly once per cold start, gated by both a
+               module-scoped boolean and an AsyncStorage timestamp
+               with a 6h floor — repeated relaunches in a single
+               session never re-call the endpoint.
+             - Pro-tier check is client-side too (skip non-Pro users
+               instead of letting them eat a 403).
+             - All errors swallowed via cleanupOrphanMediaSafe — never
+               throws, never alerts the user.
+
+          2) MANUAL "Clean Up Orphaned Uploads" button on Profile
+             (Pro-tier card only):
+             /app/frontend/app/profile.tsx
+             - New CLOUD STORAGE card rendered after the existing
+               LOCAL STORAGE card, hidden for Free/Core users so the
+               option doesn't dangle as a hard 403.
+             - Confirmation dialog explains exactly what gets removed
+               (uploaded but never attached to a saved hunt) and that
+               saved hunt images are never affected.
+             - Result alerts cover three branches: nothing-to-clean,
+               clean-with-deletions, and partial-with-failures.
+             - Maps backend 403 to a friendly "Pro plan only" message.
+
+          API client:
+             /app/frontend/src/api/mediaCleanupApi.ts
+             - `cleanupOrphanMedia(olderThanSeconds?)` — throwing
+               variant for the manual button path. Auth header pulled
+               from AsyncStorage. Optional override floored to int.
+             - `cleanupOrphanMediaSafe(olderThanSeconds?)` — returns
+               null on any failure for the silent on-launch path.
+
+          Tests (5/5 PASS in __tests__/mediaCleanupApi.test.ts):
+             - URL + auth header injection
+             - older_than_seconds query string flooring
+             - non-2xx surface in throwing variant
+             - safe variant swallows network errors
+             - safe variant swallows non-2xx (401)
+          Full Jest suite: 7/7 suites, 67/67 tests pass (was 62).
+
+          Backend impact: ZERO. The endpoint and pending_uploads
+          collection were already in production (built in the previous
+          fork session). This PR is purely the frontend wiring + tests.
+
+enhanced_prompt_framework:
+  - task: "Enhanced species prompt framework (behaviour + access + regional + master)"
+    implemented: true
+    working: true
+    file: "/app/backend/species_prompts/enhanced/, /app/backend/prompt_builder.py, /app/backend/tests/test_enhanced_prompt_framework.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Enhanced Species Prompt Framework verified end-to-end via
+          /app/backend_test.py against http://localhost:8001/api with
+          Bearer test_session_rs_001 (Pro). 28/28 substantive
+          assertions PASS. No source files modified.
+
+          === SECTION 1 — Backward compatibility (CRITICAL)  (2/2 PASS) ===
+          assemble_system_prompt(animal="whitetail", conditions={...},
+            image_count=1, tier="pro")  with NO enhanced flags:
+          ✅ Output contains NONE of:
+             "ENHANCED PROMPT EXTENSIONS",
+             "ENHANCED BEHAVIOR CONTEXT",
+             "ENHANCED ACCESS ANALYSIS",
+             "ENHANCED REGIONAL CONTEXT".
+          ✅ Two identical calls produce byte-identical strings
+             (deterministic, snapshot-safe).
+
+          === SECTION 2 — Enhanced opt-in mode  (8/8 PASS) ===
+          assemble_system_prompt(..., use_enhanced_behavior=True,
+            use_enhanced_access=True, use_enhanced_regional=True,
+            enhanced_pressure_level=PressureLevel.HIGH,
+            enhanced_terrain=TerrainType.AGRICULTURAL,
+            enhanced_region_id="midwest_agricultural",
+            enhanced_terrain_features=[
+              {"type":"creek","description":"Creek east of stand",
+               "visibility":"visible"}]):
+          ✅ "ENHANCED PROMPT EXTENSIONS" banner present
+          ✅ "ENHANCED REGIONAL CONTEXT" sub-block present
+          ✅ "ENHANCED BEHAVIOR CONTEXT" sub-block present
+          ✅ "ENHANCED ACCESS ANALYSIS" sub-block present
+          ✅ Enhanced output is a STRICT SUPERSET of the legacy build —
+             enhanced.startswith(legacy) is True (additive contract).
+          ✅ "CROSS-MODULE INTERACTION NOTES" header emitted
+          ✅ Cross-module reasoning text appears in the prompt (matches
+             one or more of: "regional baseline", "lower confidence",
+             "second-"). With pressure_level=HIGH supplied while the
+             midwest_agricultural baseline is moderate, the
+             baseline-mismatch interaction note fires correctly, AND
+             the high-pressure + visible-access "prefer the second-/
+             third-best access point" note also fires (cross-module
+             reasoning works as documented).
+
+          === SECTION 3 — Registries  (7/7 PASS) ===
+          ✅ get_enhanced_regional_modifier("south_texas")          -> non-None
+          ✅ get_enhanced_regional_modifier("colorado_high_country") -> non-None
+          ✅ get_enhanced_regional_modifier("midwest_agricultural")  -> non-None
+          ✅ get_enhanced_regional_modifier("pacific_northwest")     -> non-None
+          ✅ get_enhanced_behavior_pattern("whitetail","pressure_response") -> non-None
+          ✅ get_enhanced_behavior_pattern("turkey","pressure_response")    -> non-None
+          ✅ issubclass(EnhancedRegionalModifier, RegionalModifier) is True
+             (legacy class is preserved, NOT shadowed).
+
+          === SECTION 4 — Failure isolation  (1/1 PASS) ===
+          assemble_system_prompt(..., use_enhanced_regional=True,
+            enhanced_region_id="atlantis_lost_continent")
+          ✅ Returns a non-empty prompt string without raising
+             (unknown region id is silently absorbed; legacy prompt is
+             returned). The try/except in prompt_builder.py L519-526
+             fall-through guard works as designed.
+
+          === SECTION 5 — POST /api/analyze-hunt (request shape) ===
+          (7/7 PASS)
+          Body (no enhanced flags wired into API):
+            {"conditions":{"animal":"deer","hunt_date":"2025-11-15",
+              "time_window":"morning","wind_direction":"NW",
+              "temperature":"38F","property_type":"private",
+              "latitude":31.2956,"longitude":-95.9778,
+              "hunt_style":"archery"},
+             "map_image_base64":"<256x256 PNG>"}
+          ✅ POST /api/analyze-hunt -> 200
+          ✅ response.success == True
+          ✅ result.id, result.overlays, result.summary all present
+          ✅ result.v2 sub-document present (v2 schema active)
+          ✅ region_resolution.resolvedRegionId == "east_texas"
+             (regression check — region_resolution still emitted)
+          NOTE: Use animal id "deer" (not the prompt-pack name
+          "whitetail"); the species_registry maps id="deer" with
+          prompt_pack_id="whitetail" and Trial/Free users would 403
+          on "whitetail" because it's not a recognized species id.
+
+          === SECTION 6 — Health endpoints  (2/2 PASS) ===
+          ✅ GET /api/health -> 200 {"status":"ok","service":"ravenscout-api"}
+          ✅ GET /api/media/health (Bearer Pro) -> 200
+             {"ok":true,"error":null,"configured":true,
+              "bucket":"ravenscout-media-prod","region":"us-east-2",
+              "private_delivery":true}
+             — S3 HeadBucket round-trip succeeds against the production
+             bucket; no 5xx. Note that /api/media/health is documented
+             as auth-gated (does not gate on tier — any valid session
+             may probe), so this section sends Authorization: Bearer.
+
+          === SECTION 7 — pytest suites ===
+          ✅ python -m pytest tests/test_enhanced_prompt_framework.py -v
+             -> 25 passed in 0.03s (25/25 PASS, EXACT MATCH to expectation)
+          ✅ python -m pytest tests/ -q
+             -> 394 passed, 3 failed, 4 skipped in 0.24s
+             The 3 failures are EXACTLY the pre-existing failures
+             called out in the review request and are NOT regressions
+             from this PR:
+               * tests/test_overlay_rendering.py::test_analyze_hunt_returns_overlays_with_coordinates
+                 -- requests.exceptions.MissingSchema: Invalid URL
+                    '/api/analyze-hunt': No scheme supplied
+               * tests/test_overlay_rendering.py::test_overlay_types_have_correct_structure
+                 -- same MissingSchema issue
+               * tests/test_species_prompt_packs.py::test_includes_whitetail_specific_text
+                 -- stale assertion: prompt now legitimately contains
+                    the substring "wallow" (inside "wallows, water
+                    approaches, open skyline...") because of the
+                    expanded master directives. Pre-existing.
+
+          === SUMMARY ===
+          • Backward compatibility: BYTE-IDENTICAL legacy prompt with
+            no enhanced flags. Zero ENHANCED markers leaked into the
+            default build path. ✓
+          • Enhanced opt-in: banner + all three sub-blocks
+            (REGIONAL / BEHAVIOR / ACCESS) emit when their respective
+            flags are on; legacy prompt is a strict prefix of the
+            enhanced output (additive contract honored). ✓
+          • Cross-module reasoning: pressure-baseline mismatch + high-
+            pressure + visible-access interaction notes both fire in
+            the same enhanced build. ✓
+          • Registries: all 4 required regions and both required
+            (whitetail, turkey) pressure_response behavior patterns
+            are registered. EnhancedRegionalModifier IS a true
+            subclass of legacy RegionalModifier. ✓
+          • Failure isolation: unknown enhanced_region_id does NOT
+            crash assemble_system_prompt; the function falls back to
+            legacy output cleanly. ✓
+          • Live API: /api/analyze-hunt returns 200 + full v2 result
+            (request shape unchanged — no enhanced flags wired into
+            the API yet, exactly as documented). ✓
+          • Health: /api/health public 200; /api/media/health (auth)
+            200 with HeadBucket green against ravenscout-media-prod. ✓
+          • Test suites: enhanced framework 25/25 PASS; full backend
+            suite 394 PASS / 3 FAILED (all 3 pre-existing, NOT
+            introduced by this PR). ✓
+
+          Main agent: please summarise and finish — the Enhanced
+          Species Prompt Framework is production-ready, fully
+          backward-compatible (OFF by default), and additive when any
+          opt-in flag is enabled.
+      - working: true
+        agent: "main"
+        comment: |
+          Built the enhanced species prompt sub-package as a clean,
+          isolated, additive layer. ALL flags ship OFF by default — the
+          legacy prompt is byte-identical to the pre-enhancement build
+          so existing snapshot tests stay green.
+
+          Files added (all under /app/backend/species_prompts/enhanced/):
+            * __init__.py            — re-exports the public surface
+            * behavior_framework.py  — PressureLevel, TerrainType,
+                                       EnvironmentalTrigger,
+                                       BehaviorModification,
+                                       EnhancedBehaviorPattern,
+                                       get_enhanced_behavior_pattern,
+                                       get_terrain_movement_pattern,
+                                       render_enhanced_behavior_block
+                                       (registry covers whitetail
+                                       pressure_response + weather_response
+                                       and turkey pressure_response).
+            * access_analysis.py     — AccessType, StealthLevel,
+                                       AccessPoint, TerrainAlternative,
+                                       AccessRouteRecommendation,
+                                       analyze_access_options,
+                                       identify_access_points,
+                                       generate_terrain_alternatives,
+                                       render_enhanced_access_block.
+                                       Stealth ranking, downgrades when
+                                       adjacent to bedding, contingencies
+                                       under pressure, species/weapon
+                                       preferences.
+            * regional_modifiers.py  — TerrainCharacteristics,
+                                       EnvironmentalFactor,
+                                       EnhancedRegionalModifier
+                                       (subclasses existing RegionalModifier
+                                       — does NOT rename or shadow it),
+                                       ENHANCED_REGIONAL_REGISTRY,
+                                       get_enhanced_regional_modifier,
+                                       render_enhanced_regional_block.
+                                       Required regions covered:
+                                       South Texas, Colorado High Country,
+                                       Midwest Agricultural, Pacific NW.
+            * master_prompt.py       — EnhancedHuntContext,
+                                       MasterPromptComponents,
+                                       EnhancedPromptBuilder,
+                                       create_enhanced_hunt_context,
+                                       build_enhanced_master_prompt,
+                                       integrate_environmental_factors.
+                                       Cross-module reasoning:
+                                       pressure-baseline reconciliation,
+                                       inferred terrain from region,
+                                       weapon-terrain compatibility,
+                                       cold-front-under-pressure note.
+            * whitetail_example.py   — Full integration example for the
+                                       whitetail pack (Midwest pressured
+                                       + South Texas late rut). Runnable
+                                       as `python -m
+                                       species_prompts.enhanced.whitetail_example`.
+            * turkey_light.py        — Production-ready light pass for the
+                                       existing turkey pack:
+                                       build_turkey_enhanced_context() and
+                                       build_turkey_enhanced_extension().
+            * enhancement_guide.py   — Executable doc + self-check that
+                                       confirms imports, required regions,
+                                       and backward compatibility of
+                                       assemble_system_prompt.
+
+          Integration with legacy `prompt_builder.assemble_system_prompt`:
+            * Added kwargs `use_enhanced_behavior`, `use_enhanced_access`,
+              `use_enhanced_regional`, plus `enhanced_pressure_level`,
+              `enhanced_terrain`, `enhanced_terrain_features`,
+              `enhanced_region_id`, `enhanced_behavior_pattern_types`.
+              All default to False / None.
+            * When ALL three boolean flags are False, the function returns
+              the legacy prompt unchanged. When ANY are True, the legacy
+              prompt is APPENDED with an `ENHANCED PROMPT EXTENSIONS`
+              banner and only the requested sub-blocks are emitted
+              (granular flag control).
+            * Failures inside the enhanced layer fall through to the
+              legacy prompt rather than throwing, so a registry miss
+              never breaks production analysis.
+
+          Tests (25 / 25 PASS):
+            tests/test_enhanced_prompt_framework.py covers
+              * legacy prompt unchanged when flags off
+              * enhanced prompt strictly extends legacy
+              * partial flag granularity
+              * behavior framework registry + trigger matching +
+                pressure-level fan-out
+              * access analysis ranking, bedding-adjacent downgrade,
+                forest+creek alternatives, no-roads fallback
+              * all four required enhanced regions registered and
+                inheriting from legacy RegionalModifier
+              * master prompt banner, pressure-baseline mismatch note,
+                cold-front-under-pressure note
+              * Turkey light pass renders correctly with documented
+                defaults
+
+          Full backend pytest run: 25 new tests pass; 394 of the existing
+          backend tests pass; 3 pre-existing failures (overlay rendering
+          + a stray "wallow" assertion) are NOT introduced by this PR
+          (verified by stashing the changes and running the same tests
+          on the pre-PR tree).
+
+          Rollout posture: every flag is OFF by default. To enable, the
+          caller passes the appropriate `use_enhanced_*=True` kwargs to
+          `assemble_system_prompt`. Validate per species/region against
+          a fixture before flipping any defaults on.
+
+revenuecat_real_sdk_integration:
+  - task: "RevenueCat real-SDK wiring (Purchases.purchaseProduct + restorePurchases)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/lib/purchases.ts, /app/frontend/app/profile.tsx, /app/frontend/app/subscription.tsx, /app/frontend/src/hooks/useAuth.tsx, /app/frontend/app/_layout.tsx, /app/frontend/app.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          P1 — replaced the mocked RevenueCat hooks with real
+          react-native-purchases SDK calls behind a defensive wrapper
+          (/app/frontend/src/lib/purchases.ts). The wrapper degrades
+          gracefully on Expo Go / web / jest (every method returns
+          status='unavailable' instead of throwing) and exposes
+          init / identify / logout / purchaseProduct / purchasePackage /
+          restorePurchases / entitlementsPayload / tierFromCustomerInfo.
+
+          Wired up:
+            * Subscription paywall (app/subscription.tsx) — real
+              Purchases.purchaseProduct(`${tier}_${cycle}`) on native,
+              syncs entitlements with /api/subscription/sync-revenuecat,
+              cancellations dismiss silently. Expo Go / web keeps the
+              simulated upgrade dialog.
+            * Extra-credit packs (app/profile.tsx) — handlePackPurchase
+              now uses the platform-issued transaction id as the
+              idempotency key for /api/purchases/extra-credits.
+            * Restore Purchases (app/profile.tsx) — real
+              Purchases.restorePurchases() with backend entitlement
+              sync and tier-aware confirmation alert.
+            * Auth lifecycle (src/hooks/useAuth.tsx) — logs in/out of
+              RC whenever the backend user_id changes.
+            * App boot (app/_layout.tsx) — initPurchases() in a
+              useEffect.
+
+          P2 — EAS production Android build prep:
+            * eas.json `production` profile already bakes in
+              EXPO_PUBLIC_MAPTILER_KEY / RC key / backend URL /
+              Google client id (verified, no edits required).
+            * app.json Android permissions deduplicated; added
+              com.android.vending.BILLING.
+            * /app/frontend/EAS_PRODUCTION_BUILD.md cheatsheet added
+              with build command + RC ship checklist (replace test RC
+              key with live key, register store products, point RC
+              webhook to /api/subscription/webhook +
+              /api/purchases/revenuecat-webhook).
+
+          Tests: Jest 6 suites / 62 tests (up from 57). New
+          __tests__/purchases.test.ts (5 cases) covers Expo Go
+          fallback, web fallback, and entitlement helpers.
+
+extra_hunt_analytics_packs:
+  - task: "RevenueCat real-SDK wiring (Purchases.purchaseProduct + restorePurchases)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/lib/purchases.ts, /app/frontend/app/profile.tsx, /app/frontend/app/subscription.tsx, /app/frontend/src/hooks/useAuth.tsx, /app/frontend/app/_layout.tsx, /app/frontend/app.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          P1 — Replaced mocked RevenueCat hooks with real
+          `react-native-purchases` SDK calls behind a defensive
+          wrapper in /app/frontend/src/lib/purchases.ts.
+
+          What was wired up:
+
+          1. NEW WRAPPER MODULE `src/lib/purchases.ts`:
+             • Lazy `require('react-native-purchases')` inside try/catch
+               so Expo Go, web preview, and jest never crash. Exposes
+               `isPurchasesAvailable()` for branchable callers.
+             • `initPurchases()` — `Purchases.configure({apiKey})` once
+               at app start, idempotent.
+             • `identifyUser(userId)` / `logoutPurchases()` — alias the
+               anonymous RC user to our backend `user_id` so subscription
+               entitlements survive reinstalls and cross-device logins.
+             • `purchaseProduct(productId)` — drives a real
+               `Purchases.purchaseProduct()` (with a fallback to
+               `getProducts() + purchaseStoreProduct()` on platforms
+               that only expose the latter). Returns a structured
+               `{status, transactionId, customerInfo, message}` so
+               callers don't have to introspect RC error codes.
+             • `purchasePackage(pkg)` — same shape but for pre-fetched
+               offerings/packages.
+             • `restorePurchases()` — wraps `Purchases.restorePurchases()`
+               and returns the raw `customerInfo` for backend sync.
+             • Helpers `tierFromCustomerInfo(ci)` and
+               `entitlementsPayload(ci)` to translate RC → our backend
+               `/api/subscription/sync-revenuecat` shape.
+             • Cancellation detection covers `userCancelled`, the RC
+               error-code enum, and the string-based code RN emits on
+               older versions.
+
+          2. App boot — `app/_layout.tsx` now calls `initPurchases()` in
+             a `useEffect` so the SDK is configured before any screen
+             tries to purchase.
+
+          3. Auth lifecycle — `src/hooks/useAuth.tsx` now mirrors auth
+             state into RC: when `user.user_id` is set we call
+             `Purchases.logIn(userId)`; on logout we call
+             `Purchases.logOut()`. The effect waits for `loading=false`
+             before logging out so cold-start doesn't briefly de-alias
+             a logged-in user.
+
+          4. Subscription paywall — `app/subscription.tsx` now branches:
+             • Native build → real `purchaseProduct(`${tier}_${cycle}`)`,
+               then sync entitlements with `/api/subscription/sync-revenuecat`
+               using the new `entitlementsPayload()` helper, and
+               `refreshUser()` so the tier flips immediately.
+             • Cancelled purchases dismiss silently.
+             • Errors surface in an `Alert`.
+             • Expo Go / web → unchanged simulated upgrade dialog so
+               testers can still validate UX.
+
+          5. Extra-credit pack purchases — `app/profile.tsx`'s
+             `handlePackPurchase` now calls `purchaseProduct(packId)` on
+             native and forwards the platform-issued `transactionId` to
+             `grantExtraCreditsPurchase()` as the idempotency key. On
+             Expo Go / web it falls back to the existing synthetic id.
+
+          6. Restore Purchases — `app/profile.tsx`'s `onRestore` now
+             calls the real `Purchases.restorePurchases()`, syncs the
+             returned entitlements with the backend, refreshes the
+             user/usage, and shows a tier-aware confirmation alert.
+             On Expo Go / web it falls back to the previous best-effort
+             `refreshUser()` flow.
+
+          7. P2 — EAS production Android build prep (no rebuild
+             triggered, just configuration audit):
+             • Verified `eas.json` `production` profile already bakes
+               `EXPO_PUBLIC_MAPTILER_KEY`, `EXPO_PUBLIC_REVENUECAT_KEY`,
+               `EXPO_PUBLIC_BACKEND_URL`, `EXPO_PUBLIC_GOOGLE_CLIENT_ID`
+               into the build env. No edits required.
+             • `app.json` Android permissions cleaned up (removed
+               4 duplicate entries, added `com.android.vending.BILLING`
+               for Google Play Billing).
+             • `react-native-purchases@10.0.1` installed via yarn.
+             • To trigger the actual Android production build the user
+               runs from /app/frontend:
+                 `eas build --platform android --profile production`
+               (requires interactive `eas login`, so it cannot be
+               executed inside this container).
+
+          Tests (all green):
+             • Created `__tests__/purchases.test.ts` (5 cases) covering
+               the Expo Go fallback path, web platform fallback, and
+               the entitlement / tier helpers.
+             • Full Jest suite: 6 suites / 62 tests pass (was 57).
+             • `yarn lint` shows only pre-existing warnings/errors
+               unrelated to this change (apostrophe escaping, etc.).
+
+          What still needs production-side configuration (out-of-scope
+          for this PR — flagged for ops):
+             • RC dashboard must list product ids
+               `core_monthly`, `core_annual`, `pro_monthly`, `pro_annual`
+               and `ravenscout_extra_analytics_{5,10,15}` with their
+               StoreKit / Play counterparts, exposed via an Offering.
+             • The `EXPO_PUBLIC_REVENUECAT_KEY` baked into `eas.json` is
+               currently a TEST key (`test_…`). Swap to the live public
+               SDK key (`appl_…` / `goog_…`) before the production
+               release goes to the App Store / Play Store.
+             • Backend `/api/subscription/sync-revenuecat` and the RC
+               server-to-server webhook (already present) remain the
+               source of truth and are unchanged.
 
 extra_hunt_analytics_packs:
   - task: "Extra Hunt Analytics Packs (one-time, non-expiring)"
@@ -1463,7 +1954,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com
+          https://tactical-gps-picker.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -1527,7 +2018,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com). Harness:
+          https://tactical-gps-picker.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -1927,7 +2418,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://tactical-hunt-app.preview.emergentagent.com/api/auth/verify-otp
+            POST https://tactical-gps-picker.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -2209,7 +2700,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://tactical-hunt-app.preview.emergentagent.com/api). Test
+      URL (https://tactical-gps-picker.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -2548,7 +3039,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://tactical-hunt-app.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://tactical-gps-picker.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -2802,7 +3293,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://tactical-hunt-app.preview.emergentagent.com).
+          https://tactical-gps-picker.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
@@ -3631,3 +4122,344 @@ agent_communication:
           the analyze flow already shows a tier-limit error toast).
         - Set `REVENUECAT_WEBHOOK_SECRET` in production env when the
           RC dashboard webhook is configured.
+
+
+enhanced_rollout_wiring:
+  - task: "Enhanced Species Prompt rollout layer wired into /api/analyze-hunt"
+    implemented: true
+    working: true
+    file: "/app/backend/enhanced_rollout.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          RE-VALIDATION after the `_LEGACY_TO_ENHANCED_REGION` translation
+          map was added in /app/backend/enhanced_rollout.py. ALL four
+          requested checks PASS. The previously-blocking GPS-resolver →
+          rollout-allowlist mismatch is fully resolved.
+
+          === CHECK 1 — Pro + deer + Iowa GPS (41.5, -93.0)  PASS ===
+          POST /api/analyze-hunt with Bearer test_session_rs_001,
+            conditions.animal="deer", latitude=41.5, longitude=-93.0,
+            hunt_style="archery", time_window="morning", etc., plus
+            a 256x256 PNG map_image_base64.
+          → 200, success=true.
+          ✅ region_resolution = {"resolvedRegionId":"midwest",
+             "resolvedRegionLabel":"Midwest","regionResolutionSource":"gps",
+             "latitude":41.5,"longitude":-93.0}
+          ✅ result.meta.enhanced_analysis = {
+               "enhanced_analysis_enabled": true,
+               "enhanced_modules_used": ["behavior","access","regional"],
+               "enhanced_rollout_reason": "ok"
+             }
+          ✅ Server log line emitted (verified in
+             /var/log/supervisor/backend.err.log):
+               "enhanced_rollout decision tier=pro species=deer
+                pack=whitetail region=midwest_agricultural enabled=True
+                modules=behavior,access,regional reason=ok"
+             — note `region=midwest_agricultural` (the translated
+             enhanced id), NOT `region=midwest`. The translation map is
+             being applied BEFORE the allowlist check exactly as
+             intended, and the canonical legacy region id from the GPS
+             resolver ("midwest") is correctly mapped to the enhanced
+             registry id ("midwest_agricultural").
+
+          === CHECK 2 — Pro + deer + East Texas (31.5, -94.5)  PASS ===
+          POST /api/analyze-hunt with the same Bearer + body but
+            latitude=31.5, longitude=-94.5.
+          → 200, success=true.
+          ✅ region_resolution.resolvedRegionId == "east_texas"
+          ✅ result.meta.enhanced_analysis = {
+               "enhanced_analysis_enabled": false,
+               "enhanced_modules_used": [],
+               "enhanced_rollout_reason": "region_not_allowlisted"
+             }
+          ✅ Fallback path still works — "east_texas" is correctly NOT
+             in the enhanced region allowlist (no translation entry),
+             so the rollout reports region_not_allowlisted and the
+             legacy prompt is used.
+
+          === CHECK 3 — Unit tests  PASS (37/37) ===
+          cd /app/backend && python -m pytest tests/test_enhanced_rollout.py -v
+          → 37 passed in 0.04s
+          The +3 vs the previous run are exactly the new
+          resolver→rollout integration tests:
+            • test_legacy_region_id_translates_to_enhanced
+            • test_iowa_gps_resolves_then_rollout_enables
+            • test_east_texas_gps_resolves_then_rollout_falls_back
+          All three PASS, locking in the fix at the unit level so
+          future regressions cannot reintroduce this wiring bug
+          silently.
+
+          === CHECK 4 — /api/health  PASS ===
+          GET /api/health (public, no auth) → 200
+            {"status":"ok","service":"ravenscout-api"}
+
+          === SUMMARY ===
+          • Iowa GPS now correctly enables enhanced analysis with all
+            three modules (behavior/access/regional) and reason "ok". ✓
+          • East Texas GPS still correctly falls back with reason
+            "region_not_allowlisted". ✓
+          • All 37 unit tests pass (was 34, +3 integration tests). ✓
+          • /api/health unchanged (200 ok). ✓
+          • Backend log emits the expected canonical decision line
+            with `region=midwest_agricultural enabled=True
+            modules=behavior,access,regional reason=ok`. ✓
+
+          The previously-blocking integration bug is fully fixed. No
+          source files modified by the testing agent.
+
+      - working: false
+        agent: "testing"
+        comment: |
+          Enhanced rollout wiring validated end-to-end against the
+          preview URL (https://tactical-gps-picker.preview.emergentagent.com)
+          via /app/backend_test.py. RESULT: 21/24 substantive
+          assertions PASS, BUT 3 critical assertions FAIL on the
+          canonical "Pro + whitetail (deer) + Midwest Agricultural"
+          path described in the review request. ROOT CAUSE is a real
+          wiring bug between the GPS region resolver and the rollout
+          allowlist. Details below.
+
+          === SECTION 1 — Backward compatibility (3/3 PASS) ===
+          POST /api/analyze-hunt
+            Bearer test_session_trial_001 (Trial / Free), animal=deer,
+            latitude=31.5, longitude=-94.5 (East Texas)
+          → 200 success=True
+          ✅ result has id, overlays, summary, v2 (legacy v2 shape preserved)
+          ✅ result.meta.enhanced_analysis = {
+               "enhanced_analysis_enabled": false,
+               "enhanced_modules_used": [],
+               "enhanced_rollout_reason": "tier_not_eligible"
+             }
+          ✅ Server log line:
+             "enhanced_rollout decision tier=trial species=deer pack=whitetail
+              region=east_texas enabled=False modules=- reason=tier_not_eligible"
+
+          NOTE on review-request expectation: the review brief said
+          Trial/Free should report `tier_not_eligible` OR
+          `tier_has_no_modules`. With the DEFAULT_CONFIG in
+          `enhanced_rollout.py`, trial is NOT in `allowed_tiers`
+          (which is {"core","pro"}), so `REASON_TIER_NOT_ELIGIBLE`
+          fires first. Both reasons are valid fallbacks; my assertion
+          accepted either, and `tier_not_eligible` was returned.
+          ✓ Either is a correct legacy-safe outcome.
+
+          (Trial session re-seeded into the RavenScout DB during this
+          run because `test_session_trial_001` was missing from
+          `user_sessions` — initial calls returned 401 "Invalid
+          session". Pro session `test_session_rs_001` was already
+          present.)
+
+          === SECTION 2 — Pro + animal=elk → species_not_allowlisted (3/3 PASS) ===
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro), animal=elk,
+            latitude=39.0, longitude=-106.5 (Mountain West), hunt_style=rifle
+          → 200 success=True
+          ✅ result.meta.enhanced_analysis.enhanced_analysis_enabled == false
+          ✅ enhanced_rollout_reason == "species_not_allowlisted"
+          ✅ Server log:
+             "enhanced_rollout decision tier=pro species=elk pack=elk
+              region=mountain_west enabled=False modules=- reason=species_not_allowlisted"
+
+          === SECTION 3 — Pro + animal=deer + East Texas → region_not_allowlisted (3/3 PASS) ===
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro), animal=deer,
+            latitude=31.5, longitude=-94.5
+          → 200 success=True
+          ✅ region_resolution.resolvedRegionId == "east_texas"
+          ✅ enhanced_analysis_enabled == false
+          ✅ enhanced_rollout_reason == "region_not_allowlisted"
+          ✅ Server log:
+             "enhanced_rollout decision tier=pro species=deer pack=whitetail
+              region=east_texas enabled=False modules=- reason=region_not_allowlisted"
+
+          === SECTION 4 — Pro + animal=deer + Iowa (41.5, -93.0) → enhanced ON (0/3 PASS) ===
+          ❌ This is the SHOWCASE acceptance test from the review brief
+          and it is BROKEN by a region-id mismatch between the GPS
+          resolver and the rollout allowlist.
+
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro), animal=deer,
+            latitude=41.5, longitude=-93.0  (central Iowa)
+          → 200 success=True
+          Observed:
+            region_resolution = {
+              "resolvedRegionId": "midwest",        # ← from GPS resolver
+              "resolvedRegionLabel": "Midwest",
+              "regionResolutionSource": "gps",
+              "latitude": 41.5, "longitude": -93.0
+            }
+            result.meta.enhanced_analysis = {
+              "enhanced_analysis_enabled": false,
+              "enhanced_modules_used": [],
+              "enhanced_rollout_reason": "region_not_allowlisted"
+            }
+          Expected per review brief:
+            enhanced_analysis_enabled = true
+            enhanced_modules_used contains all of {behavior, access, regional}
+            enhanced_rollout_reason = "ok"
+          Server log:
+            "enhanced_rollout decision tier=pro species=deer pack=whitetail
+             region=midwest enabled=False modules=- reason=region_not_allowlisted"
+
+          ROOT CAUSE — wiring mismatch:
+          • /app/backend/species_prompts/regions.py classifies central
+            Iowa coords as canonical region id "midwest" (line 83:
+            `_Box("midwest", lambda lat, lon: 37.0 <= lat <= 49.5
+             and -98.0 < lon <= -80.0)`).
+          • /app/backend/enhanced_rollout.py DEFAULT_CONFIG.region_allowlist
+            (line 110) = `frozenset({"midwest_agricultural"})`.
+          • /app/backend/server.py line 1505-1510 passes the GPS-resolved
+            region_id straight into evaluate_enhanced_rollout WITHOUT
+            translating "midwest" → "midwest_agricultural".
+          • There is NO mapping function from base region IDs
+            (midwest, south_texas, mountain_west, ...) to enhanced
+            regional modifier IDs (midwest_agricultural,
+            colorado_high_country, ...). I grepped the codebase to be
+            sure (`grep -rn "midwest_agricultural" /app/backend/`).
+
+          As a result, the enhanced rollout will NEVER enable through
+          the live /api/analyze-hunt endpoint regardless of GPS
+          coordinates, because no GPS resolution can produce the
+          string "midwest_agricultural". I also verified that
+          `manual_region_override="midwest_agricultural"` does not
+          help — that string is not in the alias map in
+          species_prompts/regions.py either, so the resolver falls
+          back to "generic_default" instead. Confirmed via direct
+          curl with manual_region_override:
+              region_resolution.resolvedRegionId = "generic_default"
+              enhanced_analysis_enabled = false
+              enhanced_rollout_reason = "region_not_allowlisted"
+
+          The unit tests in /app/backend/tests/test_enhanced_rollout.py
+          do NOT catch this because they bypass the region resolver
+          and pass `region_id="midwest_agricultural"` directly into
+          `evaluate_enhanced_rollout()`. The rollout logic is correct
+          — the integration glue is the missing piece.
+
+          Recommended fixes (any one is sufficient — main agent's
+          choice):
+          1. (Simplest) Change DEFAULT_CONFIG.region_allowlist in
+             /app/backend/enhanced_rollout.py from
+             `{"midwest_agricultural"}` to `{"midwest"}` — and
+             likewise add a `legacy→enhanced` map step before passing
+             to `assemble_system_prompt(enhanced_region_id=...)` so
+             the enhanced regional registry lookup still finds the
+             "midwest_agricultural" modifier (otherwise the registry
+             call returns None on "midwest").
+          2. (Cleanest) Add a small `LEGACY_TO_ENHANCED_REGION` map
+             in `species_prompts/regions.py` (e.g.
+             "midwest" → "midwest_agricultural",
+             "south_texas" → "south_texas",
+             "mountain_west" → "colorado_high_country",
+             "pacific_northwest" → "pacific_northwest"). Apply it
+             in server.py at the point where `region_id` is passed
+             to `evaluate_enhanced_rollout(...)` AND keep the
+             allowlist as enhanced ids. This keeps the rollout
+             allowlist semantically aligned with the
+             `regional_modifiers` registry keys.
+          3. (Allowlist both) Allowlist BOTH ids
+             (`{"midwest", "midwest_agricultural"}`) and have
+             prompt_builder fall back gracefully when the registry
+             miss occurs. Less clean.
+
+          === SECTION 5 — Sensitive data NOT in logs (1/1 PASS) ===
+          Tail of /var/log/supervisor/backend.{out,err}.log
+          contained 7+ "enhanced_rollout decision ..." lines from
+          this run. Sample:
+
+            "enhanced_rollout decision tier=pro species=elk pack=elk
+             region=mountain_west enabled=False modules=- reason=species_not_allowlisted"
+            "enhanced_rollout decision tier=pro species=deer pack=whitetail
+             region=midwest enabled=False modules=- reason=region_not_allowlisted"
+            "enhanced_rollout decision tier=pro species=deer pack=whitetail
+             region=east_texas enabled=False modules=- reason=region_not_allowlisted"
+
+          ✅ Zero matches against a sensitive-data regex covering:
+             latitude, longitude, map_image_base64, bearer,
+             session_token, api_key/api-key, secret,
+             "data:image/", "base64,". The decision lines emit only
+             tier, species id, prompt pack id, region id, enabled
+             flag, modules tuple, and reason — exactly what
+             RolloutDecision.to_log_dict() / the f-string in
+             server.py L1514-1524 are designed to expose.
+
+          === SECTION 6 — Unit tests (PASS) ===
+          ✅ python -m pytest /app/backend/tests/test_enhanced_rollout.py -v
+             → 34 passed in 0.03s (34/34, EXACT MATCH to expectation)
+          Includes coverage of:
+             • Free / unknown / empty tier → all flags False
+             • Kill switch off / false / 0 / no / disabled / OFF /
+               DISABLED all force legacy
+             • Kill switch on / true / 1 / yes / unset all pass through
+             • Pro+whitetail+midwest_agricultural enables all 3 modules
+             • Core+whitetail+midwest_agricultural enables behavior only
+             • Pro+turkey falls back (species not allowlisted)
+             • Pro+whitetail+unsupported region falls back
+             • Pro+whitetail+no region falls back
+             • None/empty/whitespace species & region never raise
+             • resolve_enhanced_prompt_flags returns kwargs dict
+             • Legacy kwargs are byte-safe for assemble_system_prompt
+             • to_log_dict is safe and complete
+             • to_response_meta is the documented subset
+             • Custom config can open species allowlist
+             • Global disabled overrides otherwise-eligible
+             • Tier with no modules falls back
+
+          === SECTION 7 — Full pytest run (matches expectation) ===
+          cd /app/backend && python -m pytest tests/
+            → 428 passed, 3 failed, 4 skipped in 0.33s
+          The 3 failures are EXACTLY the pre-existing failures called
+          out in the review brief:
+            * tests/test_overlay_rendering.py::TestOverlayRendering::test_analyze_hunt_returns_overlays_with_coordinates
+            * tests/test_overlay_rendering.py::TestOverlayRendering::test_overlay_types_have_correct_structure
+            * tests/test_species_prompt_packs.py::TestAssembleSystemPrompt::test_includes_whitetail_specific_text
+          ✅ NOT regressions from the rollout PR.
+
+          === SECTION 8 — Health endpoints (4/4 PASS) ===
+          ✅ GET /api/health (public) → 200
+             {"status":"ok","service":"ravenscout-api"}
+          ✅ GET /api/media/health (Bearer Pro) → 200
+             {"ok":true,"error":null,"configured":true,
+              "bucket":"ravenscout-media-prod","region":"us-east-2",
+              "private_delivery":true}
+
+          === SUMMARY ===
+          • Backward compatibility on /api/analyze-hunt: PASS for
+            Trial/Free + deer + East Texas. Legacy v2 response shape
+            (id / overlays / summary / v2) intact. enhanced_analysis
+            meta correctly reports enabled=false +
+            reason=tier_not_eligible. ✓
+          • Pro + species not on allowlist (elk): PASS — falls back
+            with reason=species_not_allowlisted. ✓
+          • Pro + region not on allowlist (East Texas): PASS — falls
+            back with reason=region_not_allowlisted. ✓
+          • Pro + Midwest GPS coords: ❌ FAIL — should enable all 3
+            modules with reason=ok per the review brief. The GPS
+            resolver returns "midwest" but the rollout allowlist
+            contains "midwest_agricultural". This is a real wiring
+            bug in the integration layer (not in the rollout helper
+            itself, which is correct in isolation).
+          • Sensitive data NOT in logs: PASS. ✓
+          • Kill switch unit-test coverage: PASS (34/34). ✓
+          • Full pytest run: PASS — exactly 428/3pre-existing/4skipped. ✓
+          • Health endpoints: PASS. ✓
+
+          NO source files modified by the testing agent. The trial
+          session row was re-seeded into the RavenScout DB
+          (user_sessions + users) during testing because it was
+          missing — that's data only, not code.
+
+          BLOCKING ISSUE FOR MAIN AGENT:
+          The review-brief acceptance criterion "Pro + deer + Iowa
+          GPS → enhanced_analysis_enabled=true with all 3 modules"
+          is not currently achievable through any combination of
+          GPS coords or manual_region_override on the live
+          /api/analyze-hunt endpoint. Pick one of the three fixes
+          above (the legacy→enhanced region map approach #2 is the
+          cleanest and matches the existing alias-map pattern in
+          species_prompts/regions.py).

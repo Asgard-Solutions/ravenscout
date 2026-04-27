@@ -376,6 +376,21 @@ def assemble_system_prompt(
     hunt_style: Optional[str] = None,
     hunt_weapon: Optional[str] = None,
     hunt_method: Optional[str] = None,
+    # ------------------------------------------------------------------
+    # Enhanced framework opt-ins (all OFF by default \u2014 backward compatible).
+    # When ANY of these flags are True the enhanced extension block is
+    # APPENDED to the legacy prompt; the legacy prompt itself is byte-
+    # identical to the pre-enhancement build so existing tests stay green.
+    # ------------------------------------------------------------------
+    use_enhanced_behavior: bool = False,
+    use_enhanced_access: bool = False,
+    use_enhanced_regional: bool = False,
+    enhanced_pressure_level: Optional[object] = None,   # PressureLevel
+    enhanced_terrain: Optional[object] = None,          # TerrainType
+    enhanced_terrain_features: Optional[list] = None,
+    enhanced_region_id: Optional[str] = None,
+    enhanced_behavior_pattern_types: Optional[Tuple[str, ...]] = None,
+    enhanced_species_id: Optional[str] = None,          # prompt_pack_id override
 ) -> str:
     """Assemble the complete system prompt from modular parts.
 
@@ -497,7 +512,81 @@ def assemble_system_prompt(
         build_output_schema_block(),
         build_output_constraints(),
     ]
-    return "\n".join(parts)
+    legacy_prompt = "\n".join(parts)
+
+    # Enhanced extensions \u2014 OPT-IN, ADDITIVE. When all flags are False
+    # this is a no-op and the legacy prompt is returned unchanged so
+    # existing snapshot tests remain valid byte-for-byte.
+    if use_enhanced_behavior or use_enhanced_access or use_enhanced_regional:
+        try:
+            from species_prompts.enhanced import (
+                EnhancedHuntContext,
+                EnhancedPromptBuilder,
+            )
+        except Exception:  # noqa: BLE001
+            return legacy_prompt
+
+        ctx_kwargs = {
+            "species": (enhanced_species_id or animal),
+            "region_id": (
+                enhanced_region_id
+                or (region_resolution.region_id if region_resolution else None)
+            ),
+            "pressure_level": enhanced_pressure_level,
+            "terrain": enhanced_terrain,
+            "weather": (conditions or {}).get("weather"),
+            "month": _enhanced_month_from_conditions(conditions),
+            "moon_phase": (conditions or {}).get("moon_phase"),
+            "hunt_style": hunt_context.get("legacy_id"),
+            "hunt_weapon": hunt_context.get("weapon_id"),
+            "hunt_method": hunt_context.get("method_id"),
+            "terrain_features": tuple(enhanced_terrain_features or ()),
+            "behavior_pattern_types": tuple(enhanced_behavior_pattern_types or ())
+                or ("pressure_response", "weather_response"),
+        }
+        try:
+            ctx = EnhancedHuntContext(**ctx_kwargs)
+            components = EnhancedPromptBuilder().build(ctx)
+        except Exception:  # noqa: BLE001
+            return legacy_prompt
+
+        # Honor flag granularity by zeroing out blocks the caller did
+        # not opt into. Banner + integration rules always render so the
+        # LLM knows the extensions are active.
+        behavior_blocks = components.behavior_blocks if use_enhanced_behavior else ()
+        access_block = components.access_block if use_enhanced_access else None
+        regional_block_e = components.regional_block if use_enhanced_regional else None
+
+        # Rebuild the prompt block from the trimmed components without
+        # mutating the immutable dataclass.
+        from species_prompts.enhanced.master_prompt import MasterPromptComponents
+        trimmed = MasterPromptComponents(
+            behavior_blocks=behavior_blocks,
+            access_block=access_block,
+            regional_block=regional_block_e,
+            matched_behavior_patterns=components.matched_behavior_patterns,
+            access_recommendation=components.access_recommendation,
+            enhanced_regional=components.enhanced_regional,
+            interaction_notes=components.interaction_notes,
+        )
+        return legacy_prompt + "\n" + trimmed.to_prompt_block()
+
+    return legacy_prompt
+
+
+def _enhanced_month_from_conditions(conditions: Optional[dict]) -> Optional[int]:
+    """Pull a calendar month out of `conditions['hunt_date']` if present."""
+    if not isinstance(conditions, dict):
+        return None
+    raw = conditions.get("hunt_date") or conditions.get("date")
+    if isinstance(raw, str) and len(raw) >= 7 and raw[4] == "-":
+        try:
+            return int(raw[5:7])
+        except (TypeError, ValueError):
+            return None
+    if isinstance(raw, (int, float)) and 1 <= int(raw) <= 12:
+        return int(raw)
+    return None
 
 
 def assemble_user_prompt(
