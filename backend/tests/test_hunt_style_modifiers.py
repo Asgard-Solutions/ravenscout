@@ -12,7 +12,9 @@ from species_prompts import (
     CANONICAL_HUNT_STYLES,
     GENERIC_FALLBACK_PACK,
     get_hunt_style_label,
+    normalize_hunt_method,
     normalize_hunt_style,
+    normalize_hunt_weapon,
     render_hunt_style_modifier_block,
     render_no_hunt_style_context_note,
     resolve_hunt_style_modifier,
@@ -24,12 +26,12 @@ from species_prompts import (
 # Canonical inventory
 # ============================================================
 
-CANONICAL_IDS = ("archery", "rifle", "blind", "saddle", "public_land", "spot_and_stalk")
+CANONICAL_IDS = ("archery", "rifle", "shotgun", "blind", "saddle", "public_land", "spot_and_stalk")
 
 
 class TestCanonicalInventory:
-    def test_exactly_six_styles_exist(self):
-        assert len(CANONICAL_HUNT_STYLES) == 6
+    def test_exactly_seven_styles_exist(self):
+        assert len(CANONICAL_HUNT_STYLES) == 7
 
     def test_all_expected_ids_present(self):
         for sid in CANONICAL_IDS:
@@ -72,7 +74,10 @@ class TestNormalizeHuntStyle:
         ("compound bow", "archery"),
         ("crossbow", "archery"),
         ("traditional", "archery"),
-        ("shotgun", "rifle"),
+        ("shotgun", "shotgun"),
+        ("shot gun", "shotgun"),
+        ("slug gun", "shotgun"),
+        ("slug", "shotgun"),
         ("muzzleloader", "rifle"),
         ("black powder", "rifle"),
         ("blackpowder", "rifle"),
@@ -99,6 +104,12 @@ class TestNormalizeHuntStyle:
     ])
     def test_unknown_or_bad_input(self, raw):
         assert normalize_hunt_style(raw) is None
+
+    def test_weapon_and_method_helpers_classify_canonical_ids(self):
+        assert normalize_hunt_weapon("slug gun") == "shotgun"
+        assert normalize_hunt_weapon("ground blind") is None
+        assert normalize_hunt_method("ground blind") == "blind"
+        assert normalize_hunt_method("slug gun") is None
 
 
 # ============================================================
@@ -342,6 +353,6 @@ class TestBlockRendering:
         assert "HUNT STYLE CONTEXT: unspecified" in text
         lowered = text.lower()
         # Explicitly tells the LLM not to assume any particular method.
-        for method in ("archery", "rifle", "blind", "saddle", "spot-and-stalk"):
+        for method in ("blind", "saddle", "spot-and-stalk", "public-land"):
             assert method in lowered
         assert "do not assume" in lowered

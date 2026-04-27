@@ -13,7 +13,12 @@ from typing import Optional, Tuple
 from species_prompts import (
     RegionResolution,
     SpeciesPromptPack,
+    get_hunt_style_label,
+    is_method_style,
+    is_weapon_style,
+    normalize_hunt_method,
     normalize_hunt_style,
+    normalize_hunt_weapon,
     render_hunt_style_modifier_block,
     render_no_hunt_style_context_note,
     render_no_regional_context_note,
@@ -100,6 +105,23 @@ HUNT CONDITIONS:
   Region: {conditions.get('region') or 'Not specified'}"""
 
 
+def build_master_analysis_directives_block() -> str:
+    return """
+MASTER ANALYSIS DIRECTIVES:
+  - Build recommendations by layering evidence in this order: visible map features first, then species rules, regional context, seasonal context, weapon context, hunt-style context, and stated hunt conditions.
+  - If two prompt layers conflict, favor the more specific user-selected context and visible map evidence; lower confidence and explain the conflict in key_assumptions.
+  - Every setup must be species-specific: expected movement, shot opportunity, wind risk, pressure risk, and access route should match the animal being hunted.
+  - Do not let a strong weapon or hunt-style modifier override core animal behavior. Tune the setup to the method, but keep the animal-specific movement model in control.
+
+MAP ACCESS / ROAD DIRECTIVES:
+  - Before selecting setups, inspect the map for roads, two-tracks, trails, parking lots, gates, field entrances, bridges, creek crossings, boat ramps, powerlines, pipelines, section lines, property-boundary hints, and obvious map-edge entry options.
+  - Treat visible roads and trails as BOTH possible legal access points and possible pressure sources. Road-proximate setups should carry higher pressure_risk unless the species/style context says otherwise.
+  - When roads, trails, or access points are visible, include them in map_observations when tactically relevant and anchor entry_strategy / exit_strategy to the safest low-impact access.
+  - When no roads or trails are visible, do NOT invent them. Give the best approach from the map edge using terrain, cover, wind, thermals, water, and the least-disruptive route; call out the no-visible-road limitation in key_assumptions.
+  - Prefer access routes that avoid crossing bedding cover, roost zones, feeding edges, wallows, water approaches, open skyline, or expected animal travel before the sit.
+  - Include an access_route overlay for the primary approach when a route can be reasonably mapped from visible evidence. If the route is only inferred from a map edge, lower confidence and state that clearly."""
+
+
 def build_image_context_block(image_count: int, tier: str) -> str:
     if image_count <= 1:
         return """
@@ -175,8 +197,8 @@ Return this exact JSON structure. Do not omit any keys. Use empty arrays [] inst
       "y_percent": <5-95>,
       "target_movement": "<expected game movement pattern>",
       "shot_opportunity": "<shot type and range>",
-      "entry_strategy": "<how to approach without alerting game>",
-      "exit_strategy": "<how to leave after the hunt>",
+      "entry_strategy": "<how to approach from visible road/trail/access or, if none visible, best low-impact map-edge approach>",
+      "exit_strategy": "<how to leave using visible access or a conservative no-road exit without alerting game>",
       "wind_risk": "low|medium|high",
       "thermals_risk": "low|medium|high|unknown",
       "pressure_risk": "low|medium|high",
@@ -222,6 +244,9 @@ STRICT CONSTRAINTS:
   - Provide 3-6 overlays covering stands, corridors, access routes, and avoid zones.
   - Provide 1-3 top_setups ranked by tactical advantage.
   - Provide 2-5 map_observations describing key terrain features you identified.
+  - Road/access scan is mandatory: if roads, trails, gates, parking, ramps, or field entrances are visible, mention tactically relevant ones in map_observations and reflect pressure/access implications in top_setups.
+  - If no roads or trails are visible, do not invent access. Each top_setup entry_strategy must say the best approach is inferred from the map edge / terrain and include that limitation in key_assumptions.
+  - At least one overlay should be an access_route when a plausible route can be mapped from visible evidence; if no route can be mapped, explain why confidence is lower.
   - species_tips MUST follow the SPECIES TIPS GUIDANCE from the species block above — keep them species-specific, not generic."""
 
 
@@ -241,10 +266,98 @@ def build_user_prompt(species_name: str, conditions: dict, image_count: int) -> 
     if region:
         base += f" Region: {region}."
 
-    base += "\nPriority: identify the best tactical setups with safe access and downwind positioning."
+    base += "\nPriority: identify the best tactical setups with safe access, road/trail-aware entry, and downwind positioning."
+    base += "\nAlways inspect visible roads/trails/access points first. If none are visible, recommend the best low-impact approach from map edge/topography and state the limitation."
     base += "\nReturn JSON only. Follow the v2 schema exactly."
 
     return base
+
+
+def _present(value: Optional[str]) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _resolve_hunt_context(
+    conditions: dict,
+    *,
+    hunt_style: Optional[str] = None,
+    hunt_weapon: Optional[str] = None,
+    hunt_method: Optional[str] = None,
+) -> dict:
+    """Resolve legacy and structured hunting-context inputs.
+
+    Older callers send one `hunt_style` id. Newer clients can send
+    `hunt_weapon` and `hunt_method` separately. This resolver keeps
+    both paths compatible and returns canonical ids only.
+    """
+    raw_weapon = hunt_weapon if hunt_weapon is not None else conditions.get("hunt_weapon")
+    raw_method = hunt_method if hunt_method is not None else conditions.get("hunt_method")
+    raw_legacy = hunt_style if hunt_style is not None else conditions.get("hunt_style")
+
+    weapon_id = normalize_hunt_weapon(raw_weapon) if _present(raw_weapon) else None
+    method_id = normalize_hunt_method(raw_method) if _present(raw_method) else None
+    legacy_id = normalize_hunt_style(raw_legacy) if _present(raw_legacy) else None
+
+    structured = _present(raw_weapon) or _present(raw_method)
+
+    if legacy_id and not weapon_id and is_weapon_style(legacy_id):
+        weapon_id = legacy_id
+    if legacy_id and not method_id and is_method_style(legacy_id):
+        method_id = legacy_id
+
+    return {
+        "structured": structured,
+        "legacy_id": legacy_id,
+        "weapon_id": weapon_id,
+        "method_id": method_id,
+        "raw_weapon": raw_weapon,
+        "raw_method": raw_method,
+        "raw_legacy": raw_legacy,
+    }
+
+
+def _render_selected_context_block(
+    pack: SpeciesPromptPack,
+    style_id: Optional[str],
+    *,
+    context_label: str,
+) -> str:
+    label = get_hunt_style_label(style_id)
+    modifier = resolve_hunt_style_modifier(pack, style_id)
+    if modifier is not None and style_id:
+        return render_hunt_style_modifier_block(
+            modifier,
+            style_id=style_id,
+            source="user_selected",
+            context_label=context_label,
+        )
+    if style_id and label:
+        return render_no_hunt_style_context_note(
+            context_label,
+            selected_label=label,
+            style_id=style_id,
+        )
+    return render_no_hunt_style_context_note(context_label)
+
+
+def build_hunt_context_resolution_block(context: dict) -> str:
+    weapon_id = context.get("weapon_id")
+    method_id = context.get("method_id")
+    legacy_id = context.get("legacy_id")
+    weapon_label = get_hunt_style_label(weapon_id) or "unspecified"
+    method_label = get_hunt_style_label(method_id) or "unspecified"
+    legacy_label = get_hunt_style_label(legacy_id) or "unspecified"
+    weapon_suffix = f" (style_id={weapon_id})" if weapon_id else ""
+    method_suffix = f" (style_id={method_id})" if method_id else ""
+    legacy_suffix = f" (style_id={legacy_id})" if legacy_id else ""
+    source = "structured_weapon_method" if context.get("structured") else "legacy_hunt_style"
+    return f"""
+HUNT CONTEXT RESOLUTION:
+  Source: {source}
+  Weapon: {weapon_label}{weapon_suffix}
+  Hunt Style / Method: {method_label}{method_suffix}
+  Legacy Hunt Style: {legacy_label}{legacy_suffix}
+  Apply weapon and hunt-style / method contexts additively. Weapon controls ethical range, sightline, shot-window, and recovery assumptions; hunt style controls concealment, mobility, pressure, and setup geometry."""
 
 
 # --- Full Prompt Assembly ---
@@ -261,6 +374,8 @@ def assemble_system_prompt(
     manual_region_override: Optional[str] = None,
     region_resolution: Optional[RegionResolution] = None,
     hunt_style: Optional[str] = None,
+    hunt_weapon: Optional[str] = None,
+    hunt_method: Optional[str] = None,
 ) -> str:
     """Assemble the complete system prompt from modular parts.
 
@@ -269,7 +384,8 @@ def assemble_system_prompt(
         -> species pack
         -> regional modifier (or neutral 'generic' notice)
         -> seasonal modifier (region-aware, or neutral 'unavailable' notice)
-        -> hunt-style modifier (or neutral 'unspecified' notice)
+        -> master map/access directives
+        -> weapon modifier + hunt-style/method modifier (or neutral notices)
         -> hunt conditions
         -> image/tier context
         -> output schema
@@ -284,11 +400,11 @@ def assemble_system_prompt(
     boundaries via its `season_adjustments` field — the seasonal
     selector consults it before matching a phase.
 
-    `hunt_style` may be passed explicitly or read from
-    `conditions['hunt_style']`. Values are normalized to the
-    canonical hunt-style id set (archery / rifle / blind / saddle /
-    public_land / spot_and_stalk); anything unrecognized falls back
-    to the neutral 'unspecified' notice.
+    `hunt_weapon` and `hunt_method` may be passed explicitly or read
+    from `conditions['hunt_weapon']` / `conditions['hunt_method']`.
+    `hunt_style` remains supported as the legacy single-field input.
+    Values are normalized to canonical ids; anything unrecognized
+    falls back to the neutral 'unspecified' notice.
     """
     _ = species_data  # legacy — ignored
     pack = resolve_species_pack(animal)
@@ -312,10 +428,14 @@ def assemble_system_prompt(
         pack, conditions, regional_modifier=regional_mod,
     )
 
-    # 4) Hunt-style modifier — canonical id only at this layer.
-    raw_style = hunt_style if hunt_style is not None else conditions.get("hunt_style")
-    canonical_style = normalize_hunt_style(raw_style) if raw_style else None
-    hunt_style_mod = resolve_hunt_style_modifier(pack, canonical_style)
+    # 4) Weapon / hunt-style context. New clients pass weapon and
+    #    method separately; older clients pass one legacy hunt_style.
+    hunt_context = _resolve_hunt_context(
+        conditions,
+        hunt_style=hunt_style,
+        hunt_weapon=hunt_weapon,
+        hunt_method=hunt_method,
+    )
 
     regional_block = (
         render_regional_modifier_block(
@@ -336,21 +456,41 @@ def assemble_system_prompt(
         if seasonal_mod is not None
         else render_no_seasonal_context_note()
     )
-    hunt_style_block = (
-        render_hunt_style_modifier_block(
-            hunt_style_mod,
-            style_id=canonical_style,
-            source="user_selected",
+    if hunt_context["structured"]:
+        hunt_style_block = "\n".join([
+            build_hunt_context_resolution_block(hunt_context),
+            _render_selected_context_block(
+                pack,
+                hunt_context["weapon_id"],
+                context_label="WEAPON",
+            ),
+            _render_selected_context_block(
+                pack,
+                hunt_context["method_id"],
+                context_label="HUNT STYLE",
+            ),
+        ])
+    else:
+        # Back-compat path: preserve the legacy single HUNT STYLE block
+        # shape when older callers do not send structured fields.
+        legacy_id = hunt_context["legacy_id"]
+        legacy_mod = resolve_hunt_style_modifier(pack, legacy_id)
+        hunt_style_block = (
+            render_hunt_style_modifier_block(
+                legacy_mod,
+                style_id=legacy_id,
+                source="user_selected",
+            )
+            if legacy_mod is not None and legacy_id
+            else render_no_hunt_style_context_note()
         )
-        if hunt_style_mod is not None and canonical_style
-        else render_no_hunt_style_context_note()
-    )
 
     parts = [
         build_base_system_prompt(),
         build_species_prompt_pack_block(pack),
         regional_block,
         seasonal_block,
+        build_master_analysis_directives_block(),
         hunt_style_block,
         build_hunt_conditions_block(conditions),
         build_image_context_block(image_count, tier),

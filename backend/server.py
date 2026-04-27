@@ -1329,9 +1329,14 @@ class HuntConditions(BaseModel):
     # Normal hunts should leave this null.
     manual_region_override: Optional[str] = None
 
-    # Optional hunt style — archery / rifle / blind / saddle /
-    # public_land / spot_and_stalk. See species_prompts.hunt_styles.
+    # Legacy optional hunt style — older clients send one canonical id
+    # here. Newer clients send structured hunt_weapon + hunt_method
+    # below, while this field remains populated for back-compat.
     hunt_style: Optional[str] = None
+    # Structured weapon/method context. These let the prompt pipeline
+    # layer weapon range separately from method/setup geometry.
+    hunt_weapon: Optional[str] = None
+    hunt_method: Optional[str] = None
 
 class AnalyzeRequest(BaseModel):
     conditions: HuntConditions
@@ -1437,7 +1442,11 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
     # overriding the user's actual East Texas GPS fix.
     from species_prompts import (
         get_hunt_style_label,
+        is_method_style,
+        is_weapon_style,
+        normalize_hunt_method,
         normalize_hunt_style,
+        normalize_hunt_weapon,
         resolve_effective_region,
     )
     map_centroid = None
@@ -1454,18 +1463,32 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         f"source={region_resolution.source} label='{region_resolution.region_label}'"
     )
 
-    # Hunt-style resolution — canonical id only; freeform input is
-    # normalized here so the prompt pipeline + response + client all
-    # persist the same canonical value.
-    canonical_hunt_style = normalize_hunt_style(conditions.hunt_style)
+    # Hunt-context resolution — canonical ids only. New clients send
+    # weapon and method separately; older clients send a single
+    # hunt_style, which we classify into the appropriate slot.
+    legacy_hunt_style = normalize_hunt_style(conditions.hunt_style)
+    canonical_hunt_weapon = normalize_hunt_weapon(conditions.hunt_weapon)
+    canonical_hunt_method = normalize_hunt_method(conditions.hunt_method)
+    if not canonical_hunt_weapon and is_weapon_style(legacy_hunt_style):
+        canonical_hunt_weapon = legacy_hunt_style
+    if not canonical_hunt_method and is_method_style(legacy_hunt_style):
+        canonical_hunt_method = legacy_hunt_style
+    canonical_hunt_style = canonical_hunt_method or canonical_hunt_weapon or legacy_hunt_style
     hunt_style_resolution = {
         "styleId": canonical_hunt_style,
         "styleLabel": get_hunt_style_label(canonical_hunt_style),
+        "weaponId": canonical_hunt_weapon,
+        "weaponLabel": get_hunt_style_label(canonical_hunt_weapon),
+        "methodId": canonical_hunt_method,
+        "methodLabel": get_hunt_style_label(canonical_hunt_method),
         "source": "user_selected" if canonical_hunt_style else "unspecified",
         "rawInput": conditions.hunt_style,
+        "rawWeapon": conditions.hunt_weapon,
+        "rawMethod": conditions.hunt_method,
     }
     logger.info(
         f"Hunt style resolved: id={canonical_hunt_style} "
+        f"weapon={canonical_hunt_weapon} method={canonical_hunt_method} "
         f"source={hunt_style_resolution['source']}"
     )
 
@@ -1478,6 +1501,8 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         tier=tier,
         region_resolution=region_resolution,
         hunt_style=canonical_hunt_style,
+        hunt_weapon=canonical_hunt_weapon,
+        hunt_method=canonical_hunt_method,
     )
     user_prompt_text = assemble_user_prompt(
         species_name=species["name"],

@@ -1,10 +1,11 @@
 """Raven Scout — Hunt-style modifier resolution for prompt packs.
 
-Canonical, user-chosen hunting method. Keyed to a small, stable set
+Canonical, user-chosen hunting context. Keyed to a small, stable set
 of ids so freeform display text never leaks into the prompt pipeline:
 
     archery           Bow / crossbow — short effective shot range, cover-line sensitive.
     rifle             Centerfire / muzzleloader — extended effective shot range, glassing-friendly.
+    shotgun           Shotgun / slug gun — short-to-mid range, dense-cover capable.
     blind             Ground blind / enclosed stand — high concealment, low mobility.
     saddle            Mobile tree-saddle — high mobility, narrow shooting window, cover-line entry.
     public_land       Public / heavily-pressured property — pressure-sensitive, quiet access dominant.
@@ -13,6 +14,11 @@ of ids so freeform display text never leaks into the prompt pipeline:
 Resolution is deliberately conservative: unknown / empty input
 returns None and the prompt emits a neutral "unspecified" notice.
 Selection is by canonical id only — normalize user input upstream.
+
+The current UI can send weapon and method as separate structured
+fields (`hunt_weapon`, `hunt_method`) while older clients send only
+`hunt_style`. Weapon/method helpers below classify the same canonical
+inventory without duplicating alias handling.
 """
 
 from __future__ import annotations
@@ -33,11 +39,22 @@ CANONICAL_HUNT_STYLES: Mapping[str, str] = {
     "spot_and_stalk":  "Spot-and-Stalk",
 }
 
+CANONICAL_WEAPON_STYLES = frozenset(("archery", "rifle", "shotgun"))
+CANONICAL_METHOD_STYLES = frozenset(("blind", "saddle", "public_land", "spot_and_stalk"))
+
 
 def get_hunt_style_label(style_id: Optional[str]) -> Optional[str]:
     if not style_id:
         return None
     return CANONICAL_HUNT_STYLES.get(style_id)
+
+
+def is_weapon_style(style_id: Optional[str]) -> bool:
+    return bool(style_id and style_id in CANONICAL_WEAPON_STYLES)
+
+
+def is_method_style(style_id: Optional[str]) -> bool:
+    return bool(style_id and style_id in CANONICAL_METHOD_STYLES)
 
 
 # ---------- freeform input normalization ----------
@@ -157,6 +174,23 @@ def normalize_hunt_style(style_input: Optional[str]) -> Optional[str]:
     if us in CANONICAL_HUNT_STYLES:
         return us
     return None
+
+
+def normalize_hunt_weapon(style_input: Optional[str]) -> Optional[str]:
+    """Return a canonical weapon id, or None.
+
+    Uses the shared hunt-style alias table, then filters to weapon
+    styles only. This keeps "bow hunting" / "slug gun" normalization
+    identical between legacy and structured payloads.
+    """
+    style_id = normalize_hunt_style(style_input)
+    return style_id if is_weapon_style(style_id) else None
+
+
+def normalize_hunt_method(style_input: Optional[str]) -> Optional[str]:
+    """Return a canonical method/context id, or None."""
+    style_id = normalize_hunt_style(style_input)
+    return style_id if is_method_style(style_id) else None
 
 
 # ---------- resolver ----------

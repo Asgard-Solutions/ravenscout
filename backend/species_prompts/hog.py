@@ -200,6 +200,30 @@ HOG_PACK = SpeciesPromptPack(
                 "Flag night-legality explicitly as an assumption if the hunt context suggests it.",
             ),
         ),
+        "shotgun": HuntStyleModifier(
+            style_id="shotgun",
+            name="Shotgun (Hog)",
+            behavior_adjustments=(
+                "Effective shot window is usually short-to-mid range: buckshot demands 20-40 yard ambush geometry, while slugs can stretch dense-cover lanes to roughly 50-100 yards.",
+                "Hogs tolerate thick cover and low visibility; shotgun setups can exploit brushy creek bottoms, palmetto edges, cane breaks, and tight sendero openings that are too close for rifle-only thinking.",
+                "Sounders bunch tightly at food / water, so shot selection must account for pass-through, backstop, and second-animal risk.",
+            ),
+            tactical_adjustments=(
+                "Favor dense-cover ambushes on water, wallow, feeder, creek crossing, and sendero pinch points where hogs naturally enter inside shotgun range.",
+                "For buckshot, treat the setup like archery distance with firearm timing: tight trail bends, thick back-cover, and broadside / quartering-away lanes inside 35 yards.",
+                "For slugs, prefer 50-90 yard lanes along creek bottoms, pipeline cuts, or feeder roads with a hard backstop and enough visibility to identify the target cleanly.",
+                "Use quiet road/trail access only to the last safe staging point, then slip in from downwind cover so the sounder does not cut fresh human scent on the trail.",
+            ),
+            caution_adjustments=(
+                "Do NOT recommend open-country 150-200 yard rifle-style glassing setups as shotgun hog plays.",
+                "Do NOT assume buckshot and slugs use the same geometry; buckshot needs archery-tight range, slugs need mid-range lanes and backstop discipline.",
+                "Do NOT ignore recovery access in thick cover — wounded hogs can disappear fast into brush or water.",
+            ),
+            species_tips_adjustments=(
+                "Emphasize dense-cover shotgun ambushes, buckshot-vs-slug range differences, and backstop discipline around sounders.",
+                "Call out recovery-route planning for thick creek bottoms and brushy water edges.",
+            ),
+        ),
         "blind": HuntStyleModifier(
             style_id="blind",
             name="Ground Blind (Hog)",
