@@ -15,10 +15,19 @@ REQUIRED_TOP_KEYS = [
     "key_assumptions", "species_tips", "confidence_summary",
 ]
 
-VALID_OVERLAY_TYPES = {"stand", "corridor", "access_route", "avoid"}
+VALID_EVIDENCE_LEVELS = {"limited", "moderate", "high"}
+
 VALID_SETUP_TYPES = {"stand", "saddle", "blind", "observation"}
 VALID_RISK_LEVELS = {"low", "medium", "high", "unknown"}
-VALID_EVIDENCE_LEVELS = {"limited", "moderate", "high"}
+
+# Sourced from the canonical overlay taxonomy so the validator, the
+# prompt schema, and the frontend renderer never drift apart. NEVER
+# hard-code overlay slugs or colors anywhere else.
+from overlay_taxonomy import (  # noqa: E402
+    OVERLAY_TYPE_IDS as _OVT_IDS,
+    overlay_color_for as _overlay_color_for,
+)
+VALID_OVERLAY_TYPES = set(_OVT_IDS)
 
 
 def clamp(val: float, lo: float, hi: float) -> float:
@@ -80,6 +89,14 @@ def validate_and_normalize(data: dict) -> Tuple[bool, list, dict]:
             if ov.get("type") not in VALID_OVERLAY_TYPES:
                 ov["type"] = "stand"
                 errors.append(f"overlay[{i}] invalid type, defaulted to 'stand'")
+            # Always overwrite color with the canonical hex for the
+            # validated type. The LLM is told the canonical color and
+            # asked to echo it, but we own the contract — never let a
+            # client render a non-canonical colour. This is what keeps
+            # the legend and the actual overlay paint in lock-step.
+            canonical_color = _overlay_color_for(ov["type"])
+            if canonical_color:
+                ov["color"] = canonical_color
             # Clamp coordinates
             if "x_percent" in ov:
                 ov["x_percent"] = clamp(float(ov["x_percent"]), 5, 95)
@@ -188,6 +205,18 @@ def validate_and_normalize(data: dict) -> Tuple[bool, list, dict]:
     return is_valid, errors, data
 
 
+def normalize_v2_response(data: dict) -> Tuple[dict, list]:
+    """Convenience wrapper around `validate_and_normalize` that returns
+    just the normalized payload + the list of validation notes.
+
+    Most callers (and tests) only care about the normalized output and
+    the messages — they don't separately inspect the validity flag
+    because the normalizer always produces a valid v2 shape.
+    """
+    _ok, errors, normalized = validate_and_normalize(data)
+    return normalized, errors
+
+
 def parse_llm_response(raw: str) -> Tuple[bool, dict, str]:
     """
     Parse raw LLM output into a dict. Returns (success, data, error_msg).
@@ -232,6 +261,9 @@ def convert_v2_to_v1(v2_data: dict) -> dict:
             "height_percent": ov.get("radius_percent", 5) * 2 if ov.get("type") in ("corridor", "avoid") else None,
             "reasoning": ov.get("reason", ""),
             "confidence": _confidence_float_to_str(ov.get("confidence", 0.5)),
+            # Carry the canonical color through to the v1 shape so the
+            # legacy frontend renderer doesn't have to look it up either.
+            "color": ov.get("color") or _overlay_color_for(ov.get("type", "stand")),
         })
 
     # Convert wind_notes
