@@ -352,6 +352,7 @@ def render_hunt_style_modifier_block(
     modifier: HuntStyleModifier,
     style_id: str,
     source: str = "user_selected",
+    context_label: str = "HUNT STYLE",
 ) -> str:
     """Render a resolved hunt-style modifier as an additive prompt block.
 
@@ -363,37 +364,69 @@ def render_hunt_style_modifier_block(
     `source` is recorded so the LLM (and downstream review) can tell
     whether the style was explicitly chosen by the user vs. inferred.
     Valid values: ``"user_selected"``.
+
+    `context_label` lets the prompt builder render the same modifier
+    model as either weapon context or method/style context when the
+    client sends those fields separately.
     """
+    label = context_label.strip().upper() or "HUNT STYLE"
     lines = [
         "",
-        f"HUNT STYLE CONTEXT: {modifier.name} (style_id={style_id}, source={source})",
+        f"{label} CONTEXT: {modifier.name} (style_id={style_id}, source={source})",
         f"NOTE: {modifier.confidence_note}",
         "",
-        "HUNT STYLE BEHAVIOR ADJUSTMENTS (apply in addition to the base species rules):",
+        f"{label} BEHAVIOR ADJUSTMENTS (apply in addition to the base species rules):",
         _bullets(modifier.behavior_adjustments),
-        "HUNT STYLE TACTICAL ADJUSTMENTS:",
+        f"{label} TACTICAL ADJUSTMENTS:",
         _bullets(modifier.tactical_adjustments),
-        "HUNT STYLE CAUTION ADJUSTMENTS (do not over-tune the method beyond what imagery supports):",
+        f"{label} CAUTION ADJUSTMENTS (do not over-tune the method beyond what imagery supports):",
         _bullets(modifier.caution_adjustments),
-        "HUNT STYLE SPECIES TIPS ADJUSTMENTS (layer these on top of base species_tips guidance):",
+        f"{label} SPECIES TIPS ADJUSTMENTS (layer these on top of base species_tips guidance):",
         _bullets(modifier.species_tips_adjustments),
     ]
     return "\n".join(lines)
 
 
-def render_no_hunt_style_context_note() -> str:
+def render_no_hunt_style_context_note(
+    context_label: str = "HUNT STYLE",
+    *,
+    selected_label: Optional[str] = None,
+    style_id: Optional[str] = None,
+) -> str:
     """Emitted when no hunt-style modifier is selected/available.
 
     Keeps the prompt shape consistent — the hunt-style slot always
     exists — and explicitly tells the LLM NOT to assume a specific
     method.
     """
+    label = context_label.strip().upper() or "HUNT STYLE"
+    if selected_label and style_id:
+        return (
+            f"\n{label} CONTEXT: {selected_label} "
+            f"(style_id={style_id}, species_modifier=unavailable)\n"
+            "NOTE: The user selected this context, but this species pack "
+            "does not define a dedicated modifier for it. Apply only "
+            "general range, concealment, access, and pressure implications "
+            "that are visible or stated. Lower confidence for any claim "
+            "that depends on species-specific tuning for this context."
+        )
+
+    if label == "WEAPON":
+        return (
+            "\nWEAPON CONTEXT: unspecified\n"
+            "NOTE: No weapon/range was selected by the user. Recommend "
+            "setups without assuming archery distance, shotgun pattern / "
+            "slug range, or rifle sightline range. If a recommendation "
+            "naturally implies a weapon, flag the assumption in "
+            "key_assumptions."
+        )
+
     return (
-        "\nHUNT STYLE CONTEXT: unspecified\n"
-        "NOTE: No hunting method was selected by the user. Recommend "
-        "setups in method-neutral language — do not assume archery "
-        "range, rifle range, blind-based concealment, saddle mobility, "
-        "spot-and-stalk freedom, or public-land pressure profile. If "
-        "a recommendation naturally implies a method, flag the "
-        "assumption in key_assumptions."
+        f"\n{label} CONTEXT: unspecified\n"
+        "NOTE: No hunting method/style was selected by the user. "
+        "Recommend setups in method-neutral language — do not assume "
+        "blind-based concealment, saddle mobility, spot-and-stalk "
+        "freedom, or public-land pressure profile unless that context "
+        "is visible or stated elsewhere. If a recommendation naturally "
+        "implies a method, flag the assumption in key_assumptions."
     )

@@ -2,8 +2,14 @@
 
 from .hunt_styles import (
     CANONICAL_HUNT_STYLES,
+    CANONICAL_METHOD_STYLES,
+    CANONICAL_WEAPON_STYLES,
     get_hunt_style_label,
+    is_method_style,
+    is_weapon_style,
+    normalize_hunt_method,
     normalize_hunt_style,
+    normalize_hunt_weapon,
     resolve_hunt_style_modifier,
 )
 from .pack import (
@@ -57,6 +63,8 @@ __all__ = [
     "RegionResolution",
     "CANONICAL_REGIONS",
     "CANONICAL_HUNT_STYLES",
+    "CANONICAL_WEAPON_STYLES",
+    "CANONICAL_METHOD_STYLES",
     "GENERIC_DEFAULT",
     "resolve_species_pack",
     "resolve_seasonal_modifier",
@@ -66,6 +74,10 @@ __all__ = [
     "resolve_region_from_coordinates",
     "normalize_region_override",
     "normalize_hunt_style",
+    "normalize_hunt_weapon",
+    "normalize_hunt_method",
+    "is_weapon_style",
+    "is_method_style",
     "get_region_label",
     "get_hunt_style_label",
     "get_all_canonical_species",
