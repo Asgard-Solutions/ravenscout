@@ -10,6 +10,7 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, WIND_DIRECTIONS, TIME_WINDOWS, BACKEND_URL } from '../src/constants/theme';
 import { useSpeciesCatalog, groupSpeciesByCategory } from '../src/constants/species';
+import { getSpeciesIconImage } from '../src/constants/speciesIcons';
 import {
   HUNT_STYLES,
   HUNT_WEAPONS,
@@ -853,11 +854,33 @@ export default function SetupScreen() {
                             activeOpacity={0.7}
                           >
                             <View style={styles.speciesIconContainer}>
-                              <Ionicons
-                                name={(species.icon as any) || 'paw'}
-                                size={32}
-                                color={isActive ? COLORS.accent : isLocked ? COLORS.fogGray : COLORS.fogGray}
-                              />
+                              {(() => {
+                                // Per-species custom illustration (e.g. the
+                                // gold/white deer pair). Falls back to the
+                                // Ionicons glyph from the backend catalog
+                                // when no custom image is registered.
+                                const iconImage = getSpeciesIconImage(species.id);
+                                if (iconImage) {
+                                  return (
+                                    <Image
+                                      source={isActive ? iconImage.active : iconImage.inactive}
+                                      style={[
+                                        styles.speciesIconImage,
+                                        isLocked && styles.speciesIconImageLocked,
+                                      ]}
+                                      resizeMode="contain"
+                                      accessibilityLabel={species.name}
+                                    />
+                                  );
+                                }
+                                return (
+                                  <Ionicons
+                                    name={(species.icon as any) || 'paw'}
+                                    size={32}
+                                    color={isActive ? COLORS.accent : isLocked ? COLORS.fogGray : COLORS.fogGray}
+                                  />
+                                );
+                              })()}
                             </View>
                             <View style={styles.speciesHeaderRow}>
                               <Text style={[styles.speciesName, isActive && styles.speciesNameActive]}>
@@ -1545,6 +1568,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(200, 155, 60, 0.25)',
   },
   speciesIconContainer: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(58, 74, 82, 0.6)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  // Custom species icon image (e.g. the gold/white deer pair). Sized
+  // to match the 32 px Ionicons glyph footprint inside the circular
+  // container so the layout doesn't shift when a species swaps from
+  // a glyph to an image.
+  speciesIconImage: { width: 40, height: 40 },
+  speciesIconImageLocked: { opacity: 0.45 },
   speciesHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   speciesName: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
   speciesNameActive: { color: COLORS.accent },
