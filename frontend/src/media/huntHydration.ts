@@ -1043,16 +1043,50 @@ export async function finalizeProvisionalHunt(
     // pointer to the uploaded images. Fire-and-forget: if the
     // cloud is unreachable the local AnalysisStore remains
     // authoritative.
-    const imageS3Keys = (outcome.hunt?.media || [])
-      .map((m: any) => m?.storageKey)
-      .filter((k: any): k is string => typeof k === 'string' && k.length > 0);
+    //
+    // CRITICAL: We must read the REAL media assets from the on-disk
+    // index, NOT from `outcome.hunt.media`. The hydrated outcome
+    // synthesizes data-uri-legacy assets from the in-session base64
+    // cache (no storageKey, no real imageId for cloud uploads), which
+    // is great for the immediate /results render but useless for the
+    // server contract. The index has the authoritative MediaAsset
+    // records that saveMediaBatch just wrote (with storageKey for
+    // cloud assets and the real cloud_xxx imageIds).
+    const realAssets = await listMediaForHunt(huntId);
+    // Filter to non-thumbnail roles for the hunt's primary/context
+    // media list. Thumbnails are referenced via primary.thumbnailRef
+    // and don't belong in mediaRefs / image_s3_keys.
+    const primaryAndContext = realAssets.filter(
+      (a) => a.role !== 'thumbnail',
+    );
+    // Deterministic order: primary first, then context in createdAt
+    // order. This mirrors the input order from base64Images so
+    // primary_media_ref stays in lockstep across devices.
+    primaryAndContext.sort((a, b) => {
+      if (a.role === 'primary' && b.role !== 'primary') return -1;
+      if (b.role === 'primary' && a.role !== 'primary') return 1;
+      return (a.createdAt || '').localeCompare(b.createdAt || '');
+    });
+    const realMediaRefs = primaryAndContext.map((a) => a.imageId);
+    const realPrimaryRef =
+      primaryAndContext.find((a) => a.role === 'primary')?.imageId ??
+      realMediaRefs[0] ??
+      null;
+    // Cloud objects only — never put local-file fallback paths in
+    // image_s3_keys (those are device-temp paths, not S3 keys, and
+    // shipping them to Mongo would corrupt the orphan-cleanup join).
+    const imageS3Keys = primaryAndContext
+      .filter((a) => a.storageType === 'cloud')
+      .map((a) => a.storageKey)
+      .filter((k): k is string => typeof k === 'string' && k.length > 0);
+
     const cloud = await upsertHunt({
       huntId,
       metadata: analysis.metadata,
       analysis: analysis.analysis,
       analysisContext: analysis.analysisContext || {},
-      mediaRefs: analysis.mediaRefs || [],
-      primaryMediaRef: analysis.primaryMediaRef ?? null,
+      mediaRefs: realMediaRefs.length > 0 ? realMediaRefs : (analysis.mediaRefs || []),
+      primaryMediaRef: realPrimaryRef ?? analysis.primaryMediaRef ?? null,
       imageS3Keys,
       storageStrategy: 'native_full',
     });
@@ -1065,7 +1099,10 @@ export async function finalizeProvisionalHunt(
         media_persisted: outcome.mediaPersisted,
         cloud_ok: cloud.ok,
         cloud_reason: cloud.ok ? null : (cloud as any).reason,
+        media_refs_count: realMediaRefs.length,
         image_s3_keys_count: imageS3Keys.length,
+        cloud_assets_count: primaryAndContext.filter((a) => a.storageType === 'cloud').length,
+        local_fallback_count: primaryAndContext.filter((a) => a.storageType !== 'cloud').length,
         warning: outcome.warningMessage ?? null,
       },
     });
