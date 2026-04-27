@@ -82,6 +82,7 @@ Raven Scout is a mobile hunting planning application that uses GPT-5.2 Vision AI
 - [x] RevenueCat integration ready (preview mode in Expo Go, real purchases in production build)
 - [x] RevenueCat real SDK wiring — `Purchases.purchaseProduct()` for tier upgrades and extra-credit packs, `Purchases.restorePurchases()` driving real entitlement sync via `/api/subscription/sync-revenuecat`. Defensive wrapper in `src/lib/purchases.ts` degrades gracefully on Expo Go / web.
 - [x] RevenueCat webhook endpoint for server-to-server subscription events
+- [x] Enhanced species prompt framework — additive sub-package `species_prompts/enhanced/` shipping behavior (PressureLevel/TerrainType/EnvironmentalTrigger/EnhancedBehaviorPattern), access analysis (stealth ranking, terrain alternatives), enhanced regional modifiers (South Texas / Colorado High Country / Midwest Agricultural / Pacific NW), and a master prompt builder with cross-module reasoning. Wired into `prompt_builder.assemble_system_prompt` via `use_enhanced_*` kwargs (OFF by default; legacy prompt unchanged when disabled). Whitetail integration example + Turkey light pass + 25 passing pytest cases.
 - [x] Login screen with Google sign-in, auth-gated home screen
 - [x] Usage bar on home screen showing remaining analyses
 - [x] Subscription/paywall screen with tier cards, billing toggle (monthly/annual), savings display

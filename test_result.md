@@ -1035,18 +1035,332 @@ agent_communication:
 
 metadata:
   created_by: "main_agent"
-  version: "3.4"
+  version: "3.5"
   test_sequence: 2
   run_ui: false
 
 test_plan:
   current_focus:
-    - "RevenueCat real-SDK wiring (Purchases.purchaseProduct + restorePurchases)"
+    - "Enhanced species prompt framework (additive, OFF by default)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
+enhanced_prompt_framework:
+  - task: "Enhanced species prompt framework (behaviour + access + regional + master)"
+    implemented: true
+    working: true
+    file: "/app/backend/species_prompts/enhanced/, /app/backend/prompt_builder.py, /app/backend/tests/test_enhanced_prompt_framework.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Enhanced Species Prompt Framework verified end-to-end via
+          /app/backend_test.py against http://localhost:8001/api with
+          Bearer test_session_rs_001 (Pro). 28/28 substantive
+          assertions PASS. No source files modified.
+
+          === SECTION 1 — Backward compatibility (CRITICAL)  (2/2 PASS) ===
+          assemble_system_prompt(animal="whitetail", conditions={...},
+            image_count=1, tier="pro")  with NO enhanced flags:
+          ✅ Output contains NONE of:
+             "ENHANCED PROMPT EXTENSIONS",
+             "ENHANCED BEHAVIOR CONTEXT",
+             "ENHANCED ACCESS ANALYSIS",
+             "ENHANCED REGIONAL CONTEXT".
+          ✅ Two identical calls produce byte-identical strings
+             (deterministic, snapshot-safe).
+
+          === SECTION 2 — Enhanced opt-in mode  (8/8 PASS) ===
+          assemble_system_prompt(..., use_enhanced_behavior=True,
+            use_enhanced_access=True, use_enhanced_regional=True,
+            enhanced_pressure_level=PressureLevel.HIGH,
+            enhanced_terrain=TerrainType.AGRICULTURAL,
+            enhanced_region_id="midwest_agricultural",
+            enhanced_terrain_features=[
+              {"type":"creek","description":"Creek east of stand",
+               "visibility":"visible"}]):
+          ✅ "ENHANCED PROMPT EXTENSIONS" banner present
+          ✅ "ENHANCED REGIONAL CONTEXT" sub-block present
+          ✅ "ENHANCED BEHAVIOR CONTEXT" sub-block present
+          ✅ "ENHANCED ACCESS ANALYSIS" sub-block present
+          ✅ Enhanced output is a STRICT SUPERSET of the legacy build —
+             enhanced.startswith(legacy) is True (additive contract).
+          ✅ "CROSS-MODULE INTERACTION NOTES" header emitted
+          ✅ Cross-module reasoning text appears in the prompt (matches
+             one or more of: "regional baseline", "lower confidence",
+             "second-"). With pressure_level=HIGH supplied while the
+             midwest_agricultural baseline is moderate, the
+             baseline-mismatch interaction note fires correctly, AND
+             the high-pressure + visible-access "prefer the second-/
+             third-best access point" note also fires (cross-module
+             reasoning works as documented).
+
+          === SECTION 3 — Registries  (7/7 PASS) ===
+          ✅ get_enhanced_regional_modifier("south_texas")          -> non-None
+          ✅ get_enhanced_regional_modifier("colorado_high_country") -> non-None
+          ✅ get_enhanced_regional_modifier("midwest_agricultural")  -> non-None
+          ✅ get_enhanced_regional_modifier("pacific_northwest")     -> non-None
+          ✅ get_enhanced_behavior_pattern("whitetail","pressure_response") -> non-None
+          ✅ get_enhanced_behavior_pattern("turkey","pressure_response")    -> non-None
+          ✅ issubclass(EnhancedRegionalModifier, RegionalModifier) is True
+             (legacy class is preserved, NOT shadowed).
+
+          === SECTION 4 — Failure isolation  (1/1 PASS) ===
+          assemble_system_prompt(..., use_enhanced_regional=True,
+            enhanced_region_id="atlantis_lost_continent")
+          ✅ Returns a non-empty prompt string without raising
+             (unknown region id is silently absorbed; legacy prompt is
+             returned). The try/except in prompt_builder.py L519-526
+             fall-through guard works as designed.
+
+          === SECTION 5 — POST /api/analyze-hunt (request shape) ===
+          (7/7 PASS)
+          Body (no enhanced flags wired into API):
+            {"conditions":{"animal":"deer","hunt_date":"2025-11-15",
+              "time_window":"morning","wind_direction":"NW",
+              "temperature":"38F","property_type":"private",
+              "latitude":31.2956,"longitude":-95.9778,
+              "hunt_style":"archery"},
+             "map_image_base64":"<256x256 PNG>"}
+          ✅ POST /api/analyze-hunt -> 200
+          ✅ response.success == True
+          ✅ result.id, result.overlays, result.summary all present
+          ✅ result.v2 sub-document present (v2 schema active)
+          ✅ region_resolution.resolvedRegionId == "east_texas"
+             (regression check — region_resolution still emitted)
+          NOTE: Use animal id "deer" (not the prompt-pack name
+          "whitetail"); the species_registry maps id="deer" with
+          prompt_pack_id="whitetail" and Trial/Free users would 403
+          on "whitetail" because it's not a recognized species id.
+
+          === SECTION 6 — Health endpoints  (2/2 PASS) ===
+          ✅ GET /api/health -> 200 {"status":"ok","service":"ravenscout-api"}
+          ✅ GET /api/media/health (Bearer Pro) -> 200
+             {"ok":true,"error":null,"configured":true,
+              "bucket":"ravenscout-media-prod","region":"us-east-2",
+              "private_delivery":true}
+             — S3 HeadBucket round-trip succeeds against the production
+             bucket; no 5xx. Note that /api/media/health is documented
+             as auth-gated (does not gate on tier — any valid session
+             may probe), so this section sends Authorization: Bearer.
+
+          === SECTION 7 — pytest suites ===
+          ✅ python -m pytest tests/test_enhanced_prompt_framework.py -v
+             -> 25 passed in 0.03s (25/25 PASS, EXACT MATCH to expectation)
+          ✅ python -m pytest tests/ -q
+             -> 394 passed, 3 failed, 4 skipped in 0.24s
+             The 3 failures are EXACTLY the pre-existing failures
+             called out in the review request and are NOT regressions
+             from this PR:
+               * tests/test_overlay_rendering.py::test_analyze_hunt_returns_overlays_with_coordinates
+                 -- requests.exceptions.MissingSchema: Invalid URL
+                    '/api/analyze-hunt': No scheme supplied
+               * tests/test_overlay_rendering.py::test_overlay_types_have_correct_structure
+                 -- same MissingSchema issue
+               * tests/test_species_prompt_packs.py::test_includes_whitetail_specific_text
+                 -- stale assertion: prompt now legitimately contains
+                    the substring "wallow" (inside "wallows, water
+                    approaches, open skyline...") because of the
+                    expanded master directives. Pre-existing.
+
+          === SUMMARY ===
+          • Backward compatibility: BYTE-IDENTICAL legacy prompt with
+            no enhanced flags. Zero ENHANCED markers leaked into the
+            default build path. ✓
+          • Enhanced opt-in: banner + all three sub-blocks
+            (REGIONAL / BEHAVIOR / ACCESS) emit when their respective
+            flags are on; legacy prompt is a strict prefix of the
+            enhanced output (additive contract honored). ✓
+          • Cross-module reasoning: pressure-baseline mismatch + high-
+            pressure + visible-access interaction notes both fire in
+            the same enhanced build. ✓
+          • Registries: all 4 required regions and both required
+            (whitetail, turkey) pressure_response behavior patterns
+            are registered. EnhancedRegionalModifier IS a true
+            subclass of legacy RegionalModifier. ✓
+          • Failure isolation: unknown enhanced_region_id does NOT
+            crash assemble_system_prompt; the function falls back to
+            legacy output cleanly. ✓
+          • Live API: /api/analyze-hunt returns 200 + full v2 result
+            (request shape unchanged — no enhanced flags wired into
+            the API yet, exactly as documented). ✓
+          • Health: /api/health public 200; /api/media/health (auth)
+            200 with HeadBucket green against ravenscout-media-prod. ✓
+          • Test suites: enhanced framework 25/25 PASS; full backend
+            suite 394 PASS / 3 FAILED (all 3 pre-existing, NOT
+            introduced by this PR). ✓
+
+          Main agent: please summarise and finish — the Enhanced
+          Species Prompt Framework is production-ready, fully
+          backward-compatible (OFF by default), and additive when any
+          opt-in flag is enabled.
+      - working: true
+        agent: "main"
+        comment: |
+          Built the enhanced species prompt sub-package as a clean,
+          isolated, additive layer. ALL flags ship OFF by default — the
+          legacy prompt is byte-identical to the pre-enhancement build
+          so existing snapshot tests stay green.
+
+          Files added (all under /app/backend/species_prompts/enhanced/):
+            * __init__.py            — re-exports the public surface
+            * behavior_framework.py  — PressureLevel, TerrainType,
+                                       EnvironmentalTrigger,
+                                       BehaviorModification,
+                                       EnhancedBehaviorPattern,
+                                       get_enhanced_behavior_pattern,
+                                       get_terrain_movement_pattern,
+                                       render_enhanced_behavior_block
+                                       (registry covers whitetail
+                                       pressure_response + weather_response
+                                       and turkey pressure_response).
+            * access_analysis.py     — AccessType, StealthLevel,
+                                       AccessPoint, TerrainAlternative,
+                                       AccessRouteRecommendation,
+                                       analyze_access_options,
+                                       identify_access_points,
+                                       generate_terrain_alternatives,
+                                       render_enhanced_access_block.
+                                       Stealth ranking, downgrades when
+                                       adjacent to bedding, contingencies
+                                       under pressure, species/weapon
+                                       preferences.
+            * regional_modifiers.py  — TerrainCharacteristics,
+                                       EnvironmentalFactor,
+                                       EnhancedRegionalModifier
+                                       (subclasses existing RegionalModifier
+                                       — does NOT rename or shadow it),
+                                       ENHANCED_REGIONAL_REGISTRY,
+                                       get_enhanced_regional_modifier,
+                                       render_enhanced_regional_block.
+                                       Required regions covered:
+                                       South Texas, Colorado High Country,
+                                       Midwest Agricultural, Pacific NW.
+            * master_prompt.py       — EnhancedHuntContext,
+                                       MasterPromptComponents,
+                                       EnhancedPromptBuilder,
+                                       create_enhanced_hunt_context,
+                                       build_enhanced_master_prompt,
+                                       integrate_environmental_factors.
+                                       Cross-module reasoning:
+                                       pressure-baseline reconciliation,
+                                       inferred terrain from region,
+                                       weapon-terrain compatibility,
+                                       cold-front-under-pressure note.
+            * whitetail_example.py   — Full integration example for the
+                                       whitetail pack (Midwest pressured
+                                       + South Texas late rut). Runnable
+                                       as `python -m
+                                       species_prompts.enhanced.whitetail_example`.
+            * turkey_light.py        — Production-ready light pass for the
+                                       existing turkey pack:
+                                       build_turkey_enhanced_context() and
+                                       build_turkey_enhanced_extension().
+            * enhancement_guide.py   — Executable doc + self-check that
+                                       confirms imports, required regions,
+                                       and backward compatibility of
+                                       assemble_system_prompt.
+
+          Integration with legacy `prompt_builder.assemble_system_prompt`:
+            * Added kwargs `use_enhanced_behavior`, `use_enhanced_access`,
+              `use_enhanced_regional`, plus `enhanced_pressure_level`,
+              `enhanced_terrain`, `enhanced_terrain_features`,
+              `enhanced_region_id`, `enhanced_behavior_pattern_types`.
+              All default to False / None.
+            * When ALL three boolean flags are False, the function returns
+              the legacy prompt unchanged. When ANY are True, the legacy
+              prompt is APPENDED with an `ENHANCED PROMPT EXTENSIONS`
+              banner and only the requested sub-blocks are emitted
+              (granular flag control).
+            * Failures inside the enhanced layer fall through to the
+              legacy prompt rather than throwing, so a registry miss
+              never breaks production analysis.
+
+          Tests (25 / 25 PASS):
+            tests/test_enhanced_prompt_framework.py covers
+              * legacy prompt unchanged when flags off
+              * enhanced prompt strictly extends legacy
+              * partial flag granularity
+              * behavior framework registry + trigger matching +
+                pressure-level fan-out
+              * access analysis ranking, bedding-adjacent downgrade,
+                forest+creek alternatives, no-roads fallback
+              * all four required enhanced regions registered and
+                inheriting from legacy RegionalModifier
+              * master prompt banner, pressure-baseline mismatch note,
+                cold-front-under-pressure note
+              * Turkey light pass renders correctly with documented
+                defaults
+
+          Full backend pytest run: 25 new tests pass; 394 of the existing
+          backend tests pass; 3 pre-existing failures (overlay rendering
+          + a stray "wallow" assertion) are NOT introduced by this PR
+          (verified by stashing the changes and running the same tests
+          on the pre-PR tree).
+
+          Rollout posture: every flag is OFF by default. To enable, the
+          caller passes the appropriate `use_enhanced_*=True` kwargs to
+          `assemble_system_prompt`. Validate per species/region against
+          a fixture before flipping any defaults on.
+
 revenuecat_real_sdk_integration:
+  - task: "RevenueCat real-SDK wiring (Purchases.purchaseProduct + restorePurchases)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/lib/purchases.ts, /app/frontend/app/profile.tsx, /app/frontend/app/subscription.tsx, /app/frontend/src/hooks/useAuth.tsx, /app/frontend/app/_layout.tsx, /app/frontend/app.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          P1 — replaced the mocked RevenueCat hooks with real
+          react-native-purchases SDK calls behind a defensive wrapper
+          (/app/frontend/src/lib/purchases.ts). The wrapper degrades
+          gracefully on Expo Go / web / jest (every method returns
+          status='unavailable' instead of throwing) and exposes
+          init / identify / logout / purchaseProduct / purchasePackage /
+          restorePurchases / entitlementsPayload / tierFromCustomerInfo.
+
+          Wired up:
+            * Subscription paywall (app/subscription.tsx) — real
+              Purchases.purchaseProduct(`${tier}_${cycle}`) on native,
+              syncs entitlements with /api/subscription/sync-revenuecat,
+              cancellations dismiss silently. Expo Go / web keeps the
+              simulated upgrade dialog.
+            * Extra-credit packs (app/profile.tsx) — handlePackPurchase
+              now uses the platform-issued transaction id as the
+              idempotency key for /api/purchases/extra-credits.
+            * Restore Purchases (app/profile.tsx) — real
+              Purchases.restorePurchases() with backend entitlement
+              sync and tier-aware confirmation alert.
+            * Auth lifecycle (src/hooks/useAuth.tsx) — logs in/out of
+              RC whenever the backend user_id changes.
+            * App boot (app/_layout.tsx) — initPurchases() in a
+              useEffect.
+
+          P2 — EAS production Android build prep:
+            * eas.json `production` profile already bakes in
+              EXPO_PUBLIC_MAPTILER_KEY / RC key / backend URL /
+              Google client id (verified, no edits required).
+            * app.json Android permissions deduplicated; added
+              com.android.vending.BILLING.
+            * /app/frontend/EAS_PRODUCTION_BUILD.md cheatsheet added
+              with build command + RC ship checklist (replace test RC
+              key with live key, register store products, point RC
+              webhook to /api/subscription/webhook +
+              /api/purchases/revenuecat-webhook).
+
+          Tests: Jest 6 suites / 62 tests (up from 57). New
+          __tests__/purchases.test.ts (5 cases) covers Expo Go
+          fallback, web fallback, and entitlement helpers.
+
+extra_hunt_analytics_packs:
   - task: "RevenueCat real-SDK wiring (Purchases.purchaseProduct + restorePurchases)"
     implemented: true
     working: true
