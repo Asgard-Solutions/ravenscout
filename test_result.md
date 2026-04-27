@@ -1035,10 +1035,112 @@ agent_communication:
 
 test_plan:
   current_focus:
-    - "Overlay Taxonomy unification (single source of truth) — backend validator + LLM prompt"
+    - "Saved hunts custom species icons + Pro user S3 image upload sync (mongo image_s3_keys)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+saved_hunts_icons_and_s3_sync:
+  - task: "Saved Hunts: use custom gold/white species icons + fix mongo image_s3_keys/media_refs sync from finalizeProvisionalHunt"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/history.tsx, /app/frontend/src/media/huntHydration.ts, /app/frontend/src/media/adapters/CloudMediaStore.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          USER REPORT (verbatim):
+            1. "saved hunts are using the wrong images those need
+               to be updated to the correct images"  →  the small
+               species icons on each saved-hunt card were Ionicons
+               (paw / leaf) from the old design, not the user's
+               custom gold/white species illustrations.
+            2. "Pro users' images are still not being uploaded
+               the S3 hunts folder."
+
+          ROOT CAUSES (confirmed by direct DB / S3 inspection):
+
+          • Saved-hunt card icons:
+              /app/frontend/app/history.tsx hard-coded an Ionicons
+              SPECIES_ICONS map (deer→leaf, hog→paw, etc.) instead
+              of using the same custom asset table the setup
+              picker uses (`SPECIES_ICON_IMAGES` from
+              /app/frontend/src/constants/speciesIcons.ts).
+
+          • S3 sync (Pro tier):
+              MongoDB `hunts` docs were storing
+                  media_refs:        ['provisional-{huntId}-{i}']
+                  primary_media_ref: 'provisional-{huntId}-0'
+                  image_s3_keys:     []
+              even though `pending_uploads` clearly showed the
+              presign endpoint was called and real
+              `cloud_xxx_xxx.jpg` keys were minted under
+              `hunts/{userId}/{huntId}/...`. Two layered bugs:
+
+              (a) In `finalizeProvisionalHunt` (huntHydration.ts)
+                  the cloud sync call was reading from
+                  `outcome.hunt.media`, which is built by
+                  `hydrateMediaRefs` — that function preferentially
+                  synthesizes `data-uri-legacy` assets from the
+                  in-session base64 cache and DROPS storageKey,
+                  imageId-from-index. Result: every imageS3Keys
+                  was empty by construction.
+              (b) Same call passed `analysis.mediaRefs` /
+                  `analysis.primaryMediaRef` from the PROVISIONAL
+                  analysis (the one read from the hot-cache before
+                  saveHunt ran), not the real refs that saveHunt
+                  had just written into the analysisStore. Result:
+                  Mongo always saw provisional refs.
+
+          FIX (applied):
+            • history.tsx — render
+              `<Image source={getSpeciesIconImage(species).active}/>`
+              when an entry exists, else fall back to the existing
+              Ionicons glyph.
+            • huntHydration.ts:finalizeProvisionalHunt — after
+              saveHunt, read the authoritative MediaAsset[] from
+              `listMediaForHunt(huntId)` (the on-device media
+              index — has the real cloud_xxx imageIds and
+              storageKeys), filter to non-thumbnail assets, sort
+              primary-first, and ship those to /api/hunts. Only
+              `storageType === 'cloud'` assets contribute to
+              `imageS3Keys` (so device-temp local-file fallback
+              paths never leak into Mongo).
+            • CloudMediaStore.save — added richer telemetry on a
+              non-2xx S3 PUT response: status code + first 500
+              chars of S3's response body so we can distinguish
+              `SignatureDoesNotMatch`, `AccessDenied`,
+              `RequestTimeTooSkewed`, etc. on device.
+
+          NOT TESTABLE BY BACKEND TESTING AGENT:
+            All three changes are frontend-only. Server-side
+            presign + S3 PUT verified working from a Python test
+            (status 200, object lands in bucket). Action: user
+            verifies on device — does a fresh hunt as Pro,
+            confirms (1) saved-hunt card now shows the custom
+            gold species icon (deer-gold.png / hog-gold.png /
+            etc.), (2) Mongo `hunts` doc for the new hunt has
+            real `cloud_xxx` mediaRefs + populated
+            `image_s3_keys`, (3) S3 bucket has the real objects
+            under `hunts/{userId}/{huntId}/primary/...`.
+
+          PRE-EXISTING BROKEN HUNTS:
+            The 3 hunt docs already in Mongo with provisional
+            refs + empty image_s3_keys cannot be auto-repaired —
+            their S3 PUTs never landed. Easiest path: have the
+            user redo those analyses, or ask me to wipe just
+            those 3 mongo docs as a one-shot.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Two frontend fixes for the user's saved-hunts +
+      S3-not-uploading reports. Both are frontend-only — backend
+      contract is unchanged. No backend retest needed; user will
+      verify on device.
 
 overlay_taxonomy_unification:
   - task: "Overlay taxonomy: single source of truth + validator color stamping + frontend renderer alignment"

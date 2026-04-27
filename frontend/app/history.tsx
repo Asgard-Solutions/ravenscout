@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../src/constants/theme';
 import { useNetwork } from '../src/hooks/useNetwork';
 import { useAuth } from '../src/hooks/useAuth';
+import { getSpeciesIconImage } from '../src/constants/speciesIcons';
 import {
   listHistory,
   deleteHuntById,
@@ -187,7 +188,25 @@ export default function HistoryScreen() {
                   )}
                   <View style={styles.cardContent}>
                     <View style={styles.cardHeaderRow}>
-                      <Ionicons name={(SPECIES_ICONS[hunt.species] || 'paw') as any} size={18} color={COLORS.accent} />
+                      {(() => {
+                        const speciesIcon = getSpeciesIconImage(hunt.species);
+                        if (speciesIcon) {
+                          return (
+                            <Image
+                              source={speciesIcon.active}
+                              style={styles.cardSpeciesIcon}
+                              resizeMode="contain"
+                            />
+                          );
+                        }
+                        return (
+                          <Ionicons
+                            name={(SPECIES_ICONS[hunt.species] || 'paw') as any}
+                            size={18}
+                            color={COLORS.accent}
+                          />
+                        );
+                      })()}
                       <Text style={styles.cardSpecies}>{hunt.speciesName}</Text>
                     </View>
                     <Text style={styles.cardDate}>
@@ -251,6 +270,7 @@ const styles = StyleSheet.create({
   cardThumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
   cardContent: { flex: 1, padding: 14 },
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  cardSpeciesIcon: { width: 22, height: 22 },
   cardSpecies: { color: COLORS.accent, fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
   cardDate: { color: COLORS.fogGray, fontSize: 12, marginBottom: 6 },
   cardSummary: { color: COLORS.textSecondary, fontSize: 12, lineHeight: 18, marginBottom: 6 },

@@ -124,7 +124,31 @@ export class CloudMediaStore implements MediaStoreAdapter {
       });
       const status = uploadResult?.status ?? 0;
       if (status < 200 || status >= 300) {
-        throw new Error(`S3 PUT failed status=${status}`);
+        // Surface S3's response body so we can see WHY (e.g.
+        // SignatureDoesNotMatch, AccessDenied, RequestTimeTooSkewed).
+        // expo-file-system returns the response body in `body` for
+        // BINARY_CONTENT uploads.
+        const respBody = (uploadResult as any)?.body || '';
+        const respHeaders = (uploadResult as any)?.headers || {};
+        logClientEvent({
+          event: 'persist_degraded',
+          data: {
+            reason: 'cloud_s3_put_non_2xx',
+            hunt_id: huntId,
+            role,
+            status,
+            mime,
+            // Keep small snippet for telemetry only.
+            body_snippet: typeof respBody === 'string' ? respBody.slice(0, 500) : null,
+            content_type_header: respHeaders['Content-Type'] || respHeaders['content-type'] || null,
+          },
+        });
+        throw new Error(
+          `S3 PUT failed status=${status}` +
+            (typeof respBody === 'string' && respBody.length
+              ? ` body=${respBody.slice(0, 300)}`
+              : ''),
+        );
       }
 
       // 4. Cleanup temp; return cloud-stamped asset.
