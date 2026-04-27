@@ -1,441 +1,259 @@
-"""Backend tests for the Enhanced Species Prompt Framework.
+"""Backend tests for Enhanced Species Prompt rollout wiring on /api/analyze-hunt.
 
-Validates:
-1. Backward compatibility (legacy prompt unchanged when no flags set).
-2. POST /api/analyze-hunt still works (no flags wired into API yet).
-3. Enhanced opt-in mode emits banner + sub-blocks.
-4. Enhanced framework registries return non-None for required keys.
-5. Failure isolation when an unknown enhanced_region_id is passed.
-6. Existing test suites under /app/backend/tests/.
-7. /api/health and /api/media/health return 200.
-
-Run: python /app/backend_test.py
+Targets the public preview URL via EXPO_PUBLIC_BACKEND_URL.
 """
 
-from __future__ import annotations
-
-import base64
-import io
 import os
+import io
 import re
-import subprocess
-import sys
-import traceback
-from typing import List, Tuple
-
-# Ensure /app/backend is importable.
-sys.path.insert(0, "/app/backend")
+import base64
+from pathlib import Path
 
 import requests
-
-BACKEND_URL = "http://localhost:8001/api"
-PRO_BEARER = "Bearer test_session_rs_001"
-
-PASS: List[str] = []
-FAIL: List[Tuple[str, str]] = []
+from PIL import Image
 
 
-def _ok(name: str) -> None:
-    PASS.append(name)
-    print(f"  PASS  {name}")
+def _resolve_backend_url() -> str:
+    env_path = Path("/app/frontend/.env")
+    text = env_path.read_text()
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
+            return line.split("=", 1)[1].strip()
+        if line.startswith("REACT_APP_BACKEND_URL="):
+            return line.split("=", 1)[1].strip()
+    raise RuntimeError("No backend URL found in /app/frontend/.env")
 
 
-def _bad(name: str, msg: str) -> None:
-    FAIL.append((name, msg))
-    print(f"  FAIL  {name}: {msg}")
+BASE_URL = _resolve_backend_url().rstrip("/")
+API = f"{BASE_URL}/api"
+
+PRO_BEARER = "test_session_rs_001"
+TRIAL_BEARER = "test_session_trial_001"
 
 
-def _make_small_png_b64() -> str:
-    try:
-        from PIL import Image
-    except ImportError:
-        png = bytes.fromhex(
-            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
-            "890000000d49444154789c63000100000005000100200d0aa400000000049454e44ae426082"
-        )
-        return base64.b64encode(png).decode()
-    img = Image.new("RGB", (256, 256), (240, 240, 240))
-    for y in range(80, 120):
-        for x in range(80, 200):
-            img.putpixel((x, y), (40, 100, 60))
+def _png_b64(width: int = 256, height: int = 256) -> str:
+    img = Image.new("RGB", (width, height), color=(34, 110, 34))
+    for x in range(0, width, 8):
+        for y in range(0, height, 16):
+            img.putpixel((x, y), ((x * 5) % 255, (y * 3) % 255, 90))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def section_1_backward_compat_prompt() -> None:
-    print("\n=== SECTION 1: Backward compatibility (assemble_system_prompt) ===")
-    try:
-        from prompt_builder import assemble_system_prompt
-    except Exception:
-        _bad("import assemble_system_prompt", traceback.format_exc())
-        return
-
-    conditions = {
-        "animal": "whitetail",
-        "hunt_date": "2025-11-15",
-        "time_window": "morning",
-        "wind_direction": "NW",
-        "temperature": "38F",
-        "property_type": "private",
-        "latitude": 31.2956,
-        "longitude": -95.9778,
-    }
-    try:
-        legacy = assemble_system_prompt(
-            animal="whitetail",
-            conditions=conditions,
-            image_count=1,
-            tier="pro",
-        )
-    except Exception:
-        _bad("legacy build (no enhanced flags)", traceback.format_exc())
-        return
-
-    forbidden = [
-        "ENHANCED PROMPT EXTENSIONS",
-        "ENHANCED BEHAVIOR CONTEXT",
-        "ENHANCED ACCESS ANALYSIS",
-        "ENHANCED REGIONAL CONTEXT",
-    ]
-    found = [s for s in forbidden if s in legacy]
-    if not found:
-        _ok("legacy prompt contains no ENHANCED markers")
-    else:
-        _bad("legacy prompt unexpectedly contains ENHANCED markers", repr(found))
-
-    legacy2 = assemble_system_prompt(
-        animal="whitetail",
-        conditions=conditions,
-        image_count=1,
-        tier="pro",
-    )
-    if legacy == legacy2:
-        _ok("legacy prompt is deterministic across builds (byte-identical)")
-    else:
-        _bad("legacy prompt differs between identical calls", "non-deterministic")
+PNG_BASE64 = _png_b64(256, 256)
 
 
-def section_2_enhanced_opt_in() -> None:
-    print("\n=== SECTION 2: Enhanced framework opt-in ===")
-    try:
-        from prompt_builder import assemble_system_prompt
-        from species_prompts.enhanced import PressureLevel, TerrainType
-    except Exception:
-        _bad("imports for enhanced opt-in", traceback.format_exc())
-        return
-
-    conditions = {
-        "animal": "whitetail",
-        "hunt_date": "2025-11-15",
-        "time_window": "morning",
-        "wind_direction": "NW",
-        "temperature": "38F",
-        "property_type": "private",
-        "latitude": 41.9,
-        "longitude": -91.5,
-    }
-    try:
-        enhanced = assemble_system_prompt(
-            animal="whitetail",
-            conditions=conditions,
-            image_count=1,
-            tier="pro",
-            use_enhanced_behavior=True,
-            use_enhanced_access=True,
-            use_enhanced_regional=True,
-            enhanced_pressure_level=PressureLevel.HIGH,
-            enhanced_terrain=TerrainType.AGRICULTURAL,
-            enhanced_region_id="midwest_agricultural",
-            enhanced_terrain_features=[{
-                "type": "creek",
-                "description": "Creek east of stand",
-                "visibility": "visible",
-            }],
-        )
-    except Exception:
-        _bad("enhanced build", traceback.format_exc())
-        return
-
-    if "ENHANCED PROMPT EXTENSIONS" in enhanced:
-        _ok("enhanced prompt contains ENHANCED PROMPT EXTENSIONS banner")
-    else:
-        _bad("missing banner", "ENHANCED PROMPT EXTENSIONS not found")
-
-    for marker in (
-        "ENHANCED REGIONAL CONTEXT",
-        "ENHANCED BEHAVIOR CONTEXT",
-        "ENHANCED ACCESS ANALYSIS",
-    ):
-        if marker in enhanced:
-            _ok(f"enhanced prompt contains '{marker}' sub-block")
-        else:
-            _bad(f"missing sub-block '{marker}'", "not found in enhanced prompt")
-
-    try:
-        legacy = assemble_system_prompt(
-            animal="whitetail",
-            conditions=conditions,
-            image_count=1,
-            tier="pro",
-        )
-    except Exception as e:
-        _bad("legacy rebuild for prefix check", str(e))
-        return
-
-    if enhanced.startswith(legacy):
-        _ok("enhanced prompt is a strict superset starting with the legacy prompt")
-    else:
-        _bad("enhanced prompt does not start with legacy prompt",
-             "additive contract violated")
-
-    if "CROSS-MODULE INTERACTION NOTES" in enhanced:
-        _ok("CROSS-MODULE INTERACTION NOTES section emitted")
-    else:
-        _bad("interaction notes section",
-             "CROSS-MODULE INTERACTION NOTES header not found")
-
-    interaction_signals = (
-        "lower confidence",
-        "second-",
-        "regional baseline",
-    )
-    if any(sig in enhanced for sig in interaction_signals):
-        _ok("interaction notes carry expected cross-module reasoning text")
-    else:
-        _bad("interaction notes content",
-             f"none of {interaction_signals} appear in the prompt")
-
-
-def section_3_registries() -> None:
-    print("\n=== SECTION 3: Enhanced framework registries ===")
-    try:
-        from species_prompts.enhanced import (
-            EnhancedRegionalModifier,
-            get_enhanced_behavior_pattern,
-            get_enhanced_regional_modifier,
-        )
-        from species_prompts.pack import RegionalModifier
-    except Exception:
-        _bad("registry imports", traceback.format_exc())
-        return
-
-    for region in (
-        "south_texas",
-        "colorado_high_country",
-        "midwest_agricultural",
-        "pacific_northwest",
-    ):
-        mod = get_enhanced_regional_modifier(region)
-        if mod is not None:
-            _ok(f"get_enhanced_regional_modifier('{region}') -> non-None")
-        else:
-            _bad(f"region '{region}'", "get_enhanced_regional_modifier returned None")
-
-    for species in ("whitetail", "turkey"):
-        pat = get_enhanced_behavior_pattern(species, "pressure_response")
-        if pat is not None:
-            _ok(f"get_enhanced_behavior_pattern('{species}', 'pressure_response') -> non-None")
-        else:
-            _bad(f"behavior '{species}'", "get_enhanced_behavior_pattern returned None")
-
-    if issubclass(EnhancedRegionalModifier, RegionalModifier):
-        _ok("EnhancedRegionalModifier IS subclass of RegionalModifier")
-    else:
-        _bad("subclass check",
-             "EnhancedRegionalModifier is NOT a subclass of RegionalModifier")
-
-
-def section_4_failure_isolation() -> None:
-    print("\n=== SECTION 4: Failure isolation (unknown enhanced_region_id) ===")
-    try:
-        from prompt_builder import assemble_system_prompt
-    except Exception:
-        _bad("import for failure isolation", traceback.format_exc())
-        return
-
-    conditions = {
-        "animal": "whitetail",
-        "hunt_date": "2025-11-15",
-        "time_window": "morning",
-        "wind_direction": "NW",
-        "temperature": "38F",
-        "property_type": "private",
-    }
-    try:
-        out = assemble_system_prompt(
-            animal="whitetail",
-            conditions=conditions,
-            image_count=1,
-            tier="pro",
-            use_enhanced_regional=True,
-            enhanced_region_id="atlantis_lost_continent",
-        )
-    except Exception as e:
-        _bad("unknown region id raised an exception",
-             f"{type(e).__name__}: {e}")
-        return
-
-    if isinstance(out, str) and len(out) > 0:
-        _ok("unknown enhanced_region_id returns prompt string without crashing")
-    else:
-        _bad("unknown region id return value", f"unexpected: {type(out)}")
-
-
-def section_5_api_analyze_hunt() -> None:
-    print("\n=== SECTION 5: POST /api/analyze-hunt (request shape unchanged) ===")
-    img_b64 = _make_small_png_b64()
+def _post_analyze(*, bearer, animal, latitude, longitude, hunt_style="archery"):
     body = {
         "conditions": {
-            # Note: backend species registry id is "deer" (prompt_pack_id=whitetail).
-            # Frontend always sends "deer" — using "whitetail" here would 403.
-            "animal": "deer",
+            "animal": animal,
             "hunt_date": "2025-11-15",
             "time_window": "morning",
             "wind_direction": "NW",
             "temperature": "38F",
             "property_type": "private",
-            "latitude": 31.2956,
-            "longitude": -95.9778,
-            "hunt_style": "archery",
+            "hunt_style": hunt_style,
         },
-        "map_image_base64": img_b64,
+        "map_image_base64": PNG_BASE64,
     }
+    if latitude is not None:
+        body["conditions"]["latitude"] = latitude
+    if longitude is not None:
+        body["conditions"]["longitude"] = longitude
+    headers = {
+        "Authorization": f"Bearer {bearer}",
+        "Content-Type": "application/json",
+    }
+    return requests.post(f"{API}/analyze-hunt", headers=headers, json=body, timeout=180)
+
+
+results = []
+
+
+def record(name, ok, detail=""):
+    results.append((name, ok, detail))
+    flag = "PASS" if ok else "FAIL"
+    print(f"  [{flag}] {name}" + (f" :: {detail}" if detail else ""))
+
+
+def test_health_public():
+    print("\n=== TEST: GET /api/health (public) ===")
+    r = requests.get(f"{API}/health", timeout=15)
+    record("health 200", r.status_code == 200, f"status={r.status_code}")
+    record("health body has status=ok", r.json().get("status") == "ok", f"body={r.json()}")
+
+
+def test_media_health_auth():
+    print("\n=== TEST: GET /api/media/health (Pro auth) ===")
+    r = requests.get(f"{API}/media/health", headers={"Authorization": f"Bearer {PRO_BEARER}"}, timeout=15)
+    record("media/health 200", r.status_code == 200, f"status={r.status_code}")
     try:
-        r = requests.post(
-            f"{BACKEND_URL}/analyze-hunt",
-            headers={"Authorization": PRO_BEARER, "Content-Type": "application/json"},
-            json=body,
-            timeout=180,
-        )
+        j = r.json()
+        record("media/health.ok=true", j.get("ok") is True, f"body={j}")
     except Exception as e:
-        _bad("POST /api/analyze-hunt", f"request failed: {e}")
+        record("media/health body json", False, str(e))
+
+
+def test_trial_deer_legacy():
+    print("\n=== TEST: Trial + animal=deer + East Texas → legacy ===")
+    r = _post_analyze(bearer=TRIAL_BEARER, animal="deer", latitude=31.5, longitude=-94.5)
+    print(f"  HTTP {r.status_code}")
+    record("trial deer 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        record("trial body", False, f"body={r.text[:300]}")
         return
-
-    if r.status_code == 200:
-        _ok("POST /api/analyze-hunt -> 200")
-    else:
-        _bad("POST /api/analyze-hunt status",
-             f"expected 200, got {r.status_code} body={r.text[:300]}")
+    j = r.json()
+    record("trial success=True", j.get("success") is True, f"err={j.get('error')}")
+    if not j.get("success"):
         return
+    res = j["result"]
+    record("trial result has id", bool(res.get("id")))
+    record("trial result has overlays", isinstance(res.get("overlays"), list))
+    record("trial result has summary", "summary" in res)
+    record("trial result has v2", "v2" in res)
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    record("trial enhanced_analysis_enabled=False", meta.get("enhanced_analysis_enabled") is False,
+           f"meta={meta}")
+    record("trial reason in {tier_not_eligible, tier_has_no_modules}",
+           meta.get("enhanced_rollout_reason") in ("tier_not_eligible", "tier_has_no_modules"),
+           f"reason={meta.get('enhanced_rollout_reason')}")
 
-    try:
-        data = r.json()
-    except Exception:
-        _bad("response JSON", "not parseable as JSON")
+
+def test_pro_elk_species_not_allowlisted():
+    print("\n=== TEST: Pro + animal=elk → species_not_allowlisted ===")
+    # Use Colorado coords (mountain_west). Region also won't be in allowlist
+    # but species check fires first per evaluate_enhanced_rollout ordering.
+    r = _post_analyze(bearer=PRO_BEARER, animal="elk", latitude=39.0, longitude=-106.5, hunt_style="rifle")
+    print(f"  HTTP {r.status_code}")
+    record("pro elk 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        record("pro elk body", False, f"body={r.text[:300]}")
         return
-
-    if "success" in data:
-        _ok("response has 'success' field")
-    else:
-        _bad("response shape", "missing 'success'")
-
-    if data.get("success") is True:
-        result = data.get("result") or {}
-        for key in ("id", "overlays", "summary"):
-            if key in result:
-                _ok(f"result contains '{key}'")
-            else:
-                _bad(f"result missing '{key}'", repr(list(result.keys())))
-        if "v2" in result:
-            _ok("result.v2 present (v2 schema active)")
-        else:
-            print("  INFO  result.v2 not present — v1-only fallback")
-    elif data.get("success") is False:
-        err = data.get("error", "")
-        print(f"  INFO  analyze returned success=false (likely OpenAI image rejection): {err!r}")
-        _ok("analyze-hunt 200 with structured error envelope (no 5xx)")
-
-    rr = data.get("region_resolution") or {}
-    if rr.get("resolvedRegionId"):
-        _ok(f"region_resolution.resolvedRegionId='{rr.get('resolvedRegionId')}'")
-    else:
-        print(f"  INFO  region_resolution: {rr}")
+    j = r.json()
+    if not j.get("success"):
+        record("pro elk success", False, f"error={j.get('error')}")
+        return
+    res = j["result"]
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    record("pro elk enhanced_analysis_enabled=False", meta.get("enhanced_analysis_enabled") is False,
+           f"meta={meta}")
+    record("pro elk reason=species_not_allowlisted",
+           meta.get("enhanced_rollout_reason") == "species_not_allowlisted",
+           f"reason={meta.get('enhanced_rollout_reason')}")
 
 
-def section_6_health_endpoints() -> None:
-    print("\n=== SECTION 6: Health endpoints ===")
-    # /api/health is public; /api/media/health requires auth (any tier).
-    endpoint_specs = [
-        ("/health", None),
-        ("/media/health", PRO_BEARER),
+def test_pro_deer_midwest_iowa():
+    print("\n=== TEST: Pro + animal=deer + Iowa coords (41.5, -93.0) ===")
+    r = _post_analyze(bearer=PRO_BEARER, animal="deer", latitude=41.5, longitude=-93.0)
+    print(f"  HTTP {r.status_code}")
+    record("pro deer iowa 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        record("pro deer body", False, f"body={r.text[:300]}")
+        return
+    j = r.json()
+    if not j.get("success"):
+        record("pro deer iowa success", False, f"error={j.get('error')}")
+        return
+    res = j["result"]
+    region_resolution = j.get("region_resolution") or {}
+    print(f"  region_resolution: {region_resolution}")
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    print(f"  enhanced_analysis meta: {meta}")
+    # Per review request expectation:
+    record("pro deer iowa enhanced_analysis_enabled=True",
+           meta.get("enhanced_analysis_enabled") is True,
+           f"meta={meta}, region={region_resolution.get('resolvedRegionId')}")
+    record("pro deer iowa reason=ok",
+           meta.get("enhanced_rollout_reason") == "ok",
+           f"reason={meta.get('enhanced_rollout_reason')}")
+    modules = meta.get("enhanced_modules_used") or []
+    expected = {"behavior", "access", "regional"}
+    record("pro deer iowa all 3 modules",
+           expected.issubset(set(modules)),
+           f"modules_used={modules}")
+
+
+def test_pro_deer_east_texas_region_not_allowlisted():
+    print("\n=== TEST: Pro + animal=deer + East Texas → region_not_allowlisted ===")
+    r = _post_analyze(bearer=PRO_BEARER, animal="deer", latitude=31.5, longitude=-94.5)
+    print(f"  HTTP {r.status_code}")
+    record("pro deer ETX 200", r.status_code == 200, f"status={r.status_code}")
+    if r.status_code != 200:
+        return
+    j = r.json()
+    if not j.get("success"):
+        record("pro deer ETX success", False, f"error={j.get('error')}")
+        return
+    res = j["result"]
+    region_resolution = j.get("region_resolution") or {}
+    meta = (res.get("meta") or {}).get("enhanced_analysis") or {}
+    record("pro deer ETX enhanced_analysis_enabled=False",
+           meta.get("enhanced_analysis_enabled") is False,
+           f"meta={meta}, region={region_resolution.get('resolvedRegionId')}")
+    record("pro deer ETX reason=region_not_allowlisted",
+           meta.get("enhanced_rollout_reason") == "region_not_allowlisted",
+           f"reason={meta.get('enhanced_rollout_reason')}")
+
+
+def test_log_inspection_no_sensitive_data():
+    print("\n=== TEST: backend log — enhanced_rollout decision lines free of sensitive data ===")
+    log_paths = [
+        "/var/log/supervisor/backend.err.log",
+        "/var/log/supervisor/backend.out.log",
     ]
-    for path, bearer in endpoint_specs:
-        headers = {"Authorization": bearer} if bearer else {}
-        try:
-            r = requests.get(f"{BACKEND_URL}{path}", headers=headers, timeout=15)
-        except Exception as e:
-            _bad(f"GET {path}", f"request failed: {e}")
+    sensitive_re = re.compile(
+        r"(\blatitude\b|\blongitude\b|map_image_base64|bearer|session_token|api[_-]?key|"
+        r"secret|data:image/|base64,)",
+        re.IGNORECASE,
+    )
+    decision_lines = []
+    sensitive_violations = []
+    for path in log_paths:
+        if not os.path.exists(path):
             continue
-        if r.status_code == 200:
-            _ok(f"GET {path} -> 200 ({r.text[:160]!r})")
-        else:
-            _bad(f"GET {path}", f"status={r.status_code}, body={r.text[:200]}")
+        try:
+            with open(path) as f:
+                content = f.read()[-300_000:]
+        except Exception:
+            continue
+        for ln in content.splitlines():
+            if "enhanced_rollout decision" in ln:
+                decision_lines.append(ln)
+                if sensitive_re.search(ln):
+                    sensitive_violations.append(ln)
+    record("backend log contains >=1 enhanced_rollout decision line",
+           len(decision_lines) >= 1, f"count={len(decision_lines)}")
+    if decision_lines:
+        print(f"  Sample decision lines (last 3):")
+        for ln in decision_lines[-3:]:
+            print(f"    {ln[-200:]}")
+    record("decision log lines free of sensitive data",
+           len(sensitive_violations) == 0,
+           f"violations={sensitive_violations[:3]}")
 
 
-def section_7_pytest_suites() -> None:
-    print("\n=== SECTION 7: pytest test_enhanced_prompt_framework.py ===")
-    p = subprocess.run(
-        [sys.executable, "-m", "pytest",
-         "tests/test_enhanced_prompt_framework.py", "-v", "--tb=short"],
-        cwd="/app/backend",
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    print(p.stdout[-2000:])
-    if p.returncode != 0:
-        print(p.stderr[-1000:])
-    if p.returncode == 0 and "25 passed" in p.stdout:
-        _ok("test_enhanced_prompt_framework.py: 25/25 PASSED")
-    else:
-        _bad("test_enhanced_prompt_framework.py",
-             f"returncode={p.returncode}")
+def main():
+    print(f"Backend URL: {API}")
+    test_health_public()
+    test_media_health_auth()
+    test_trial_deer_legacy()
+    test_pro_elk_species_not_allowlisted()
+    test_pro_deer_midwest_iowa()
+    test_pro_deer_east_texas_region_not_allowlisted()
+    test_log_inspection_no_sensitive_data()
 
-    print("\n=== SECTION 7b: pytest tests/ (full backend suite) ===")
-    p2 = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/", "--tb=line", "-q"],
-        cwd="/app/backend",
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    out = p2.stdout or ""
-    print(out[-3500:])
-    if p2.stderr:
-        print("STDERR:", p2.stderr[-500:])
-
-    m_pass = re.search(r"(\d+) passed", out)
-    m_fail = re.search(r"(\d+) failed", out)
-    passed = int(m_pass.group(1)) if m_pass else 0
-    failed = int(m_fail.group(1)) if m_fail else 0
-    print(f"  >> totals: passed={passed}, failed={failed}")
-    if failed <= 3:
-        _ok(f"full pytest suite: {passed} passed, {failed} failed (<=3 pre-existing)")
-    else:
-        _bad("full pytest suite",
-             f"{failed} failures (>3 pre-existing) — potential regression")
-
-
-def main() -> int:
-    section_1_backward_compat_prompt()
-    section_2_enhanced_opt_in()
-    section_3_registries()
-    section_4_failure_isolation()
-    section_5_api_analyze_hunt()
-    section_6_health_endpoints()
-    section_7_pytest_suites()
-
-    print("\n" + "=" * 70)
-    print(f"PASSED: {len(PASS)}")
-    print(f"FAILED: {len(FAIL)}")
-    if FAIL:
-        print("\nFailed assertions:")
-        for name, msg in FAIL:
-            print(f"  FAIL  {name}\n        {msg}")
-    print("=" * 70)
-    return 0 if not FAIL else 1
+    print("\n" + "=" * 72)
+    passed = sum(1 for _, ok, _ in results if ok)
+    failed = [(n, d) for n, ok, d in results if not ok]
+    print(f"Total: {len(results)}, Passed: {passed}, Failed: {len(failed)}")
+    if failed:
+        print("\nFAILURES:")
+        for n, d in failed:
+            print(f"  - {n} :: {d}")
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

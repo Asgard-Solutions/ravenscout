@@ -390,6 +390,7 @@ def assemble_system_prompt(
     enhanced_terrain_features: Optional[list] = None,
     enhanced_region_id: Optional[str] = None,
     enhanced_behavior_pattern_types: Optional[Tuple[str, ...]] = None,
+    enhanced_species_id: Optional[str] = None,          # prompt_pack_id override
 ) -> str:
     """Assemble the complete system prompt from modular parts.
 
@@ -526,7 +527,7 @@ def assemble_system_prompt(
             return legacy_prompt
 
         ctx_kwargs = {
-            "species": animal,
+            "species": (enhanced_species_id or animal),
             "region_id": (
                 enhanced_region_id
                 or (region_resolution.region_id if region_resolution else None)

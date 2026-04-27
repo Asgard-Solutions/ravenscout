@@ -1041,7 +1041,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Orphan S3 cleanup wiring (auto on-launch + manual Profile button)"
+    - "Enhanced Species Prompt rollout layer wired into /api/analyze-hunt"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -4122,3 +4122,265 @@ agent_communication:
           the analyze flow already shows a tier-limit error toast).
         - Set `REVENUECAT_WEBHOOK_SECRET` in production env when the
           RC dashboard webhook is configured.
+
+
+enhanced_rollout_wiring:
+  - task: "Enhanced Species Prompt rollout layer wired into /api/analyze-hunt"
+    implemented: true
+    working: false
+    file: "/app/backend/enhanced_rollout.py, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          Enhanced rollout wiring validated end-to-end against the
+          preview URL (https://tactical-gps-picker.preview.emergentagent.com)
+          via /app/backend_test.py. RESULT: 21/24 substantive
+          assertions PASS, BUT 3 critical assertions FAIL on the
+          canonical "Pro + whitetail (deer) + Midwest Agricultural"
+          path described in the review request. ROOT CAUSE is a real
+          wiring bug between the GPS region resolver and the rollout
+          allowlist. Details below.
+
+          === SECTION 1 — Backward compatibility (3/3 PASS) ===
+          POST /api/analyze-hunt
+            Bearer test_session_trial_001 (Trial / Free), animal=deer,
+            latitude=31.5, longitude=-94.5 (East Texas)
+          → 200 success=True
+          ✅ result has id, overlays, summary, v2 (legacy v2 shape preserved)
+          ✅ result.meta.enhanced_analysis = {
+               "enhanced_analysis_enabled": false,
+               "enhanced_modules_used": [],
+               "enhanced_rollout_reason": "tier_not_eligible"
+             }
+          ✅ Server log line:
+             "enhanced_rollout decision tier=trial species=deer pack=whitetail
+              region=east_texas enabled=False modules=- reason=tier_not_eligible"
+
+          NOTE on review-request expectation: the review brief said
+          Trial/Free should report `tier_not_eligible` OR
+          `tier_has_no_modules`. With the DEFAULT_CONFIG in
+          `enhanced_rollout.py`, trial is NOT in `allowed_tiers`
+          (which is {"core","pro"}), so `REASON_TIER_NOT_ELIGIBLE`
+          fires first. Both reasons are valid fallbacks; my assertion
+          accepted either, and `tier_not_eligible` was returned.
+          ✓ Either is a correct legacy-safe outcome.
+
+          (Trial session re-seeded into the RavenScout DB during this
+          run because `test_session_trial_001` was missing from
+          `user_sessions` — initial calls returned 401 "Invalid
+          session". Pro session `test_session_rs_001` was already
+          present.)
+
+          === SECTION 2 — Pro + animal=elk → species_not_allowlisted (3/3 PASS) ===
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro), animal=elk,
+            latitude=39.0, longitude=-106.5 (Mountain West), hunt_style=rifle
+          → 200 success=True
+          ✅ result.meta.enhanced_analysis.enhanced_analysis_enabled == false
+          ✅ enhanced_rollout_reason == "species_not_allowlisted"
+          ✅ Server log:
+             "enhanced_rollout decision tier=pro species=elk pack=elk
+              region=mountain_west enabled=False modules=- reason=species_not_allowlisted"
+
+          === SECTION 3 — Pro + animal=deer + East Texas → region_not_allowlisted (3/3 PASS) ===
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro), animal=deer,
+            latitude=31.5, longitude=-94.5
+          → 200 success=True
+          ✅ region_resolution.resolvedRegionId == "east_texas"
+          ✅ enhanced_analysis_enabled == false
+          ✅ enhanced_rollout_reason == "region_not_allowlisted"
+          ✅ Server log:
+             "enhanced_rollout decision tier=pro species=deer pack=whitetail
+              region=east_texas enabled=False modules=- reason=region_not_allowlisted"
+
+          === SECTION 4 — Pro + animal=deer + Iowa (41.5, -93.0) → enhanced ON (0/3 PASS) ===
+          ❌ This is the SHOWCASE acceptance test from the review brief
+          and it is BROKEN by a region-id mismatch between the GPS
+          resolver and the rollout allowlist.
+
+          POST /api/analyze-hunt
+            Bearer test_session_rs_001 (Pro), animal=deer,
+            latitude=41.5, longitude=-93.0  (central Iowa)
+          → 200 success=True
+          Observed:
+            region_resolution = {
+              "resolvedRegionId": "midwest",        # ← from GPS resolver
+              "resolvedRegionLabel": "Midwest",
+              "regionResolutionSource": "gps",
+              "latitude": 41.5, "longitude": -93.0
+            }
+            result.meta.enhanced_analysis = {
+              "enhanced_analysis_enabled": false,
+              "enhanced_modules_used": [],
+              "enhanced_rollout_reason": "region_not_allowlisted"
+            }
+          Expected per review brief:
+            enhanced_analysis_enabled = true
+            enhanced_modules_used contains all of {behavior, access, regional}
+            enhanced_rollout_reason = "ok"
+          Server log:
+            "enhanced_rollout decision tier=pro species=deer pack=whitetail
+             region=midwest enabled=False modules=- reason=region_not_allowlisted"
+
+          ROOT CAUSE — wiring mismatch:
+          • /app/backend/species_prompts/regions.py classifies central
+            Iowa coords as canonical region id "midwest" (line 83:
+            `_Box("midwest", lambda lat, lon: 37.0 <= lat <= 49.5
+             and -98.0 < lon <= -80.0)`).
+          • /app/backend/enhanced_rollout.py DEFAULT_CONFIG.region_allowlist
+            (line 110) = `frozenset({"midwest_agricultural"})`.
+          • /app/backend/server.py line 1505-1510 passes the GPS-resolved
+            region_id straight into evaluate_enhanced_rollout WITHOUT
+            translating "midwest" → "midwest_agricultural".
+          • There is NO mapping function from base region IDs
+            (midwest, south_texas, mountain_west, ...) to enhanced
+            regional modifier IDs (midwest_agricultural,
+            colorado_high_country, ...). I grepped the codebase to be
+            sure (`grep -rn "midwest_agricultural" /app/backend/`).
+
+          As a result, the enhanced rollout will NEVER enable through
+          the live /api/analyze-hunt endpoint regardless of GPS
+          coordinates, because no GPS resolution can produce the
+          string "midwest_agricultural". I also verified that
+          `manual_region_override="midwest_agricultural"` does not
+          help — that string is not in the alias map in
+          species_prompts/regions.py either, so the resolver falls
+          back to "generic_default" instead. Confirmed via direct
+          curl with manual_region_override:
+              region_resolution.resolvedRegionId = "generic_default"
+              enhanced_analysis_enabled = false
+              enhanced_rollout_reason = "region_not_allowlisted"
+
+          The unit tests in /app/backend/tests/test_enhanced_rollout.py
+          do NOT catch this because they bypass the region resolver
+          and pass `region_id="midwest_agricultural"` directly into
+          `evaluate_enhanced_rollout()`. The rollout logic is correct
+          — the integration glue is the missing piece.
+
+          Recommended fixes (any one is sufficient — main agent's
+          choice):
+          1. (Simplest) Change DEFAULT_CONFIG.region_allowlist in
+             /app/backend/enhanced_rollout.py from
+             `{"midwest_agricultural"}` to `{"midwest"}` — and
+             likewise add a `legacy→enhanced` map step before passing
+             to `assemble_system_prompt(enhanced_region_id=...)` so
+             the enhanced regional registry lookup still finds the
+             "midwest_agricultural" modifier (otherwise the registry
+             call returns None on "midwest").
+          2. (Cleanest) Add a small `LEGACY_TO_ENHANCED_REGION` map
+             in `species_prompts/regions.py` (e.g.
+             "midwest" → "midwest_agricultural",
+             "south_texas" → "south_texas",
+             "mountain_west" → "colorado_high_country",
+             "pacific_northwest" → "pacific_northwest"). Apply it
+             in server.py at the point where `region_id` is passed
+             to `evaluate_enhanced_rollout(...)` AND keep the
+             allowlist as enhanced ids. This keeps the rollout
+             allowlist semantically aligned with the
+             `regional_modifiers` registry keys.
+          3. (Allowlist both) Allowlist BOTH ids
+             (`{"midwest", "midwest_agricultural"}`) and have
+             prompt_builder fall back gracefully when the registry
+             miss occurs. Less clean.
+
+          === SECTION 5 — Sensitive data NOT in logs (1/1 PASS) ===
+          Tail of /var/log/supervisor/backend.{out,err}.log
+          contained 7+ "enhanced_rollout decision ..." lines from
+          this run. Sample:
+
+            "enhanced_rollout decision tier=pro species=elk pack=elk
+             region=mountain_west enabled=False modules=- reason=species_not_allowlisted"
+            "enhanced_rollout decision tier=pro species=deer pack=whitetail
+             region=midwest enabled=False modules=- reason=region_not_allowlisted"
+            "enhanced_rollout decision tier=pro species=deer pack=whitetail
+             region=east_texas enabled=False modules=- reason=region_not_allowlisted"
+
+          ✅ Zero matches against a sensitive-data regex covering:
+             latitude, longitude, map_image_base64, bearer,
+             session_token, api_key/api-key, secret,
+             "data:image/", "base64,". The decision lines emit only
+             tier, species id, prompt pack id, region id, enabled
+             flag, modules tuple, and reason — exactly what
+             RolloutDecision.to_log_dict() / the f-string in
+             server.py L1514-1524 are designed to expose.
+
+          === SECTION 6 — Unit tests (PASS) ===
+          ✅ python -m pytest /app/backend/tests/test_enhanced_rollout.py -v
+             → 34 passed in 0.03s (34/34, EXACT MATCH to expectation)
+          Includes coverage of:
+             • Free / unknown / empty tier → all flags False
+             • Kill switch off / false / 0 / no / disabled / OFF /
+               DISABLED all force legacy
+             • Kill switch on / true / 1 / yes / unset all pass through
+             • Pro+whitetail+midwest_agricultural enables all 3 modules
+             • Core+whitetail+midwest_agricultural enables behavior only
+             • Pro+turkey falls back (species not allowlisted)
+             • Pro+whitetail+unsupported region falls back
+             • Pro+whitetail+no region falls back
+             • None/empty/whitespace species & region never raise
+             • resolve_enhanced_prompt_flags returns kwargs dict
+             • Legacy kwargs are byte-safe for assemble_system_prompt
+             • to_log_dict is safe and complete
+             • to_response_meta is the documented subset
+             • Custom config can open species allowlist
+             • Global disabled overrides otherwise-eligible
+             • Tier with no modules falls back
+
+          === SECTION 7 — Full pytest run (matches expectation) ===
+          cd /app/backend && python -m pytest tests/
+            → 428 passed, 3 failed, 4 skipped in 0.33s
+          The 3 failures are EXACTLY the pre-existing failures called
+          out in the review brief:
+            * tests/test_overlay_rendering.py::TestOverlayRendering::test_analyze_hunt_returns_overlays_with_coordinates
+            * tests/test_overlay_rendering.py::TestOverlayRendering::test_overlay_types_have_correct_structure
+            * tests/test_species_prompt_packs.py::TestAssembleSystemPrompt::test_includes_whitetail_specific_text
+          ✅ NOT regressions from the rollout PR.
+
+          === SECTION 8 — Health endpoints (4/4 PASS) ===
+          ✅ GET /api/health (public) → 200
+             {"status":"ok","service":"ravenscout-api"}
+          ✅ GET /api/media/health (Bearer Pro) → 200
+             {"ok":true,"error":null,"configured":true,
+              "bucket":"ravenscout-media-prod","region":"us-east-2",
+              "private_delivery":true}
+
+          === SUMMARY ===
+          • Backward compatibility on /api/analyze-hunt: PASS for
+            Trial/Free + deer + East Texas. Legacy v2 response shape
+            (id / overlays / summary / v2) intact. enhanced_analysis
+            meta correctly reports enabled=false +
+            reason=tier_not_eligible. ✓
+          • Pro + species not on allowlist (elk): PASS — falls back
+            with reason=species_not_allowlisted. ✓
+          • Pro + region not on allowlist (East Texas): PASS — falls
+            back with reason=region_not_allowlisted. ✓
+          • Pro + Midwest GPS coords: ❌ FAIL — should enable all 3
+            modules with reason=ok per the review brief. The GPS
+            resolver returns "midwest" but the rollout allowlist
+            contains "midwest_agricultural". This is a real wiring
+            bug in the integration layer (not in the rollout helper
+            itself, which is correct in isolation).
+          • Sensitive data NOT in logs: PASS. ✓
+          • Kill switch unit-test coverage: PASS (34/34). ✓
+          • Full pytest run: PASS — exactly 428/3pre-existing/4skipped. ✓
+          • Health endpoints: PASS. ✓
+
+          NO source files modified by the testing agent. The trial
+          session row was re-seeded into the RavenScout DB
+          (user_sessions + users) during testing because it was
+          missing — that's data only, not code.
+
+          BLOCKING ISSUE FOR MAIN AGENT:
+          The review-brief acceptance criterion "Pro + deer + Iowa
+          GPS → enhanced_analysis_enabled=true with all 3 modules"
+          is not currently achievable through any combination of
+          GPS coords or manual_region_override on the live
+          /api/analyze-hunt endpoint. Pick one of the three fixes
+          above (the legacy→enhanced region map approach #2 is the
+          cleanest and matches the existing alias-map pattern in
+          species_prompts/regions.py).
