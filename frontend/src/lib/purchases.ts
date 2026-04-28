@@ -33,8 +33,31 @@ let PURCHASE_LOG_LEVEL: any = null;
 let PURCHASES_ERROR_CODE: any = null;
 let configured = false;
 
-const RC_API_KEY =
-  (process.env.EXPO_PUBLIC_REVENUECAT_KEY as string | undefined) || '';
+const RC_API_KEY = (() => {
+  // Platform-specific keys take precedence (RevenueCat issues one
+  // public SDK key per app — `appl_*` for App Store, `goog_*` for
+  // Play Store). We fall back to the legacy single-key var so the
+  // env stays backward compatible.
+  const ios = (process.env.EXPO_PUBLIC_REVENUECAT_KEY_IOS as string | undefined) || '';
+  const android = (process.env.EXPO_PUBLIC_REVENUECAT_KEY_ANDROID as string | undefined) || '';
+  const fallback = (process.env.EXPO_PUBLIC_REVENUECAT_KEY as string | undefined) || '';
+  if (Platform.OS === 'ios' && ios) return ios;
+  if (Platform.OS === 'android' && android) return android;
+  return fallback;
+})();
+
+// A real RevenueCat public SDK key always starts with `appl_` (iOS) or
+// `goog_` (Android). Anything else (placeholder, secret REST key,
+// truncated paste) will let `Purchases.configure()` succeed silently
+// and then make every subsequent server call surface "Error fetching
+// customer data" — the exact symptom users were reporting.
+function isValidRcKey(key: string): boolean {
+  if (!key) return false;
+  if (Platform.OS === 'ios') return key.startsWith('appl_');
+  if (Platform.OS === 'android') return key.startsWith('goog_');
+  // Web / unknown platforms have no native SDK anyway.
+  return false;
+}
 
 function loadSdk(): any | null {
   if (PurchasesModule) return PurchasesModule;
@@ -83,9 +106,14 @@ export interface PurchaseResult {
 export async function initPurchases(opts?: { appUserId?: string }): Promise<boolean> {
   const Purchases = loadSdk();
   if (!Purchases) return false;
-  if (!RC_API_KEY) {
+  if (!isValidRcKey(RC_API_KEY)) {
     if (__DEV__) {
-      console.warn('[purchases] EXPO_PUBLIC_REVENUECAT_KEY is empty — skipping configure()');
+      const masked = RC_API_KEY ? `${RC_API_KEY.slice(0, 5)}…` : '<empty>';
+      console.warn(
+        `[purchases] Invalid RevenueCat key for ${Platform.OS} (got "${masked}"). ` +
+        'Expected key starting with "appl_" (iOS) or "goog_" (Android). ' +
+        'Skipping configure() — purchases will be unavailable until a valid key is set.',
+      );
     }
     return false;
   }
