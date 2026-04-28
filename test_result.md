@@ -5986,3 +5986,184 @@ agent_communication:
       results.tsx, both behind feature flags (the section is empty
       by default, the drain only fires when there's a stash).
 
+
+
+# ====================================================================
+# Saved Map Image geo metadata at capture / upload time (Task 5)
+# ====================================================================
+
+frontend:
+  - task: "Capture geo metadata when saving app-generated map images"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/api/savedMapImagesApi.ts, /app/frontend/src/media/pendingMapImageMeta.ts, /app/frontend/src/media/__tests__/pendingMapImageMeta.test.ts, /app/frontend/src/map/TacticalMapView.tsx, /app/frontend/app/setup.tsx, /app/frontend/app/results.tsx, /app/frontend/package.json, /app/backend/tests/test_saved_map_images_api.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Wired the New Hunt flow + the live MapTiler view to capture
+          geospatial metadata at the exact moment each map image is
+          added, and to drain the metadata to /api/saved-map-images
+          after the hunt is upserted.
+
+          NEW FILES:
+
+          1. /app/frontend/src/api/savedMapImagesApi.ts
+             Typed wrapper around /api/saved-map-images. Wire shape
+             matches /app/backend/models/saved_map_image.py exactly.
+             upsertSavedMapImage / getSavedMapImage /
+             listSavedMapImages / deleteSavedMapImage. Non-throwing
+             ApiResult<T> contract — matches huntsApi.ts /
+             huntAssetsApi.ts style.
+
+          2. /app/frontend/src/media/pendingMapImageMeta.ts
+             AsyncStorage stash keyed by huntId. ORDER-PRESERVING
+             array (with `null` slots for skipped/unknown entries)
+             so it stays index-aligned with mapImages in /setup.tsx
+             and `mediaRefs` in the persisted hunt. Helpers:
+              • makeUploadMeta() — pixel-only default for uploaded
+                images (source='upload', supportsGeoPlacement=false)
+              • saveMapImageMetaList / loadMapImageMetaList /
+                clearMapImageMetaList
+              • buildSavedMapImagePayload() — converts a stash entry
+                + image_id + hunt_id into the wire payload accepted
+                by POST /api/saved-map-images.
+             Defensive load: malformed entries become `null` rather
+             than blowing up the consumer.
+
+          3. /app/frontend/src/media/__tests__/pendingMapImageMeta.test.ts
+             10 unit tests via the existing node:test + tsx runner:
+              ✓ makeUploadMeta default shape (with + without dims)
+              ✓ buildSavedMapImagePayload for maptiler entries
+              ✓ buildSavedMapImagePayload for upload entries (geo
+                fields nulled out)
+              ✓ saveMapImageMetaList round-trips an array with null
+                slots
+              ✓ empty list / all-null list both clear the stash
+              ✓ clearMapImageMetaList wipes
+              ✓ loadMapImageMetaList defensively maps malformed
+                entries to null while preserving array length
+              ✓ loadMapImageMetaList returns [] when key absent
+             All 10 PASS. Net frontend test rollup: 197 tests / 195
+             PASS / 2 pre-existing failures (huntStyles.test.ts) —
+             unchanged by this work.
+
+          4. /app/backend/tests/test_saved_map_images_api.py
+             7 live integration tests against the FastAPI service:
+              ✓ MapTiler payload round-trips with all geo fields
+              ✓ Re-POSTing the same image_id is an idempotent upsert
+                (created_at stable, updated_at advances)
+              ✓ Uploaded payload persists with supportsGeoPlacement
+                =false, all geo fields null
+              ✓ supports_geo_placement=true with no bounds → 422
+              ✓ Missing record returns 404 (back-compat for legacy
+                images with no geo metadata yet)
+              ✓ List filtered by hunt_id returns only that hunt's
+                images
+              ✓ Cross-user isolation via test_session_trial_001 →
+                404
+             All 7 PASS in 2.8s. Combined backend pytest sweep:
+             133/133 PASS (geo_models, overlay_taxonomy,
+             enhanced_rollout, master_prompt_access_context,
+             hunt_assets_api, saved_map_images_api).
+
+          MODIFIED FILES:
+
+          5. /app/frontend/src/map/TacticalMapView.tsx
+              • In-WebView capture script now extracts
+                map.getBounds() / getCenter() / getZoom() /
+                getBearing() / getPitch() + canvas.width / height
+                + style name and posts a `geoMeta` field alongside
+                the base64 in the `captureResult` message. Wrapped
+                in try/catch so a metadata extraction failure still
+                returns the base64 with `geoMeta: null`.
+              • Host-side message handlers (web + native) decode
+                the new `geoMeta` field and forward it as the
+                second arg of `onCapture(base64, geoMeta?)`.
+              • Existing single-arg callers continue to work — the
+                second arg is optional in the prop type.
+
+          6. /app/frontend/app/setup.tsx
+              • New parallel state `mapImagesMeta:
+                (PendingMapImageMeta | null)[]` kept in lock-step
+                with `mapImages`.
+              • `pickImage` now probes the compressed dataUrl with
+                `imageProbe.ts` and pushes a `makeUploadMeta(dims)`
+                entry.
+              • `handleMapCapture(base64, geoMeta?)` builds a full
+                'maptiler' meta entry when bounds + dimensions are
+                present in geoMeta, otherwise falls back to the
+                pixel-only upload entry (so the saved image still
+                tracks original dimensions).
+              • `removeMap` removes the matching meta entry.
+              • Right before navigating to /results, the meta list
+                is stashed via `saveMapImageMetaList(huntId, …)`
+                — best-effort, mirrors the pendingHuntAssets stash
+                from Task 4.
+
+          7. /app/frontend/app/results.tsx
+              • After `finalizeProvisionalHunt` resolves ok:true and
+                the Task 4 hunt-asset drain runs, a new step:
+                  - dynamically imports pendingMapImageMeta +
+                    savedMapImagesApi (lazy, keeps the cold-start
+                    bundle lean)
+                  - reads the stash for this hunt, zips with
+                    `hunt.mediaRefs` by index, and POSTs each
+                    non-null entry to /api/saved-map-images via
+                    the upsert endpoint
+                  - clears the stash only when ALL entries
+                    committed (failures stay for retry on a future
+                    visit)
+                  - emits `saved_map_images_drained` clientEvent
+                    with requested / committed / failed / refs
+                    counts.
+
+          8. /app/frontend/package.json
+              • Registered the new pendingMapImageMeta test in the
+                `test:unit` script.
+
+          ASSUMPTIONS / DESIGN NOTES:
+            • Geo metadata is captured at the moment of capture —
+              the saved image is the source of truth, NOT the live
+              map's later position (per the task brief). Verified
+              by storing bounds/center/zoom/bearing/pitch from
+              within `requestAnimationFrame` of the same canvas
+              that produces the base64.
+            • Antimeridian-crossing rectangles (eastLng < westLng)
+              are passed through without rejection at the capture
+              site; downstream geoProjection.ts rejects them.
+              MapTiler views over the antimeridian are rare; we'd
+              add a wrap-aware projection if/when needed.
+            • Style detection uses `map.getStyle().name` which
+              returns the friendly style label MapLibre exposes.
+              That's enough to round-trip the choice between
+              outdoors / streets / satellite. The full style URL is
+              owned by the host (TacticalMapView's setStyle
+              messages) and is not currently surfaced; can be added
+              if a future task needs the URL specifically.
+            • Existing saved hunt images that have no entry in
+              saved_map_images continue to work — the read path
+              treats absence as "not geo-placed" (Task 1 contract).
+            • TypeScript clean: `npx tsc --noEmit` is green.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Task 5 is complete. App-generated MapTiler captures now bundle
+      bounds + camera state + canvas dimensions + style at the
+      moment of capture and persist via /api/saved-map-images on
+      the post-finalize drain. Uploaded images persist as pixel-
+      only (source='upload', supportsGeoPlacement=false) with the
+      probed original dimensions. Existing saved images without
+      metadata continue to load.
+
+      Test rollup:
+        Backend pytest:  133/133 PASS (10 net new across the new
+                         tests + back-compat sweep).
+        Frontend node:test: 197 / 195 pass / 2 pre-existing
+                            failures unchanged. +10 new tests.
+        TypeScript:      clean.
+

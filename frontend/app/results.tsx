@@ -321,6 +321,60 @@ export default function ResultsScreen() {
                 },
               });
             }
+
+            // Drain saved-map-image geo metadata captured at the moment
+            // each map was added (Task 5). Zip with hunt.mediaRefs by
+            // index so each SavedMapImage row uses the same image_id
+            // the media store assigns. Idempotent on retry: the API
+            // is an upsert keyed on (user_id, image_id), so re-POSTing
+            // is safe.
+            try {
+              const { loadMapImageMetaList, clearMapImageMetaList, buildSavedMapImagePayload } =
+                await import('../src/media/pendingMapImageMeta');
+              const { upsertSavedMapImage } =
+                await import('../src/api/savedMapImagesApi');
+              const metaList = await loadMapImageMetaList(huntId);
+              if (metaList.length > 0) {
+                // The hunt's mediaRefs are the source of truth for
+                // image_ids. Read from the live hunt record so we
+                // align with whatever the persistence pipeline minted.
+                const refs: string[] = (hunt as any)?.mediaRefs ?? [];
+                let committed = 0;
+                let failedMeta = 0;
+                for (let i = 0; i < metaList.length; i++) {
+                  const meta = metaList[i];
+                  const imageId = refs[i];
+                  if (!meta || !imageId) continue;
+                  // eslint-disable-next-line no-await-in-loop
+                  const r = await upsertSavedMapImage(
+                    buildSavedMapImagePayload(imageId, huntId, meta),
+                  );
+                  if (r.ok) committed++;
+                  else failedMeta++;
+                }
+                if (failedMeta === 0) {
+                  await clearMapImageMetaList(huntId);
+                }
+                logClientEvent({
+                  event: 'saved_map_images_drained',
+                  data: {
+                    hunt_id: huntId,
+                    requested: metaList.filter((m) => m !== null).length,
+                    committed,
+                    failed: failedMeta,
+                    refs_count: refs.length,
+                  },
+                });
+              }
+            } catch (metaDrainErr: any) {
+              logClientEvent({
+                event: 'saved_map_images_drain_threw',
+                data: {
+                  hunt_id: huntId,
+                  error: metaDrainErr?.message || String(metaDrainErr),
+                },
+              });
+            }
           }
         } catch (err: any) {
           logClientEvent({
