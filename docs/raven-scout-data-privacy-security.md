@@ -3,8 +3,8 @@
 ## What We Collect
 - **Account**: email, optional display name, password hash (bcrypt) or Google OAuth subject id.
 - **Hunt data**: species, weapon, method, date, time window, wind, GPS coordinates, uploaded map imagery, your overlay edits, and the AI analysis output.
-- **Device telemetry**: platform (iOS / Android), OS version, app version, anonymous device id used for RevenueCat entitlements. We also log non-fatal client events (storage failures, upload retries) — these contain no PII beyond `user_id`.
-- **Billing**: Apple / Google handle the card. We receive a subscription entitlement record from RevenueCat (tier + renewal date) — never a card number.
+- **Device telemetry**: platform (iOS / Android), OS version, app version, anonymous device id used for RevenueCat entitlements. We also log non-fatal client events (storage failures, upload retries) tied to your `user_id` for diagnostics.
+- **Billing**: Apple / Google handle the payment instrument. We receive a subscription entitlement record from RevenueCat (tier + renewal date) — never a card number.
 
 ## What We Don't Collect
 - Contacts, SMS, call logs, calendar.
@@ -13,41 +13,42 @@
 - Your photo library beyond the specific images you pick for a hunt.
 
 ## Where Your Data Lives
-- **Account + hunt metadata**: MongoDB Atlas (US region).
-- **Pro-tier map imagery**: Private AWS S3 bucket `ravenscout-media-prod` in `us-east-2`. Delivery is via short-lived signed URLs — there is no public-internet access to the raw objects.
+- **Account + hunt metadata**: MongoDB.
+- **Pro-tier map imagery**: a private, server-configured AWS S3 bucket. Delivery is via short-lived signed URLs — there is no public-internet access to the raw objects.
 - **Core / Trial map imagery**: stays on your device only. Never uploaded.
-- **Email for password reset**: sent via Microsoft Graph (Azure AD) from `support@asgardsolution.io`.
+- **Email for password reset**: sent via Microsoft Graph from `support@asgardsolution.io`.
 
 ## In Transit
-- All API traffic is HTTPS (TLS 1.2+).
-- S3 PUT / GET uses pre-signed URLs; the signature is scoped to the exact `hunts/{userId}/{huntId}/…` key and expires in 15 minutes (upload) or 60 minutes (download).
+- All API traffic is HTTPS (TLS).
+- S3 PUT / GET use pre-signed URLs scoped to the exact `hunts/{userId}/{huntId}/…` key. Defaults: **upload presigns expire in 15 minutes, download presigns in 60 minutes** (configurable per environment).
 
 ## At Rest
-- MongoDB Atlas — encrypted with AES-256 at the storage layer.
-- AWS S3 — SSE-S3 (AES-256) on the bucket.
-- Passwords are salted + hashed with bcrypt; we never store plaintext.
+- Passwords are salted + hashed with bcrypt — we never store plaintext.
+- MongoDB and S3 storage encryption follow the providers' default at-rest encryption for the regions we deploy in.
 
 ## Access Controls
 - Every API route that touches your data requires a valid session token.
-- Each S3 key is user-scoped — your tokens can never generate a presign for another user's key.
-- Cross-device sync is read/write gated by `(user_id, hunt_id)` tuples in MongoDB.
+- S3 keys are user-scoped — your tokens cannot generate a presign for another user's key.
+- Cross-device sync is gated by `(user_id, hunt_id)` tuples.
 
 ## Orphan Cleanup
-Any S3 object that was presigned but never committed to a saved hunt is automatically deleted 24 hours later (or sooner on-demand via the app's cloud-cleanup action). You never pay for abandoned uploads.
+Any S3 object that was presigned but never committed to a saved hunt is cleaned up by an automated job + an in-app cleanup action. You don't pay for abandoned uploads.
 
 ## Account Deletion
-Request via **Profile → Account → Delete account**. Within 30 days:
-- Your MongoDB records are purged.
-- All S3 objects under `hunts/{userId}/` are deleted.
-- RevenueCat entitlement is revoked.
-- Audit logs are retained for 90 days for fraud / abuse investigations, then fully deleted.
+Request via **Profile → Account → Delete account**. Deletion removes:
+- Your MongoDB records.
+- Your S3 objects under `hunts/{userId}/`.
+- Your RevenueCat entitlement.
+
+Active App Store / Play Store subscriptions must be cancelled separately in your store account.
 
 ## Third-Party Sub-Processors
-- **OpenAI** — sends the compressed map imagery + your selections; used only to produce the analysis output. See [OpenAI's privacy policy](https://openai.com/policies/privacy-policy).
+- **OpenAI** — receives the compressed map imagery + your selections so it can produce the analysis output. See OpenAI's privacy policy.
 - **RevenueCat** — subscription state.
 - **MapTiler** — base map tiles (anonymous tile requests).
+- **WeatherAPI.com** — weather / wind auto-fill (Core / Pro).
 - **Microsoft Graph** — password-reset email delivery.
-- **MongoDB Atlas** — database hosting.
+- **MongoDB** — database hosting.
 - **AWS S3** — Pro image storage.
 
 None of these see your password or your billing instrument.
