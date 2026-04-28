@@ -460,6 +460,134 @@ def build_hunt_geo_router(db, get_current_user):
             raise HTTPException(status_code=404, detail="Overlay item not found")
         return {"ok": True, "deleted": result.deleted_count}
 
+    # ----------------------------------------------------------------
+    # Bulk normalize + persist (Task 8)
+    # ----------------------------------------------------------------
+
+    @router.post("/hunts/{hunt_id}/overlay-items:bulk-normalize")
+    async def bulk_normalize_overlay_items(
+        hunt_id: str, request: Request
+    ):
+        """Normalize and persist a batch of returned overlay items.
+
+        Body:
+            {
+              "saved_map_image_id": "img_xyz" | null,
+              "analysis_id":        "analysis-2026-..." | null,
+              "items": [
+                {
+                  "type": "stand",
+                  "label": "...",
+                  "latitude": ...,
+                  "longitude": ...,
+                  "x": ...,
+                  "y": ...,
+                  "coordinateSource": "...",
+                  "sourceAssetId": "..."
+                },
+                ...
+              ]
+            }
+
+        Returns counts of created / skipped items + per-skipped reason
+        codes so the caller can log without crashing the analyse
+        response.
+        """
+        user = await get_current_user(request)
+        uid = user["user_id"]
+        await _require_hunt(uid, hunt_id)
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail="Invalid JSON body")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=422, detail="Body must be an object")
+
+        items = body.get("items") or []
+        if not isinstance(items, list):
+            raise HTTPException(status_code=422, detail="`items` must be a list")
+        analysis_id = body.get("analysis_id")
+        saved_map_image_id = body.get("saved_map_image_id")
+
+        # Load context once: saved map image (if any) + the hunt's
+        # location assets keyed by asset_id (for user_provided
+        # passthrough). Both lookups are best-effort.
+        saved_map_image = None
+        if saved_map_image_id:
+            try:
+                saved_map_image = await db.saved_map_images.find_one(
+                    {"user_id": uid, "image_id": saved_map_image_id},
+                    {"_id": 0},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "bulk_normalize: saved_map_image lookup failed for image=%s: %s",
+                    saved_map_image_id,
+                    exc,
+                )
+                saved_map_image = None
+
+        try:
+            asset_cursor = db.hunt_location_assets.find(
+                {"user_id": uid, "hunt_id": hunt_id}, {"_id": 0}
+            )
+            assets_by_id = {
+                a["asset_id"]: a async for a in asset_cursor if a.get("asset_id")
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "bulk_normalize: asset lookup failed for hunt=%s: %s",
+                hunt_id,
+                exc,
+            )
+            assets_by_id = {}
+
+        # Lazy import \u2014 avoids a circular at module load.
+        from overlay_normalizer import normalize_overlay_item  # noqa: WPS433
+
+        from models import AnalysisOverlayItem  # noqa: WPS433
+
+        created: list[dict] = []
+        skipped: list[dict] = []
+        for idx, raw in enumerate(items):
+            payload, reason = normalize_overlay_item(
+                raw,
+                hunt_id=hunt_id,
+                analysis_id=analysis_id,
+                saved_map_image=saved_map_image,
+                hunt_assets_by_id=assets_by_id,
+            )
+            if payload is None:
+                skipped.append({"index": idx, "reason": reason or "unknown"})
+                continue
+            item = AnalysisOverlayItem.new_from_create(
+                user_id=uid, payload=payload
+            )
+            try:
+                await db.analysis_overlay_items.insert_one(item.model_dump())
+                created.append(item.model_dump())
+            except Exception as exc:  # noqa: BLE001
+                # Most likely a (user_id, item_id) collision \u2014 surface
+                # cleanly and keep going so one bad row doesn't poison
+                # the whole batch.
+                logger.error(
+                    "bulk_normalize: insert failed user=%s hunt=%s idx=%s: %s",
+                    uid,
+                    hunt_id,
+                    idx,
+                    exc,
+                )
+                skipped.append({"index": idx, "reason": "insert_failed"})
+
+        return {
+            "ok": True,
+            "created_count": len(created),
+            "skipped_count": len(skipped),
+            "created": created,
+            "skipped": skipped,
+        }
+
     return router
 
 

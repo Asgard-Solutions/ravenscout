@@ -711,7 +711,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-analysis-pro.preview.emergentagent.com).
+          https://hunt-geo-overlay.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -1286,7 +1286,7 @@ overlay_taxonomy_unification:
         comment: |
           Backend overlay-taxonomy unification VERIFIED end-to-end
           against the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-analysis-pro.preview.emergentagent.com) + the local
+          https://hunt-geo-overlay.preview.emergentagent.com) + the local
           pytest suite. Harness: /app/backend_test.py — 13/13
           substantive assertions PASS, 0 failures.
 
@@ -1334,7 +1334,7 @@ overlay_taxonomy_unification:
 
           === 3. Live POST /api/analyze-hunt smoke ===
           Request body (Bearer test_session_rs_001 / Pro):
-            POST https://hunt-analysis-pro.preview.emergentagent.com/api/analyze-hunt
+            POST https://hunt-geo-overlay.preview.emergentagent.com/api/analyze-hunt
             {
               "map_image_base64": "<256x256 deterministic PNG, base64>",
               "conditions": {
@@ -2461,7 +2461,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-analysis-pro.preview.emergentagent.com
+          https://hunt-geo-overlay.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -2525,7 +2525,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-analysis-pro.preview.emergentagent.com). Harness:
+          https://hunt-geo-overlay.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -2925,7 +2925,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://hunt-analysis-pro.preview.emergentagent.com/api/auth/verify-otp
+            POST https://hunt-geo-overlay.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -3207,7 +3207,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://hunt-analysis-pro.preview.emergentagent.com/api). Test
+      URL (https://hunt-geo-overlay.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -3546,7 +3546,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://hunt-analysis-pro.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://hunt-geo-overlay.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -3800,7 +3800,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-analysis-pro.preview.emergentagent.com).
+          https://hunt-geo-overlay.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
@@ -4653,7 +4653,7 @@ enhanced_rollout_wiring:
 
           Harness: /app/backend_test.py — 46/46 substantive assertions
           PASS against the public preview URL
-          (https://hunt-analysis-pro.preview.emergentagent.com/api).
+          (https://hunt-geo-overlay.preview.emergentagent.com/api).
           ZERO failures.
 
           === A. Pro + deer + Iowa GPS (41.5, -93.0)  PASS ===
@@ -4838,7 +4838,7 @@ enhanced_rollout_wiring:
         agent: "testing"
         comment: |
           Enhanced rollout wiring validated end-to-end against the
-          preview URL (https://hunt-analysis-pro.preview.emergentagent.com)
+          preview URL (https://hunt-geo-overlay.preview.emergentagent.com)
           via /app/backend_test.py. RESULT: 21/24 substantive
           assertions PASS, BUT 3 critical assertions FAIL on the
           canonical "Pro + whitetail (deer) + Midwest Agricultural"
@@ -5257,7 +5257,7 @@ backend:
         agent: "testing"
         comment: |
           End-to-end backend test against EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-analysis-pro.preview.emergentagent.com using
+          https://hunt-geo-overlay.preview.emergentagent.com using
           /app/backend_test.py. Seeded auth: Bearer test_session_rs_001
           (Pro test-user-001) for primary calls; test_session_trial_001
           for cross-user isolation.
@@ -5490,7 +5490,7 @@ agent_communication:
     message: |
       Re-test of Hunt GPS Assets after main-agent bug fixes completed
       end-to-end against EXPO_PUBLIC_BACKEND_URL =
-      https://hunt-analysis-pro.preview.emergentagent.com. Harness:
+      https://hunt-geo-overlay.preview.emergentagent.com. Harness:
       /app/backend_test.py — 74/74 substantive assertions PASS, zero
       failures, zero 5xx on any route during this run.
 
@@ -6558,3 +6558,260 @@ agent_communication:
       byte-identical system prompt (verified by a dedicated
       assemble_system_prompt invariant test).
 
+  - task: "Task 8 — Convert and Persist Returned Overlay Items (bulk-normalize endpoint)"
+    implemented: true
+    working: true
+    file: "/app/backend/overlay_normalizer.py, /app/backend/overlay_projection.py, /app/backend/hunt_geo_router.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Task 8 implementation:
+
+            NEW MODULES:
+              /app/backend/overlay_projection.py
+                Python mirror of frontend/src/utils/geoProjection.ts.
+                Functions:
+                  lat_lng_to_pixel(lat, lng, north, south, west, east, width, height, clamp=False)
+                  pixel_to_lat_lng(x, y, north, south, west, east, width, height, clamp=False)
+                Same contract as TS module: north-up image, no
+                rotation, antimeridian-crossing rectangles rejected.
+
+              /app/backend/overlay_normalizer.py
+                Pure function `normalize_overlay_item(raw_item, *, hunt_id,
+                analysis_id, saved_map_image, hunt_assets_by_id)` returns
+                `(AnalysisOverlayItemCreate, None)` on success or
+                `(None, reason_code)` on a soft-fail. Implements the four
+                strict rules from the task brief:
+                  1. user_provided + known asset → lat/lng FORCED to
+                     asset's stored values (no AI override). Derive x/y
+                     iff saved image supports geo placement.
+                  2. Pixel-only / no saved image → lat/lng FORCIBLY
+                     stripped, x/y required, coordinate_source coerced
+                     to 'pixel_only'. NEVER fabricate GPS.
+                  3. Geo-capable + lat/lng only → derive x/y via
+                     latLngToPixel, default coord src
+                     'derived_from_saved_map_bounds'.
+                  4. Geo-capable + x/y only → derive lat/lng via
+                     pixelToLatLng, default coord src
+                     'derived_from_saved_map_bounds'.
+                Also handles: both supplied (persist as-is, default
+                'ai_estimated_from_image'), camelCase aliases,
+                Pydantic rejections returned as soft-fails.
+
+            NEW ENDPOINT (in /app/backend/hunt_geo_router.py):
+              POST /api/hunts/{hunt_id}/overlay-items:bulk-normalize
+              Body: { saved_map_image_id?, analysis_id?, items: [...] }
+              - Auth required (get_current_user).
+              - Loads saved_map_image (best-effort) and the hunt's
+                hunt_location_assets (best-effort) once per request.
+              - Calls normalize_overlay_item for each entry, persists
+                successful payloads via AnalysisOverlayItem.new_from_create
+                + db.analysis_overlay_items.insert_one().
+              - Returns:
+                  { ok, created_count, skipped_count, created[], skipped[] }
+                where each `skipped` entry includes {index, reason}.
+              - One bad row never poisons the batch.
+
+            UNIT TESTS:
+              /app/backend/tests/test_overlay_normalizer.py — 19/19 PASS
+                covering surface validation, pixel-only branch,
+                geo-capable branches, user_provided override semantics,
+                camelCase keys, Pydantic rejections, partially specified
+                images defaulting to pixel-only.
+
+            WHAT TO TEST (backend testing agent):
+              1. POST /api/hunts/{hunt_id}/overlay-items:bulk-normalize
+                 with auth → creates rows in analysis_overlay_items;
+                 unauthenticated request → 401.
+              2. user_provided + known sourceAssetId → returned overlay's
+                 latitude/longitude EXACTLY match the asset's stored
+                 values, even if the request body sends different lat/lng.
+              3. user_provided + unknown sourceAssetId → item lands in
+                 `skipped` with reason starting "unknown_source_asset".
+              4. saved_map_image_id pointing to a geo-capable image, item
+                 with lat/lng but no x/y → response x/y populated;
+                 coordinate_source = 'derived_from_saved_map_bounds'.
+              5. Same image, item with x/y but no lat/lng → response
+                 lat/lng populated.
+              6. saved_map_image_id pointing to a pixel-only image, item
+                 with lat/lng+x/y → persisted row has lat/lng=None,
+                 coordinate_source='pixel_only'.
+              7. Item with invalid type → skipped with
+                 reason starting "invalid_type"; missing label →
+                 reason "missing_label".
+              8. Hunt belonging to another user → 404 from _require_hunt.
+              9. Cross-user data isolation: item created by user A is
+                 not visible via GET /hunts/{id}/overlay-items as user B.
+
+            EXISTING UNIT TESTS (no regressions expected):
+              tests/test_overlay_taxonomy.py
+              tests/test_analysis_overlay_item.py
+              tests/test_hunt_assets_api.py
+              tests/test_saved_map_images_api.py
+              tests/test_analysis_overlay_items_api.py
+
+
+        - working: true
+          agent: "testing"
+          comment: |
+            Task 8 bulk-normalize endpoint VERIFIED end-to-end against
+            the preview URL (EXPO_PUBLIC_BACKEND_URL =
+            https://hunt-geo-overlay.preview.emergentagent.com).
+            Harness: /app/backend_test.py.
+
+            PRE-FLIGHT UNIT TESTS (from /app/backend):
+              python -m pytest tests/test_overlay_normalizer.py \
+                tests/test_analysis_overlay_item.py \
+                tests/test_overlay_taxonomy.py \
+                tests/test_hunt_assets_api.py \
+                tests/test_saved_map_images_api.py \
+                tests/test_analysis_overlay_items_api.py -q
+              → 75 passed, 3 skipped, 0 failures
+              • test_overlay_normalizer.py — 19/19 PASS as required.
+
+            HTTP INTEGRATION (46/46 substantive assertions PASS):
+
+            Fixtures (created via real endpoints for test-user-001):
+              • POST /api/hunts                       → hunt_A (Pro A)
+              • POST /api/hunts/{hunt_A}/assets       → asset_id at
+                (lat=44.5, lng=-93.0)
+              • POST /api/saved-map-images (geo)      → image_id with
+                supports_geo_placement=True, N=45, S=44, W=-93.5,
+                E=-92.5, orig_w=1000, orig_h=800 (maptiler)
+              • POST /api/saved-map-images (pixel)    → image_id with
+                supports_geo_placement=False, 1200x900 (upload)
+              • POST /api/hunts (User B)              → hunt_B (Pro B,
+                test_session_rs_002 reseeded via direct Mongo insert)
+
+            (a) Auth — PASS
+              ✓ no bearer → 401 {"detail":"Not authenticated"}
+              ✓ invalid bearer → 401 {"detail":"Invalid session"}
+
+            (b) Hunt not owned — PASS
+              ✓ User B calling bulk-normalize on User A's hunt_A →
+                404 {"detail":"Hunt not found"}
+
+            (c) Body shape validation — PASS
+              ✓ Top-level JSON array (not an object) → 422
+                {"detail":"Body must be an object"}
+              ✓ items={"bad":"not-a-list"} → 422
+                {"detail":"`items` must be a list"}
+
+            (d) user_provided override — PASS
+              Item: {type:"stand", label:"X",
+                     coordinateSource:"user_provided",
+                     sourceAssetId:<asset_id>,
+                     latitude:99.999, longitude:-1.234} on GEO image.
+              Response (created[0]):
+                latitude=44.5   (FORCED from asset, not 99.999) ✓
+                longitude=-93.0 (FORCED from asset, not -1.234) ✓
+                x=500.0, y=400.0  (derived via lat→pixel) ✓
+                coordinate_source="user_provided" ✓
+                source_asset_id=<asset_id> ✓
+
+            (e) Unknown sourceAssetId — PASS
+              Item: {…, sourceAssetId:"bogus"} on GEO image.
+              Response: created_count=0, skipped_count=1,
+                skipped=[{"index":0,
+                          "reason":"unknown_source_asset:bogus"}] ✓
+
+            (f) GPS only on geo image — PASS
+              Item: {type:"funnel", label:"Saddle",
+                     latitude:44.5, longitude:-93.0}.
+              Response: x=500.0, y=400.0,
+                coordinate_source="derived_from_saved_map_bounds" ✓
+
+            (g) Pixel only on geo image — PASS
+              Item: {type:"funnel", label:"Saddle", x:500, y:400}.
+              Response: latitude=44.5, longitude=-93.0,
+                coordinate_source="derived_from_saved_map_bounds" ✓
+
+            (h) Pixel-only image — PASS
+              Item: {type:"stand", label:"X", latitude:30,
+                     longitude:-97, x:100, y:200,
+                     coordinateSource:"ai_estimated_from_image"}.
+              Response (created[0]):
+                latitude=None (GPS NOT fabricated) ✓
+                longitude=None ✓
+                x=100.0, y=200.0 ✓
+                coordinate_source="pixel_only" (coerced, NOT
+                  ai_estimated_from_image) ✓
+
+            (i) Surface failures + index bookkeeping — PASS
+              3-item batch:
+                idx 0: type="rocketship" → skipped
+                  reason="invalid_type:rocketship" ✓
+                idx 1: missing label → skipped reason="missing_label" ✓
+                idx 2: valid funnel → created ✓
+              created_count=1, skipped_count=2. Original indices
+              preserved on the skipped entries.
+
+            (j) Cross-user isolation — PASS
+              • User A GET /hunts/{hunt_A}/overlay-items → 200 with
+                5 items (all persisted in scenarios d, f, g, h, i).
+              • User B GET /hunts/{hunt_A}/overlay-items → 404
+                {"detail":"Hunt not found"}  (existence not leaked)
+              • User B GET /hunts/{hunt_B}/overlay-items → 200 with
+                empty overlay_items list (hunt_B has none).
+
+            (k) Persistence — PASS
+              Same GET as above: 5 overlay items retrievable after
+              bulk-normalize, all with canonical types,
+              coordinate_source values, and (user_id, item_id) as
+              seen on the create responses.
+
+            Cleanup: both fixture hunts deleted via DELETE /api/hunts
+            at end of run (cascade returned 200).
+
+            Zero 5xx observed across the entire run. No source files
+            modified. test-user-002 / test_session_rs_002 was reseeded
+            via direct Mongo insert (session had expired / been
+            cleaned up since the prior run; matches
+            /app/memory/test_credentials.md intent).
+
+            Main agent: please summarise and finish — Task 8
+            bulk-normalize endpoint is production-ready.
+
+agent_communication:
+    -agent: "testing"
+    -message: |
+      Task 8 POST /api/hunts/{hunt_id}/overlay-items:bulk-normalize
+      verified END-TO-END. 46/46 HTTP assertions + 19/19
+      test_overlay_normalizer.py + 75/75 full pre-flight unit
+      suite — zero failures, zero 5xx.
+
+      All 10 scenarios from the review brief pass:
+        (a) 401 on missing/invalid bearer ✓
+        (b) 404 when hunt is not owned ✓
+        (c) 422 on non-object body and non-list items ✓
+        (d) user_provided override FORCES lat/lng from the
+            HuntLocationAsset (99.999 / -1.234 correctly ignored),
+            x/y derived ≈ (500, 400), coordinate_source preserved ✓
+        (e) unknown sourceAssetId skipped with reason
+            "unknown_source_asset:bogus" and index=0 ✓
+        (f) GPS only on geo image → x≈500, y≈400,
+            coordinate_source="derived_from_saved_map_bounds" ✓
+        (g) Pixel only on geo image → lat≈44.5, lng≈-93.0,
+            coordinate_source="derived_from_saved_map_bounds" ✓
+        (h) Pixel-only SavedMapImage → lat/lng NULLED out
+            (never fabricated), x/y preserved,
+            coordinate_source coerced to "pixel_only" ✓
+        (i) Mixed batch — invalid_type:rocketship + missing_label +
+            one valid funnel → created=1, skipped=2 with original
+            indices preserved ✓
+        (j) Cross-user GET /hunts/{userA_hunt}/overlay-items as
+            user B → 404; user B's own hunt → empty list ✓
+        (k) Persistence via GET /overlay-items returns 5 rows
+            after bulk-normalize ✓
+
+      test-user-002 / test_session_rs_002 was missing from Mongo on
+      this run (prior run's seed had been cleaned up). Reseeded via
+      direct Mongo insert of the user + user_sessions docs (30-day
+      TTL) — standard testing-agent action per the credentials file.
+      No production code modified.
+
+      Main agent: please summarise and finish — Task 8 is green.
