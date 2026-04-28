@@ -135,7 +135,7 @@ export default function HomeScreen() {
             <FeatureCard icon="eye" title="Vision AI" subtitle="Map terrain analysis" />
             <FeatureCard icon="compass" title="Wind Logic" subtitle="Optimal positioning" />
             <FeatureCard icon="layers" title="Overlays" subtitle="Stand, route, corridor" />
-            <FeatureCard icon="paw" title="3 Species" subtitle="Deer, turkey, hog" />
+            <FeatureCard icon="paw" title="8 Species" subtitle="Big game · predator · bird" />
           </View>
         </View>
 
