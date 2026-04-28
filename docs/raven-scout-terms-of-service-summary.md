@@ -1,6 +1,6 @@
 # Raven Scout — Terms of Service (Plain-English Summary)
 
-> This is a plain-English summary intended to make the published Terms of Service easier to navigate. The full Terms govern in case of any conflict. Specific clauses such as governing law, liability cap, refund eligibility windows, and notice-of-change duration are set in the published Terms — please read them on `ravenscout.app/terms`.
+> This is a plain-English summary intended to make the published Terms of Service easier to navigate. The full Terms govern in case of any conflict. Specific clauses such as governing law, liability cap, refund eligibility windows, and notice-of-change duration are set in the published Terms — please read them on https://asgardsolution.io/raven-scout/terms.
 
 ## What Raven Scout Is
 Raven Scout is an AI-assisted map analysis tool for hunters. It produces tactical suggestions based on imagery and parameters you provide. It is a decision-support tool — **not a substitute for scouting, knowledge of local law, or common sense**.
@@ -35,9 +35,11 @@ Raven Scout is an AI-assisted map analysis tool for hunters. It produces tactica
 We can suspend an account for abuse, fraud, regulatory requests, or repeated terms violations. You can delete your account any time under **Profile → Account → Delete account**.
 
 ## Governing Law
-The governing-law and dispute-resolution clauses are set in the published Terms; please review them at `ravenscout.app/terms`.
+The governing-law and dispute-resolution clauses are set in the published Terms; please review them at https://asgardsolution.io/raven-scout/terms.
 
 ---
 
-Full text: **ravenscout.app/terms**.
-Contact: **support@asgardsolution.io**.
+Full text: **https://asgardsolution.io/raven-scout/terms**
+Privacy: **https://asgardsolution.io/raven-scout/privacy**
+Support: **https://asgardsolution.io/raven-scout/support**
+Email: **support@asgardsolution.io**.

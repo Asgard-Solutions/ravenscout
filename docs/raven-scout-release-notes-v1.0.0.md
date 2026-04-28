@@ -183,7 +183,12 @@ Raven Scout is built and operated by **Asgard Solutions LLC**. We rely on these 
 - **MongoDB** — primary datastore.
 - **Microsoft Graph** — transactional email delivery.
 
-Full Privacy Policy and Terms of Service: **ravenscout.app/privacy** · **ravenscout.app/terms**.
+Full Privacy Policy and Terms of Service: **https://asgardsolution.io/raven-scout/privacy** · **https://asgardsolution.io/raven-scout/terms**.
+
+User manual: **https://asgardsolution.io/raven-scout/user-manual**
+Release notes: **https://asgardsolution.io/raven-scout/release-notes**
+Support: **https://asgardsolution.io/raven-scout/support**
+Data deletion: **https://asgardsolution.io/raven-scout/data-deletion**
 
 ---
 
