@@ -16,7 +16,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 load_dotenv("/app/backend/.env")
 load_dotenv("/app/frontend/.env", override=False)
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://map-legend.preview.emergentagent.com")
+BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://hunt-geo-overlay.preview.emergentagent.com")
 API = f"{BASE_URL}/api"
 
 PRO_TOKEN = "test_session_rs_001"

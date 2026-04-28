@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -1338,10 +1339,44 @@ class HuntConditions(BaseModel):
     hunt_weapon: Optional[str] = None
     hunt_method: Optional[str] = None
 
+class AnalyzeRequestLocationAsset(BaseModel):
+    """Inline payload shape for a Hunt GPS Asset attached to an
+    /analyze-hunt request (Task 7).
+
+    Matches the canonical HuntLocationAsset wire shape from the model
+    in /app/backend/models/hunt_location_asset.py, but kept loose
+    here (no enum / range checks) because:
+      * The validators on HuntLocationAssetCreate already gate the
+        write path (POST /api/hunts/{id}/assets).
+      * Bad analyze inputs should NOT 422 the analysis itself —
+        we just skip a malformed entry inside the prompt builder.
+    """
+    asset_id: Optional[str] = None
+    type: Optional[str] = None
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    notes: Optional[str] = None
+
+
 class AnalyzeRequest(BaseModel):
     conditions: HuntConditions
     map_image_base64: str
     additional_images: Optional[List[str]] = None
+    # Task 7: when supplied, the analyze endpoint loads the hunt's
+    # user-provided GPS assets from Mongo and threads them into the
+    # prompt context. Optional + additive — legacy clients (no
+    # hunt_id) behave exactly as before.
+    hunt_id: Optional[str] = None
+    # Task 7: inline assets supplied directly by the New Hunt flow
+    # before the hunt has a server-side row. Takes precedence over
+    # the Mongo lookup when both are present.
+    location_assets: Optional[List[AnalyzeRequestLocationAsset]] = None
+    # Task 11 follow-up: when supplied, AI-returned overlays are
+    # normalized via overlay_normalizer and persisted into
+    # analysis_overlay_items, attached to this saved_map_image_id.
+    # Optional + best-effort — analyze never blocks on persistence.
+    saved_map_image_id: Optional[str] = None
 
 class OverlayMarker(BaseModel):
     type: str
@@ -1392,7 +1427,7 @@ SPECIES_DATA = legacy_species_data()
 # ============================================================
 # AI ANALYSIS (unchanged)
 # ============================================================
-async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial") -> dict:
+async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial", hunt_location_assets: Optional[List[dict]] = None) -> dict:
     """Run GPT-5.2 Vision analysis on the hunt map.
 
     LLM selection:
@@ -1540,6 +1575,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         hunt_style=canonical_hunt_style,
         hunt_weapon=canonical_hunt_weapon,
         hunt_method=canonical_hunt_method,
+        hunt_location_assets=hunt_location_assets,
         **enhanced_kwargs,
     )
     user_prompt_text = assemble_user_prompt(
@@ -1761,11 +1797,52 @@ async def analyze_hunt(request: Request):
 
     try:
         logger.info(f"Analyzing hunt for {analyze_req.conditions.animal} (user: {user['user_id']}, tier: {tier_key}, images: 1+{len(analyze_req.additional_images or [])})")
+
+        # Task 7: gather user-provided GPS assets for the prompt.
+        # Priority order:
+        #   1. Inline `location_assets` on the request body (the New
+        #      Hunt flow stashes pendingAssets there before the hunt
+        #      has a server row). Used directly without persistence.
+        #   2. Mongo lookup keyed on (user_id, hunt_id) — covers
+        #      re-analyse flows where the hunt already exists.
+        # Best-effort throughout: a Mongo blip MUST NOT block the
+        # analyze flow.
+        loaded_assets: List[dict] = []
+        if analyze_req.location_assets:
+            for entry in analyze_req.location_assets:
+                d = entry.model_dump(exclude_none=False)
+                # The prompt builder expects `asset_id` to be a stable
+                # string — synthesise one if the inline entry doesn't
+                # carry it (frontend uses localId pa_*).
+                if not d.get("asset_id"):
+                    d["asset_id"] = "pending"
+                loaded_assets.append(d)
+            logger.info(
+                f"Analyze: using {len(loaded_assets)} inline location asset(s)"
+            )
+        elif analyze_req.hunt_id:
+            try:
+                cursor = db.hunt_location_assets.find(
+                    {"user_id": user["user_id"], "hunt_id": analyze_req.hunt_id},
+                    {"_id": 0},
+                ).sort("created_at", 1)
+                loaded_assets = [doc async for doc in cursor]
+                logger.info(
+                    f"Loaded {len(loaded_assets)} hunt location asset(s) for "
+                    f"hunt={analyze_req.hunt_id}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"hunt asset load failed for hunt={analyze_req.hunt_id}: {exc}"
+                )
+                loaded_assets = []
+
         raw_result = await analyze_map_with_ai(
             analyze_req.conditions,
             analyze_req.map_image_base64,
             additional_images=analyze_req.additional_images if tier_key == "pro" else None,
             tier=tier_key,
+            hunt_location_assets=loaded_assets if loaded_assets else None,
         )
 
         # Increment usage — drains monthly subscription credits FIRST,
@@ -1796,6 +1873,33 @@ async def analyze_hunt(request: Request):
         # Attach v2 data if available
         if raw_result.get("v2"):
             result["v2"] = raw_result["v2"]
+
+        # Task 11 follow-up: persist AI overlays into
+        # analysis_overlay_items so the SAVED MARKERS panel on
+        # /results restores them after a reload. Best-effort —
+        # logged but never blocks the analyze response.
+        try:
+            from persist_ai_overlays import persist_ai_overlays
+            persist_summary = await persist_ai_overlays(
+                db,
+                user_id=user["user_id"],
+                hunt_id=analyze_req.hunt_id,
+                analysis_id=result_id,
+                saved_map_image_id=analyze_req.saved_map_image_id,
+                overlays=result.get("overlays") or [],
+                hunt_assets=loaded_assets,
+            )
+            logger.info(
+                "persist_ai_overlays summary user=%s hunt=%s -> %s",
+                user["user_id"], analyze_req.hunt_id, persist_summary,
+            )
+            # Surface the analysis_id on the response so the client
+            # can correlate persisted items with this run.
+            result["analysis_id"] = result_id
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "persist_ai_overlays unexpected failure: %s", exc,
+            )
 
         # Enhanced-rollout decision is exposed as a TOP-LEVEL sibling
         # field on the response, NOT as a nested key on `result`. This
@@ -2166,14 +2270,49 @@ async def list_hunts(request: Request, limit: int = 50, skip: int = 0):
 
 
 @api_router.get("/hunts/{hunt_id}")
-async def get_hunt(hunt_id: str, request: Request):
-    """Fetch a single hunt scoped to the current user."""
+async def get_hunt(hunt_id: str, request: Request, include_assets: bool = True):
+    """Fetch a single hunt scoped to the current user.
+
+    By default also hydrates the hunt's GPS assets (Hunt Location
+    Assets — see /app/backend/hunt_geo_router.py) into the response
+    under the `location_assets` key. Pass `include_assets=false` to
+    skip the join when the caller doesn't need them.
+    """
     user = await get_current_user(request)
     uid = user["user_id"]
     doc = await db.hunts.find_one({"user_id": uid, "hunt_id": hunt_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Hunt not found")
-    return {"ok": True, "hunt": _scrub_hunt(doc)}
+
+    hunt_payload = _scrub_hunt(doc)
+
+    if include_assets:
+        # Lazy-import to avoid a circular at module load (the asset
+        # helper lives in models/, which already imports from server
+        # only via the router builder).
+        from models import asset_doc_to_dict  # noqa: WPS433
+
+        try:
+            cursor = (
+                db.hunt_location_assets.find(
+                    {"user_id": uid, "hunt_id": hunt_id}, {"_id": 0}
+                )
+                .sort("created_at", 1)
+            )
+            assets = [asset_doc_to_dict(d) async for d in cursor]
+        except Exception as exc:  # noqa: BLE001
+            # Hydration failures must NEVER break the hunt read path.
+            # Log + return an empty list so the UI can still render.
+            logger.warning(
+                "get_hunt: asset hydration failed for user=%s hunt=%s: %s",
+                uid,
+                hunt_id,
+                exc,
+            )
+            assets = []
+        hunt_payload["location_assets"] = assets
+
+    return {"ok": True, "hunt": hunt_payload}
 
 
 class HuntPatchBody(BaseModel):
@@ -2281,6 +2420,33 @@ async def delete_hunt(hunt_id: str, request: Request):
     # silently disappearing while its assets linger.
     result = await db.hunts.delete_one({"user_id": uid, "hunt_id": hunt_id})
 
+    # Step 4: cascade-clean associated GPS location assets so they
+    # don't dangle orphaned in the hunt_location_assets collection.
+    # Best-effort — failures are logged but don't block the response.
+    try:
+        await db.hunt_location_assets.delete_many(
+            {"user_id": uid, "hunt_id": hunt_id},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "delete_hunt: location asset cleanup failed for hunt=%s: %s",
+            hunt_id,
+            exc,
+        )
+
+    # Step 5: cascade-clean analysis overlay items (Task 6) for the
+    # same hunt. Same best-effort semantics.
+    try:
+        await db.analysis_overlay_items.delete_many(
+            {"user_id": uid, "hunt_id": hunt_id},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "delete_hunt: overlay item cleanup failed for hunt=%s: %s",
+            hunt_id,
+            exc,
+        )
+
     return {
         "ok": True,
         "deleted": result.deleted_count,
@@ -2302,7 +2468,53 @@ async def delete_hunt(hunt_id: str, request: Request):
 from password_auth import build_password_auth_router
 api_router.include_router(build_password_auth_router(db, get_current_user))
 
+# Mount hunt-geo endpoints (Hunt Location Assets + Saved Map Image
+# geo metadata). Lives in hunt_geo_router.py for the same reason.
+from hunt_geo_router import build_hunt_geo_router, ensure_hunt_geo_indexes
+api_router.include_router(build_hunt_geo_router(db, get_current_user))
+
 app.include_router(api_router)
+
+
+# ----------------------------------------------------------------
+# Global validation-error handler
+# ----------------------------------------------------------------
+# FastAPI's default 422 handler echoes the offending input value back
+# in `errors[].input`. When the input contains non-JSON-finite floats
+# (NaN, +Inf, -Inf) — or non-serialisable objects like the embedded
+# `ctx.error` ValueError that Pydantic surfaces from custom field
+# validators — Starlette's JSONResponse.render() crashes with
+# `ValueError: Out of range float values are not JSON compliant`
+# (or `TypeError: ... not JSON serializable`), turning a clean 422
+# into a 500. We coerce the payload through `jsonable_encoder` and
+# rewrite non-finite floats so the response always serialises.
+import math as _math
+from fastapi.encoders import jsonable_encoder as _jsonable_encoder
+
+
+def _sanitise_non_finite(obj):
+    if isinstance(obj, float):
+        if _math.isnan(obj):
+            return "NaN"
+        if _math.isinf(obj):
+            return "Infinity" if obj > 0 else "-Infinity"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitise_non_finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitise_non_finite(v) for v in obj]
+    return obj
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(_request: Request, exc: RequestValidationError):
+    # jsonable_encoder turns embedded ValueError / Decimal / datetime
+    # objects into JSON-safe primitives; _sanitise_non_finite then
+    # finishes the job for NaN / +Inf / -Inf which jsonable_encoder
+    # leaves as float.
+    safe_errors = _sanitise_non_finite(_jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -2315,3 +2527,19 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+@app.on_event("startup")
+async def _startup_indexes():
+    """Ensure all collection indexes exist. Idempotent and best-effort:
+    failures are logged inside each helper so a transient Mongo blip
+    at boot doesn't crash the API.
+    """
+    try:
+        await _ensure_hunts_indexes()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"hunts index setup failed at startup: {exc}")
+    try:
+        await ensure_hunt_geo_indexes(db)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"hunt_geo index setup failed at startup: {exc}")

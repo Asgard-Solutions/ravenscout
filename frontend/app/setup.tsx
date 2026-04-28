@@ -37,6 +37,17 @@ import {
 } from '../src/constants/huntingRegions';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
+import {
+  savePendingAssets,
+  type PendingHuntAsset,
+} from '../src/media/pendingHuntAssets';
+import {
+  saveMapImageMetaList,
+  makeUploadMeta,
+  type PendingMapImageMeta,
+} from '../src/media/pendingMapImageMeta';
+import { probeImage } from '../src/media/imageProbe';
+import HuntLocationsSection from '../src/components/HuntLocationsSection';
 import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
 import { grantExtraCreditsPurchase } from '../src/api/analyticsApi';
 import OutOfCreditsModal from '../src/components/OutOfCreditsModal';
@@ -70,6 +81,16 @@ export default function SetupScreen() {
   const scrollRef = useRef<ScrollView>(null);
   useScrollToTopOnFocus(scrollRef);
   const [step, setStep] = useState(0);
+  // Reset scroll to the top whenever the setup wizard advances or
+  // retreats between steps — the ScrollView is reused across all
+  // steps (single screen, variable content), so without this the
+  // previous step's scroll offset carries over. Use `scrollTo`
+  // instead of `scrollToEnd` to always land at the first field.
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ y: 0, animated: false });
+    }
+  }, [step]);
   const [loading, setLoading] = useState(false);
   const speciesCatalog = useSpeciesCatalog();
   const [limitReached, setLimitReached] = useState(false);
@@ -77,6 +98,10 @@ export default function SetupScreen() {
   // Form state
   const [selectedSpecies, setSelectedSpecies] = useState('');
   const [mapImages, setMapImages] = useState<string[]>([]);
+  // Geo metadata captured at the moment each map image was added.
+  // Index-aligned with mapImages. Drained to /api/saved-map-images
+  // after the hunt is upserted (see /results.tsx).
+  const [mapImagesMeta, setMapImagesMeta] = useState<(PendingMapImageMeta | null)[]>([]);
   const [primaryMapIndex, setPrimaryMapIndex] = useState(0);
   const [mapInputMode, setMapInputMode] = useState<'upload' | 'interactive'>('upload');
   const [showInteractiveMap, setShowInteractiveMap] = useState(false);
@@ -179,6 +204,13 @@ export default function SetupScreen() {
     cloud_cover: 'manual',
   });
 
+  // Optional GPS assets the user adds before submitting analysis.
+  // Persisted briefly to AsyncStorage when the user taps ANALYZE so
+  // /results.tsx can drain them via the new
+  // /api/hunts/{id}/assets endpoint after the parent hunt is upserted
+  // to the cloud (the assets need a server-side hunt_id to attach to).
+  const [pendingAssets, setPendingAssets] = useState<PendingHuntAsset[]>([]);
+
   const canProceed = () => {
     switch (step) {
       case 0: return selectedSpecies !== '';
@@ -263,7 +295,16 @@ export default function SetupScreen() {
     if (!result.canceled && result.assets[0]?.base64) {
       const raw = `data:image/jpeg;base64,${result.assets[0].base64}`;
       const compressed = await compressForPipeline(raw, 'upload');
+      // Probe the COMPRESSED dataUrl for original pixel dims —
+      // that's what the saved image actually persists. Used so
+      // /api/saved-map-images can record (originalWidth,
+      // originalHeight) for pixel-only marker placement.
+      const probed = probeImage(compressed);
       setMapImages(prev => [...prev, compressed]);
+      setMapImagesMeta(prev => [
+        ...prev,
+        makeUploadMeta(probed ? { width: probed.width, height: probed.height } : null),
+      ]);
     }
   };
 
@@ -278,6 +319,9 @@ export default function SetupScreen() {
       }
       return updated;
     });
+    // Keep the parallel meta array in lock-step with mapImages so
+    // /results.tsx can zip them with hunt.mediaRefs by index.
+    setMapImagesMeta(prev => prev.filter((_, i) => i !== index));
   };
 
   const setPrimary = (index: number) => {
@@ -293,10 +337,51 @@ export default function SetupScreen() {
     setCaptureCount(prev => prev + 1);
   };
 
-  const handleMapCapture = useCallback(async (base64: string) => {
+  const handleMapCapture = useCallback(async (base64: string, geoMeta?: any) => {
     if (mapImages.length >= MAX_MAPS) return;
     const compressed = await compressForPipeline(base64, 'capture');
     setMapImages(prev => [...prev, compressed]);
+
+    // Geo metadata MUST come from the moment of capture — that's the
+    // contract for SavedMapImage.supportsGeoPlacement = true. If the
+    // bundled WebView capture script returned the bounds + camera
+    // state, store a maptiler entry; otherwise fall back to a
+    // pixel-only upload-style record so the saved row still tracks
+    // the original dimensions for marker math.
+    let metaEntry: PendingMapImageMeta;
+    if (
+      geoMeta &&
+      typeof geoMeta.northLat === 'number' &&
+      typeof geoMeta.southLat === 'number' &&
+      typeof geoMeta.westLng === 'number' &&
+      typeof geoMeta.eastLng === 'number' &&
+      typeof geoMeta.originalWidth === 'number' &&
+      typeof geoMeta.originalHeight === 'number'
+    ) {
+      metaEntry = {
+        source: 'maptiler',
+        supportsGeoPlacement: true,
+        originalWidth: geoMeta.originalWidth,
+        originalHeight: geoMeta.originalHeight,
+        northLat: geoMeta.northLat,
+        southLat: geoMeta.southLat,
+        westLng: geoMeta.westLng,
+        eastLng: geoMeta.eastLng,
+        centerLat: geoMeta.centerLat ?? geoMeta.northLat,
+        centerLng: geoMeta.centerLng ?? geoMeta.westLng,
+        zoom: typeof geoMeta.zoom === 'number' ? geoMeta.zoom : 0,
+        bearing: typeof geoMeta.bearing === 'number' ? geoMeta.bearing : 0,
+        pitch: typeof geoMeta.pitch === 'number' ? geoMeta.pitch : 0,
+        style: geoMeta.styleUrl ?? null,
+      };
+    } else {
+      const probed = probeImage(compressed);
+      metaEntry = makeUploadMeta(
+        probed ? { width: probed.width, height: probed.height } : null,
+      );
+    }
+    setMapImagesMeta(prev => [...prev, metaEntry]);
+
     Alert.alert('Captured!', 'Map view saved. You can capture more or continue.');
   }, [mapImages.length]);
 
@@ -503,6 +588,22 @@ export default function SetupScreen() {
           additional_images: isPaidTier && user?.tier === 'pro'
             ? mapImages.filter((_, i) => i !== primaryMapIndex)
             : undefined,
+          // Task 7: pass any user-provided GPS assets the hunter
+          // pinned in the New Hunt flow so the LLM can reference
+          // them as anchor points. The hunt itself doesn't have a
+          // server row yet at this point — assets are sent inline
+          // and persisted post-finalize via /api/hunts/{id}/assets
+          // (Task 4 drain).
+          location_assets: pendingAssets.length > 0
+            ? pendingAssets.map((a) => ({
+                asset_id: a.localId,
+                type: a.type,
+                name: a.name,
+                latitude: a.latitude,
+                longitude: a.longitude,
+                notes: a.notes ?? null,
+              }))
+            : undefined,
         }),
       });
 
@@ -647,6 +748,33 @@ export default function SetupScreen() {
         // lazily from /results or deferred to a background step
         // once /results is confirmed visible.
         if (refreshUser) refreshUser();
+
+        // Stash any user-entered GPS assets so /results.tsx can
+        // POST them to /api/hunts/{id}/assets after the parent hunt
+        // is upserted. Best-effort — failures here don't block the
+        // analyze flow; the user can still re-add assets later from
+        // the hunt detail screen (future task).
+        if (pendingAssets.length > 0) {
+          try {
+            await savePendingAssets(enrichedResult.id, pendingAssets);
+          } catch {
+            // Storage failures are non-fatal here; UI will not
+            // surface this to the user.
+          }
+        }
+
+        // Stash the per-image geo metadata captured at upload /
+        // capture time. /results.tsx zips this with hunt.mediaRefs
+        // by INDEX once the MediaAssets are persisted, so the
+        // SavedMapImage rows go in keyed by the same image_ids the
+        // app's media store uses everywhere else.
+        if (mapImagesMeta.length > 0) {
+          try {
+            await saveMapImageMetaList(enrichedResult.id, mapImagesMeta);
+          } catch {
+            // ditto — best-effort.
+          }
+        }
         // REPLACE (not push) so /setup unmounts IMMEDIATELY and its
         // ~2MB base64 payload + bitmap allocations are released
         // BEFORE /results begins decoding its own primary image.
@@ -1450,6 +1578,15 @@ export default function SetupScreen() {
                   )}
                 </>
               )}
+
+              {/* Optional: known hunt locations (GPS assets). Stored
+                  to AsyncStorage at submit time and posted to
+                  /api/hunts/{id}/assets after the hunt is upserted
+                  (see /results.tsx drain hook). */}
+              <HuntLocationsSection
+                assets={pendingAssets}
+                onChange={setPendingAssets}
+              />
             </View>
           )}
 
@@ -1470,6 +1607,16 @@ export default function SetupScreen() {
                 {region ? <ReviewRow label="Region" value={region} /> : null}
                 {huntStyle ? <ReviewRow label="Hunt Style" value={getHuntStyleLabel(huntStyle) || huntStyle} /> : null}
                 <ReviewRow label="Maps" value={`${mapImages.length} uploaded`} />
+                {pendingAssets.length > 0 ? (
+                  <ReviewRow
+                    label="Locations"
+                    value={`${pendingAssets.length} marked${
+                      pendingAssets.length <= 3
+                        ? ` · ${pendingAssets.map(a => a.name).join(', ')}`
+                        : ''
+                    }`}
+                  />
+                ) : null}
                 {weatherData && <ReviewRow label="Weather" value={`${weatherData.condition} (Live)`} />}
               </View>
               <View style={styles.reviewMapsRow}>

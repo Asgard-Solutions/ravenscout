@@ -166,7 +166,14 @@ export class CloudMediaStore implements MediaStoreAdapter {
         bytes: approxBase64Bytes(b64),
         createdAt: new Date().toISOString(),
         pendingCloudSync: false,
-      };
+        // Stamp delivery mode at save time so the resolver knows
+        // whether the stored `uri` is directly fetchable (public CDN
+        // / public bucket) or whether it has to mint a signed GET.
+        // Defaults to `false` (treat as private) so assets uploaded
+        // against the default AWS S3 bucket render correctly via
+        // signed-download URLs.
+        publicDelivery: presign.privateDelivery === false,
+      } as MediaAsset;
     } catch (err: any) {
       const reason =
         err instanceof CloudMediaUnavailableError
@@ -236,24 +243,38 @@ export class CloudMediaStore implements MediaStoreAdapter {
   }
 
   async resolve(asset: MediaAsset): Promise<string | null> {
-    // 1. Cloud asset with an absolute URL that we expect to be publicly
-    //    fetchable (public bucket or CDN base URL configured).
-    if (asset.storageType === 'cloud' && asset.uri && /^https?:\/\//i.test(asset.uri)) {
-      // If private delivery is required the mobile <Image> will fail
-      // to load this. In that case the caller should pass the asset
-      // back through a retry-with-signed-download path — we expose a
-      // helper below for convenience.
-      return asset.uri;
-    }
-    // 2. Cloud asset with only a storage key — mint a signed GET.
-    if (asset.storageType === 'cloud' && asset.storageKey) {
-      try {
-        return await requestPresignDownload(asset.storageKey);
-      } catch {
-        return null;
+    // For cloud assets we MUST prefer a freshly-minted signed GET URL
+    // whenever a storageKey is present, because the stored `uri` is
+    // the direct S3 object URL which is NOT directly fetchable on a
+    // private bucket (the production default — no CloudFront / public
+    // base URL configured). Using `asset.uri` blindly returned a 403
+    // from S3 and rendered the thumbnail as blank.
+    //
+    // Only return the stored `uri` directly when delivery is public,
+    // which we detect by the asset carrying a `publicDelivery: true`
+    // flag stamped at save time. Every non-public cloud asset
+    // resolves via the presign-download endpoint.
+    if (asset.storageType === 'cloud') {
+      if ((asset as any).publicDelivery === true && asset.uri && /^https?:\/\//i.test(asset.uri)) {
+        return asset.uri;
       }
+      if (asset.storageKey) {
+        try {
+          return await requestPresignDownload(asset.storageKey);
+        } catch {
+          // Fall through to the stored URI as a last resort — better
+          // than a blank thumbnail if CloudFront/public delivery is
+          // actually configured but we mis-flagged the asset.
+          if (asset.uri && /^https?:\/\//i.test(asset.uri)) return asset.uri;
+          return null;
+        }
+      }
+      // No key — can't mint a signed URL. Fall back to whatever URI
+      // we have (covers legacy v2 records).
+      if (asset.uri && /^https?:\/\//i.test(asset.uri)) return asset.uri;
+      return null;
     }
-    // 3. Pending-sync local fallback — delegate to filesystem adapter.
+    // Pending-sync local fallback — delegate to filesystem adapter.
     return this.config.fallback.resolve(asset);
   }
 

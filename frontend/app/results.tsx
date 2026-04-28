@@ -16,6 +16,19 @@ import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 import { ImageOverlayCanvas } from '../src/components/ImageOverlayCanvas';
+import { SavedAnalysisOverlayImage } from '../src/components/SavedAnalysisOverlayImage';
+import { MarkerFormModal, type MarkerFormFields, type PlacementSummary } from '../src/components/MarkerFormModal';
+import {
+  listOverlayItems,
+  createOverlayItem,
+  updateOverlayItem,
+  deleteOverlayItem,
+  persistOverlaysFromAiAnalysis,
+} from '../src/api/overlayItemsApi';
+import { listSavedMapImages } from '../src/api/savedMapImagesApi';
+import { savedMapImageFromWire } from '../src/types/geo';
+import { buildMarkerPlacement } from '../src/utils/markerPlacement';
+import type { AnalysisOverlayItem, SavedMapImage } from '../src/types/geo';
 import {
   resolveAnalysisBasis,
   type ResolvedAnalysisBasis,
@@ -112,6 +125,30 @@ export default function ResultsScreen() {
   // locked to at save time. Overrides primary-map-index and hunt-level
   // locationCoords when present. See src/utils/analysisContext.ts.
   const [analysisBasis, setAnalysisBasis] = useState<ResolvedAnalysisBasis | null>(null);
+
+  // Task 9 — persisted AnalysisOverlayItem rows for this hunt. These
+  // are rendered inside SavedAnalysisOverlayImage with original-image
+  // x/y scaled to the current displayed image size. When the hunt
+  // has none (legacy / pre-Task-8 data), the panel hides itself.
+  const [savedOverlayItems, setSavedOverlayItems] = useState<AnalysisOverlayItem[]>([]);
+
+  // Task 10 — most-recent saved map image for this hunt (used to
+  // expose geo bounds + supportsGeoPlacement to the marker placer).
+  const [savedMapImage, setSavedMapImage] = useState<SavedMapImage | null>(null);
+
+  // Task 10 — marker add/edit UI state.
+  const [markerAddMode, setMarkerAddMode] = useState(false);
+  const [markerForm, setMarkerForm] = useState<
+    | null
+    | {
+        mode: 'create';
+        placement: PlacementSummary;
+        renderedX: number;
+        renderedY: number;
+      }
+    | { mode: 'edit'; item: AnalysisOverlayItem }
+  >(null);
+  const [markerBusy, setMarkerBusy] = useState(false);
 
   // v2 Overlay-to-Setup linking & focus
   const { focusState, linkedSetups, linkedObservations, focus, clearFocus } = useMapFocus(
@@ -214,6 +251,329 @@ export default function ResultsScreen() {
     };
   }, [params.huntId]);
 
+  // Task 9 — fetch persisted overlay items (from
+  // /api/hunts/:id/overlay-items) once we know the hunt id. These
+  // are rendered in the saved-image overlay panel below the
+  // analysis view. Failures are silent — the panel just stays
+  // empty for legacy hunts that don't have any persisted items.
+  //
+  // Task 10 — also fetch the most recent SavedMapImage so we
+  // know whether the rendered image is geo-capable; this drives
+  // whether tap placements derive lat/lng or stay pixel-only.
+  useEffect(() => {
+    let cancelled = false;
+    const huntId = (params.huntId as string | undefined) || (hunt as any)?.id;
+    if (!huntId) return;
+    (async () => {
+      const [itemsR, imgR] = await Promise.all([
+        listOverlayItems(huntId),
+        listSavedMapImages(huntId),
+      ]);
+      if (cancelled) return;
+      if (itemsR.ok) {
+        setSavedOverlayItems(itemsR.data.items || []);
+      } else {
+        setSavedOverlayItems([]);
+      }
+      if (imgR.ok && imgR.data.saved_map_images.length > 0) {
+        // Pick the most recent record (backend already sorts desc).
+        const img = savedMapImageFromWire(imgR.data.saved_map_images[0]);
+        setSavedMapImage(img);
+      } else {
+        setSavedMapImage(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [params.huntId, hunt?.id]);
+
+  // Task 11 follow-up — auto-persist AI overlays from the analysis
+  // into analysis_overlay_items the FIRST time we see a hunt with
+  // overlays but no persisted rows. Idempotent on the server side
+  // (analysis_id short-circuits a duplicate batch). Best-effort:
+  // failures are silent and the saved-overlay panel just stays
+  // empty for that analysis.
+  const aiPersistAttemptedRef = React.useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const huntId = (params.huntId as string | undefined) || hunt?.id;
+    if (!huntId) return;
+    if (savedOverlayItems.length > 0) return;
+    if (!savedMapImage) return;
+    const overlays = hunt?.result?.overlays;
+    if (!overlays || overlays.length === 0) return;
+    const analysisId = hunt?.result?.id;
+    const key = `${huntId}:${analysisId || 'no-aid'}`;
+    if (aiPersistAttemptedRef.current.has(key)) return;
+    aiPersistAttemptedRef.current.add(key);
+    (async () => {
+      const r = await persistOverlaysFromAiAnalysis(huntId, {
+        analysisId: analysisId || null,
+        savedMapImageId: savedMapImage.id,
+        aiOverlays: overlays.map((o: any) => ({
+          type: String(o.type || 'custom'),
+          label: String(o.label || ''),
+          x_percent: Number(o.x_percent),
+          y_percent: Number(o.y_percent),
+          reasoning: o.reasoning ?? null,
+          confidence: o.confidence ?? null,
+        })),
+      });
+      if (r.ok && (r.data.persisted ?? 0) > 0) {
+        // Re-list so the SAVED MARKERS panel surfaces the new rows.
+        const refresh = await listOverlayItems(huntId);
+        if (refresh.ok) setSavedOverlayItems(refresh.data.items);
+      }
+    })();
+  }, [
+    params.huntId,
+    hunt?.id,
+    hunt?.result?.id,
+    hunt?.result?.overlays?.length,
+    savedOverlayItems.length,
+    savedMapImage,
+  ]);
+
+  // Task 10 — handlers for add / edit / delete on the saved-marker
+  // panel. Each calls the API, updates local state on success, and
+  // logs telemetry on failure. Adds always derive coords via
+  // buildMarkerPlacement so geo-capable images get GPS and pixel-
+  // only ones never fabricate coordinates.
+  const huntIdForMarkers = (params.huntId as string | undefined) || (hunt as any)?.id;
+  const renderedW = useMemo(() => {
+    return Math.max(1, MAP_WIDTH);
+  }, []);
+  const handleTapPlaceMarker = useCallback(
+    (rendX: number, rendY: number) => {
+      const ow = analysisBasis?.naturalWidth || 0;
+      const oh = analysisBasis?.naturalHeight || 0;
+      // Respect the FITTED rendered rect so we never write a marker
+      // onto letterbox padding. (Component uses the same dims for
+      // image + overlay layer.)
+      const rw = renderedW;
+      const rh = MAP_HEIGHT;
+      const placement = buildMarkerPlacement({
+        renderedX: rendX,
+        renderedY: rendY,
+        renderedWidth: rw,
+        renderedHeight: rh,
+        originalWidth: ow,
+        originalHeight: oh,
+        geo: savedMapImage
+          ? {
+              bounds:
+                typeof savedMapImage.northLat === 'number' &&
+                typeof savedMapImage.southLat === 'number' &&
+                typeof savedMapImage.westLng === 'number' &&
+                typeof savedMapImage.eastLng === 'number'
+                  ? {
+                      northLat: savedMapImage.northLat,
+                      southLat: savedMapImage.southLat,
+                      westLng: savedMapImage.westLng,
+                      eastLng: savedMapImage.eastLng,
+                    }
+                  : null,
+              supportsGeoPlacement: savedMapImage.supportsGeoPlacement,
+            }
+          : null,
+      });
+      if (!placement.ok) {
+        Alert.alert('Cannot place marker', `(${placement.reason})`);
+        return;
+      }
+      setMarkerForm({
+        mode: 'create',
+        renderedX: rendX,
+        renderedY: rendY,
+        placement: {
+          x: placement.data.x,
+          y: placement.data.y,
+          latitude: placement.data.latitude,
+          longitude: placement.data.longitude,
+          coordinateSource: placement.data.coordinateSource,
+        },
+      });
+    },
+    [analysisBasis, savedMapImage, renderedW],
+  );
+
+  const handleEditItem = useCallback((item: AnalysisOverlayItem) => {
+    setMarkerForm({ mode: 'edit', item });
+  }, []);
+
+  // Task 10 follow-up — drag-to-reposition. Receives the new
+  // rendered (px) anchor; recomputes original-image x/y + lat/lng
+  // (when geo-capable) via the same buildMarkerPlacement helper
+  // used for tap-to-add, then PUTs the update. Optimistically
+  // updates local state for snappy UI. On failure, reverts.
+  const handleRepositionItem = useCallback(
+    async (item: AnalysisOverlayItem, rendX: number, rendY: number) => {
+      if (!huntIdForMarkers) return;
+      const ow = analysisBasis?.naturalWidth || 0;
+      const oh = analysisBasis?.naturalHeight || 0;
+      const placement = buildMarkerPlacement({
+        renderedX: rendX,
+        renderedY: rendY,
+        renderedWidth: renderedW,
+        renderedHeight: MAP_HEIGHT,
+        originalWidth: ow,
+        originalHeight: oh,
+        geo: savedMapImage
+          ? {
+              bounds:
+                typeof savedMapImage.northLat === 'number' &&
+                typeof savedMapImage.southLat === 'number' &&
+                typeof savedMapImage.westLng === 'number' &&
+                typeof savedMapImage.eastLng === 'number'
+                  ? {
+                      northLat: savedMapImage.northLat,
+                      southLat: savedMapImage.southLat,
+                      westLng: savedMapImage.westLng,
+                      eastLng: savedMapImage.eastLng,
+                    }
+                  : null,
+              supportsGeoPlacement: savedMapImage.supportsGeoPlacement,
+            }
+          : null,
+      });
+      if (!placement.ok) {
+        Alert.alert('Cannot reposition marker', `(${placement.reason})`);
+        return;
+      }
+      const before = item;
+      // Optimistic update.
+      setSavedOverlayItems(prev =>
+        prev.map(it =>
+          it.id === item.id
+            ? {
+                ...it,
+                x: placement.data.x,
+                y: placement.data.y,
+                latitude: placement.data.latitude,
+                longitude: placement.data.longitude,
+                // When the user drags a user_provided marker away
+                // from its asset GPS, downgrade to the appropriate
+                // derived/pixel-only source — never leave a stale
+                // user_provided tag on a now-different position.
+                coordinateSource:
+                  it.coordinateSource === 'user_provided'
+                    ? placement.data.coordinateSource
+                    : (it.coordinateSource as any),
+              }
+            : it,
+        ),
+      );
+      const r = await updateOverlayItem(huntIdForMarkers, item.id, {
+        x: placement.data.x,
+        y: placement.data.y,
+        latitude: placement.data.latitude ?? null,
+        longitude: placement.data.longitude ?? null,
+        coordinateSource:
+          item.coordinateSource === 'user_provided'
+            ? placement.data.coordinateSource
+            : (item.coordinateSource as any),
+      });
+      if (!r.ok) {
+        // Revert the optimistic write.
+        setSavedOverlayItems(prev =>
+          prev.map(it => (it.id === item.id ? before : it)),
+        );
+        Alert.alert(
+          'Could not reposition marker',
+          (r as any).error || r.reason,
+        );
+      }
+    },
+    [huntIdForMarkers, analysisBasis, savedMapImage, renderedW],
+  );
+
+  const handleDeleteItem = useCallback(
+    async (item: AnalysisOverlayItem) => {
+      if (!huntIdForMarkers) return;
+      Alert.alert(
+        'Delete marker?',
+        'This action cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              setMarkerBusy(true);
+              const r = await deleteOverlayItem(huntIdForMarkers, item.id);
+              setMarkerBusy(false);
+              if (!r.ok) {
+                Alert.alert(
+                  'Could not delete marker',
+                  (r as any).error || r.reason,
+                );
+                return;
+              }
+              setSavedOverlayItems(prev => prev.filter(it => it.id !== item.id));
+            },
+          },
+        ],
+        { cancelable: true },
+      );
+    },
+    [huntIdForMarkers],
+  );
+
+  const handleSubmitMarkerForm = useCallback(
+    async (fields: MarkerFormFields) => {
+      if (!huntIdForMarkers || !markerForm) return;
+      setMarkerBusy(true);
+      try {
+        if (markerForm.mode === 'create') {
+          const p = markerForm.placement;
+          const r = await createOverlayItem(huntIdForMarkers, {
+            type: fields.type,
+            label: fields.name,
+            description: fields.notes ?? null,
+            x: p.x,
+            y: p.y,
+            latitude: p.latitude ?? null,
+            longitude: p.longitude ?? null,
+            coordinateSource: p.coordinateSource,
+            savedMapImageId: savedMapImage?.id || null,
+          });
+          if (!r.ok) {
+            Alert.alert(
+              'Could not save marker',
+              (r as any).error || r.reason,
+            );
+            return;
+          }
+          // Re-list to keep state fresh and pick up any backend-side
+          // canonicalisation (e.g. confidence defaulting).
+          const refresh = await listOverlayItems(huntIdForMarkers);
+          if (refresh.ok) setSavedOverlayItems(refresh.data.items);
+          setMarkerForm(null);
+          setMarkerAddMode(false);
+        } else {
+          const r = await updateOverlayItem(huntIdForMarkers, markerForm.item.id, {
+            type: fields.type,
+            label: fields.name,
+            description: fields.notes ?? null,
+          });
+          if (!r.ok) {
+            Alert.alert(
+              'Could not update marker',
+              (r as any).error || r.reason,
+            );
+            return;
+          }
+          const refresh = await listOverlayItems(huntIdForMarkers);
+          if (refresh.ok) setSavedOverlayItems(refresh.data.items);
+          setMarkerForm(null);
+        }
+      } finally {
+        setMarkerBusy(false);
+      }
+    },
+    [huntIdForMarkers, markerForm, savedMapImage],
+  );
+
   const { user } = useAuth();
 
   // --- Deferred provisional finalization ---
@@ -258,6 +618,123 @@ export default function ResultsScreen() {
           // — those are expected idle paths.
           if ((result as any).ok && (result as any).outcome?.warningMessage) {
             setPersistWarning(prev => prev || (result as any).outcome.warningMessage);
+          }
+
+          // Drain any pending GPS assets the user added in the New
+          // Hunt flow (Task 4). They were stashed in AsyncStorage by
+          // /setup.tsx because the assets need a server-side
+          // hunt_id to attach to, and that only exists after the
+          // upsert above. Idempotent: assets that successfully POST
+          // are removed from the stash; failures stay for retry on
+          // a later visit to /results.
+          if ((result as any).ok) {
+            try {
+              const { loadPendingAssets, removePendingAssets } =
+                await import('../src/media/pendingHuntAssets');
+              const { bulkCreateHuntAssets } =
+                await import('../src/api/huntAssetsApi');
+              const pending = await loadPendingAssets(huntId);
+              if (pending.length > 0) {
+                const outcomes = await bulkCreateHuntAssets(
+                  huntId,
+                  pending.map((a) => ({
+                    type: a.type,
+                    name: a.name,
+                    latitude: a.latitude,
+                    longitude: a.longitude,
+                    notes: a.notes ?? null,
+                  })),
+                );
+                const committedLocalIds = outcomes
+                  .filter((o) => o.ok)
+                  .map((o) => pending[o.index].localId);
+                const failed = outcomes.filter((o) => !o.ok);
+                if (committedLocalIds.length > 0) {
+                  await removePendingAssets(huntId, committedLocalIds);
+                }
+                logClientEvent({
+                  event: 'hunt_assets_drained',
+                  data: {
+                    hunt_id: huntId,
+                    requested: pending.length,
+                    committed: committedLocalIds.length,
+                    failed: failed.length,
+                    failure_reasons: failed.map((o) => o.reason).slice(0, 5),
+                  },
+                });
+                if (failed.length > 0) {
+                  setPersistWarning(
+                    (prev) =>
+                      prev ||
+                      `${failed.length} hunt location${
+                        failed.length === 1 ? '' : 's'
+                      } couldn’t be saved. They’ll retry next time you open this hunt.`,
+                  );
+                }
+              }
+            } catch (drainErr: any) {
+              logClientEvent({
+                event: 'hunt_assets_drain_threw',
+                data: {
+                  hunt_id: huntId,
+                  error: drainErr?.message || String(drainErr),
+                },
+              });
+            }
+
+            // Drain saved-map-image geo metadata captured at the moment
+            // each map was added (Task 5). Zip with hunt.mediaRefs by
+            // index so each SavedMapImage row uses the same image_id
+            // the media store assigns. Idempotent on retry: the API
+            // is an upsert keyed on (user_id, image_id), so re-POSTing
+            // is safe.
+            try {
+              const { loadMapImageMetaList, clearMapImageMetaList, buildSavedMapImagePayload } =
+                await import('../src/media/pendingMapImageMeta');
+              const { upsertSavedMapImage } =
+                await import('../src/api/savedMapImagesApi');
+              const metaList = await loadMapImageMetaList(huntId);
+              if (metaList.length > 0) {
+                // The hunt's mediaRefs are the source of truth for
+                // image_ids. Read from the live hunt record so we
+                // align with whatever the persistence pipeline minted.
+                const refs: string[] = (hunt as any)?.mediaRefs ?? [];
+                let committed = 0;
+                let failedMeta = 0;
+                for (let i = 0; i < metaList.length; i++) {
+                  const meta = metaList[i];
+                  const imageId = refs[i];
+                  if (!meta || !imageId) continue;
+                  // eslint-disable-next-line no-await-in-loop
+                  const r = await upsertSavedMapImage(
+                    buildSavedMapImagePayload(imageId, huntId, meta),
+                  );
+                  if (r.ok) committed++;
+                  else failedMeta++;
+                }
+                if (failedMeta === 0) {
+                  await clearMapImageMetaList(huntId);
+                }
+                logClientEvent({
+                  event: 'saved_map_images_drained',
+                  data: {
+                    hunt_id: huntId,
+                    requested: metaList.filter((m) => m !== null).length,
+                    committed,
+                    failed: failedMeta,
+                    refs_count: refs.length,
+                  },
+                });
+              }
+            } catch (metaDrainErr: any) {
+              logClientEvent({
+                event: 'saved_map_images_drain_threw',
+                data: {
+                  hunt_id: huntId,
+                  error: metaDrainErr?.message || String(metaDrainErr),
+                },
+              });
+            }
           }
         } catch (err: any) {
           logClientEvent({
@@ -824,6 +1301,105 @@ export default function ResultsScreen() {
         </View>
         )}
 
+        {/* Task 9 — Saved analysis overlay markers panel.
+            Renders persisted AnalysisOverlayItem rows on top of the
+            saved primary image at the natural-aspect rendered size,
+            scaling x/y from the original image dims to the displayed
+            size. The panel is also the entry point for Task 10's
+            user-driven marker placement: an "Add Marker" toggle
+            puts the image into add-mode; a single tap on the image
+            opens the marker form. */}
+        {primaryImage &&
+          (analysisBasis?.naturalWidth || 0) > 0 &&
+          (analysisBasis?.naturalHeight || 0) > 0 && (
+          <View style={styles.savedMarkersSection}>
+            <View style={styles.savedMarkersHeader}>
+              <Ionicons name="bookmark" size={14} color={COLORS.accent} />
+              <Text style={styles.savedMarkersTitle}>
+                SAVED MARKERS ({savedOverlayItems.length})
+              </Text>
+              <View style={styles.savedMarkersHeaderSpacer} />
+              <TouchableOpacity
+                onPress={() => setMarkerAddMode(m => !m)}
+                style={[
+                  styles.addMarkerBtn,
+                  markerAddMode && styles.addMarkerBtnActive,
+                ]}
+                testID="saved-markers-add-toggle"
+              >
+                <Ionicons
+                  name={markerAddMode ? 'close' : 'add'}
+                  size={14}
+                  color={markerAddMode ? '#FFFFFF' : COLORS.accent}
+                />
+                <Text
+                  style={[
+                    styles.addMarkerBtnText,
+                    markerAddMode && styles.addMarkerBtnTextActive,
+                  ]}
+                >
+                  {markerAddMode ? 'Cancel' : 'Add Marker'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {markerAddMode && (
+              <View style={styles.addMarkerHint}>
+                <Ionicons name="hand-left" size={12} color={COLORS.fogGray} />
+                <Text style={styles.addMarkerHintText}>
+                  Tap the image to drop a marker
+                </Text>
+              </View>
+            )}
+            <SavedAnalysisOverlayImage
+              imageUri={primaryImage}
+              originalWidth={analysisBasis?.naturalWidth || 0}
+              originalHeight={analysisBasis?.naturalHeight || 0}
+              renderedWidth={FITTED_W}
+              renderedHeight={FITTED_H}
+              items={savedOverlayItems}
+              addMode={markerAddMode}
+              onTapPlaceMarker={handleTapPlaceMarker}
+              onEditItem={handleEditItem}
+              onDeleteItem={handleDeleteItem}
+              onRepositionItem={handleRepositionItem}
+              testID="saved-overlay-image-panel"
+            />
+          </View>
+        )}
+
+        {/* Task 10 — marker form (create + edit). Hidden when
+            markerForm is null. */}
+        <MarkerFormModal
+          visible={!!markerForm}
+          mode={markerForm?.mode === 'edit' ? 'edit' : 'create'}
+          initial={
+            markerForm?.mode === 'edit'
+              ? {
+                  type: markerForm.item.type as any,
+                  name: markerForm.item.label,
+                  notes: markerForm.item.description ?? '',
+                }
+              : undefined
+          }
+          placement={
+            markerForm?.mode === 'create' ? markerForm.placement : null
+          }
+          busy={markerBusy}
+          onSubmit={handleSubmitMarkerForm}
+          onDelete={
+            markerForm?.mode === 'edit'
+              ? () => {
+                  const it = markerForm.item;
+                  setMarkerForm(null);
+                  handleDeleteItem(it);
+                }
+              : undefined
+          }
+          onClose={() => {
+            if (!markerBusy) setMarkerForm(null);
+          }}
+        />
+
         {/* Selected Overlay Detail */}
         {selectedOverlay && (
           <View style={[styles.overlayDetail, { borderLeftColor: resolveOverlayColor(selectedOverlay) }]}>
@@ -1254,6 +1830,58 @@ const styles = StyleSheet.create({
   pageDotActive: { backgroundColor: COLORS.accent, width: 20 },
   // Reference images
   refImagesSection: { marginTop: 12 },
+  savedMarkersSection: {
+    marginTop: 16,
+    paddingHorizontal: 16,
+  },
+  savedMarkersHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  savedMarkersTitle: {
+    color: COLORS.accent,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  savedMarkersHeaderSpacer: { flex: 1 },
+  addMarkerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+    backgroundColor: 'transparent',
+  },
+  addMarkerBtnActive: {
+    backgroundColor: COLORS.accent,
+  },
+  addMarkerBtnText: {
+    color: COLORS.accent,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  addMarkerBtnTextActive: {
+    color: '#FFFFFF',
+  },
+  addMarkerHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  addMarkerHintText: {
+    color: COLORS.fogGray,
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
   refImagesTitle: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 8 },
   refImageCard: { width: 100, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)' },
   refImage: { width: 100, height: 70 },

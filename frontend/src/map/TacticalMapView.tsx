@@ -17,13 +17,37 @@ import { getFallbackStyleJSON } from '../map/MapProvider';
 import { useMapStylePreference } from '../hooks/useMapStylePreference';
 import { useAuth } from '../hooks/useAuth';
 
+interface CapturedGeoMeta {
+  northLat: number;
+  southLat: number;
+  westLng: number;
+  eastLng: number;
+  centerLat: number;
+  centerLng: number;
+  zoom: number;
+  bearing: number;
+  pitch: number;
+  originalWidth: number;
+  originalHeight: number;
+  styleUrl: string | null;
+}
+
 interface TacticalMapViewProps {
   center?: { lat: number; lon: number };
   zoom?: number;
   height?: number;
   showStyleSwitcher?: boolean;
   captureRequested?: number;
-  onCapture?: (base64: string) => void;
+  /**
+   * Called with the base64 dataURL captured from the live map.
+   * As of Task 5 a second `geoMeta` argument carries the bounds /
+   * camera state / pixel dimensions / style URL captured at the
+   * moment of capture so the saved image's geo metadata can be
+   * persisted independently of any later map movements. The arg
+   * is OPTIONAL so existing callers that only want the base64 keep
+   * working unchanged.
+   */
+  onCapture?: (base64: string, geoMeta?: CapturedGeoMeta | null) => void;
   /**
    * Optional initial style id. If omitted the persisted user
    * preference (or DEFAULT_MAP_STYLE_ID = "outdoor") is used.
@@ -193,7 +217,46 @@ export default function TacticalMapView({
             try {
               var canvas = map.getCanvas();
               var dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-              postToHost({ type: 'captureResult', data: dataUrl });
+
+              // Capture geo metadata at the EXACT moment of capture.
+              // The saved image must store these as the source of
+              // truth so later GPS placement doesn't depend on the
+              // live map's later position.
+              var geoMeta = null;
+              try {
+                var b = map.getBounds();
+                var c = map.getCenter();
+                var sUrl = null;
+                try {
+                  // MapLibre exposes getStyle().sprite/glyphs/sources;
+                  // the canonical "style URL" the host loaded with is
+                  // tracked by the host (via the setStyle messages),
+                  // so we just emit the current name when available.
+                  var styleObj = map.getStyle();
+                  sUrl = (styleObj && styleObj.name) ? styleObj.name : null;
+                } catch (eStyle) { sUrl = null; }
+                geoMeta = {
+                  northLat: b.getNorth(),
+                  southLat: b.getSouth(),
+                  westLng:  b.getWest(),
+                  eastLng:  b.getEast(),
+                  centerLat: c.lat,
+                  centerLng: c.lng,
+                  zoom: map.getZoom(),
+                  bearing: map.getBearing(),
+                  pitch: map.getPitch(),
+                  originalWidth: canvas.width,
+                  originalHeight: canvas.height,
+                  styleUrl: sUrl,
+                };
+              } catch (errMeta) {
+                // Capture still succeeds with base64 only; geoMeta
+                // stays null and the host will save the image as
+                // pixel-only (supports_geo_placement = false).
+                geoMeta = null;
+              }
+
+              postToHost({ type: 'captureResult', data: dataUrl, geoMeta: geoMeta });
             } catch(err) {
               postToHost({ type: 'captureError', error: String(err) });
             }
@@ -295,7 +358,7 @@ export default function TacticalMapView({
       try {
         const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
         if (data.type === 'captureResult' && data.data && onCapture) {
-          onCapture(data.data);
+          onCapture(data.data, (data.geoMeta as CapturedGeoMeta) ?? null);
         }
       } catch { /* noop */ }
     };
@@ -308,7 +371,7 @@ export default function TacticalMapView({
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.type === 'captureResult' && data.data && onCapture) {
-        onCapture(data.data);
+        onCapture(data.data, (data.geoMeta as CapturedGeoMeta) ?? null);
       }
     } catch { /* noop */ }
   }, [onCapture]);
