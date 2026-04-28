@@ -6815,3 +6815,123 @@ agent_communication:
       No production code modified.
 
       Main agent: please summarise and finish — Task 8 is green.
+
+  - task: "Task 9 — Render Returned Overlay Items on Saved Images (frontend)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/SavedAnalysisOverlayImage.tsx, /app/frontend/src/utils/savedOverlayLayout.ts, /app/frontend/src/constants/overlayItemTaxonomy.ts, /app/frontend/src/api/overlayItemsApi.ts, /app/frontend/app/results.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Task 9 implementation:
+
+            NEW FILES:
+              /app/frontend/src/components/SavedAnalysisOverlayImage.tsx
+                Saved-image overlay renderer. Takes the saved image
+                URI plus original (saved) and rendered (displayed)
+                dimensions, plus the persisted AnalysisOverlayItem[]
+                rows, and draws each marker at the scaled position:
+                    renderedX = (item.x / originalWidth)  * renderedWidth
+                    renderedY = (item.y / originalHeight) * renderedHeight
+                Tap a marker → bottom-sheet detail panel showing
+                Type / GPS / Source / Linked Asset (if any) /
+                Confidence. Pixel-only items show
+                "GPS: Not available for this image" instead of fake
+                coords. Visual styling uses a 17-type taxonomy that
+                covers every AnalysisOverlayItemType (stand, blind,
+                feeder, camera, parking, access_point, water, scrape,
+                rub, bedding, route, wind, funnel, travel_corridor,
+                recommended_setup, avoid_area, custom).
+
+              /app/frontend/src/utils/savedOverlayLayout.ts
+                Pure helper `computeOverlayRenderedAnchor(...)`. Returns
+                {renderedX, renderedY} or null when the item has no
+                usable saved x/y or dimensions are non-positive.
+                Never reads from any "live map" state, never falls
+                back to GPS, never invents coordinates.
+
+              /app/frontend/src/constants/overlayItemTaxonomy.ts
+                Icon / color / label mapping for AnalysisOverlayItem
+                types + coordinateSourceLabel() lookup. Inlines hex
+                color values so the module loads cleanly under the
+                node:test runner without dragging in react-native.
+
+              /app/frontend/src/api/overlayItemsApi.ts
+                Thin client over GET /api/hunts/:id/overlay-items
+                + bulkNormalizeOverlayItems + deleteOverlayItem.
+                Same non-throwing { ok, data | reason } contract
+                used by huntAssetsApi.
+
+            WIRED INTO /app/frontend/app/results.tsx:
+              * On hunt load, fetches `listOverlayItems(huntId)`.
+              * When persisted items exist AND the saved analysis
+                basis carries naturalWidth/naturalHeight, renders a
+                "SAVED MARKERS (N)" panel with
+                SavedAnalysisOverlayImage. Hidden for legacy hunts.
+              * Existing legacy x_percent/y_percent overlay flow
+                (DraggableMarker over ImageOverlayCanvas) is
+                untouched — saved overlays are an ADDITIONAL panel,
+                not a replacement.
+
+            UNIT TESTS:
+              /app/frontend/src/components/__tests__/SavedAnalysisOverlayImage.test.ts
+              16/16 PASS (yarn test:unit). Coverage:
+                ✓ render at expected scaled position (1:1)
+                ✓ image at half size scales overlays correctly (0.5x)
+                ✓ image at 1.5x scales overlays correctly
+                ✓ non-square scaling x and y independently
+                ✓ item with no x/y → null (no fabricated position)
+                ✓ NaN/Infinity coordinates → null
+                ✓ zero / negative dimensions rejected (no div-by-0)
+                ✓ saved x/y determines position (NOT GPS)
+                ✓ reload reproduces identical rendered anchor
+                ✓ multiple items map to distinct positions
+                ✓ coordinateSourceLabel for pixel_only / user_provided
+                ✓ unknown source codes fall back gracefully
+                ✓ getOverlayItemTypeInfo for known types
+                ✓ unknown types fall back to "Marker" / custom
+                ✓ null / undefined types handled
+
+            FULL FRONTEND TEST SUITE: 211/213 PASS (the 2 failures
+            are PRE-EXISTING in src/__tests__/huntStyles.test.ts and
+            unrelated to Task 9).
+
+            TYPESCRIPT: `npx tsc --noEmit -p .` clean.
+
+            NOTES FOR TESTING:
+              * The analyze flow does not yet POST to
+                /overlay-items:bulk-normalize (Task 10 territory),
+                so the new "SAVED MARKERS" panel is empty for
+                freshly analyzed hunts UNLESS bulk-normalize was
+                explicitly seeded for that hunt. Backend agent's
+                Task 8 run did seed items for hunt rs-task8-* —
+                opening one of those hunts would surface the panel
+                end-to-end.
+              * No backend changes were made in Task 9. The list
+                endpoint (Task 6) and bulk-normalize endpoint
+                (Task 8) are both confirmed working from prior runs.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Task 9 frontend implementation complete and unit-tested.
+
+        What's new on /results:
+          * "SAVED MARKERS (N)" panel under the analysis view that
+            renders persisted AnalysisOverlayItem rows on top of
+            the saved primary image. Coordinates come from the
+            saved x/y (original-image pixel grid) and are scaled
+            to the currently displayed size — never recalculated
+            from live map state, never fabricated for pixel-only
+            images.
+
+        New unit tests (16 cases) all pass; full suite 211/213.
+        TypeScript clean.
+
+        No backend changes. Ready for user to either accept the
+        completion or request the optional UI integration test
+        run via expo_frontend_testing_agent.

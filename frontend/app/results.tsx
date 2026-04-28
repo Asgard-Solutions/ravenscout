@@ -16,6 +16,9 @@ import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
 import { useAuth } from '../src/hooks/useAuth';
 import { logClientEvent } from '../src/utils/clientLog';
 import { ImageOverlayCanvas } from '../src/components/ImageOverlayCanvas';
+import { SavedAnalysisOverlayImage } from '../src/components/SavedAnalysisOverlayImage';
+import { listOverlayItems } from '../src/api/overlayItemsApi';
+import type { AnalysisOverlayItem } from '../src/types/geo';
 import {
   resolveAnalysisBasis,
   type ResolvedAnalysisBasis,
@@ -112,6 +115,12 @@ export default function ResultsScreen() {
   // locked to at save time. Overrides primary-map-index and hunt-level
   // locationCoords when present. See src/utils/analysisContext.ts.
   const [analysisBasis, setAnalysisBasis] = useState<ResolvedAnalysisBasis | null>(null);
+
+  // Task 9 — persisted AnalysisOverlayItem rows for this hunt. These
+  // are rendered inside SavedAnalysisOverlayImage with original-image
+  // x/y scaled to the current displayed image size. When the hunt
+  // has none (legacy / pre-Task-8 data), the panel hides itself.
+  const [savedOverlayItems, setSavedOverlayItems] = useState<AnalysisOverlayItem[]>([]);
 
   // v2 Overlay-to-Setup linking & focus
   const { focusState, linkedSetups, linkedObservations, focus, clearFocus } = useMapFocus(
@@ -213,6 +222,29 @@ export default function ResultsScreen() {
       if (timeout) clearTimeout(timeout);
     };
   }, [params.huntId]);
+
+  // Task 9 — fetch persisted overlay items (from
+  // /api/hunts/:id/overlay-items) once we know the hunt id. These
+  // are rendered in the saved-image overlay panel below the
+  // analysis view. Failures are silent — the panel just stays
+  // empty for legacy hunts that don't have any persisted items.
+  useEffect(() => {
+    let cancelled = false;
+    const huntId = (params.huntId as string | undefined) || (hunt as any)?.id;
+    if (!huntId) return;
+    (async () => {
+      const r = await listOverlayItems(huntId);
+      if (cancelled) return;
+      if (r.ok) {
+        setSavedOverlayItems(r.data.items || []);
+      } else {
+        setSavedOverlayItems([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [params.huntId, hunt?.id]);
 
   const { user } = useAuth();
 
@@ -941,6 +973,35 @@ export default function ResultsScreen() {
         </View>
         )}
 
+        {/* Task 9 — Saved analysis overlay markers panel.
+            Renders persisted AnalysisOverlayItem rows on top of the
+            saved primary image at the natural-aspect rendered size,
+            scaling x/y from the original image dims to the displayed
+            size. Hidden when there are no persisted items (legacy
+            hunts pre-Task-8) or when we don't know the saved image's
+            original pixel dimensions. */}
+        {savedOverlayItems.length > 0 && primaryImage &&
+          (analysisBasis?.naturalWidth || 0) > 0 &&
+          (analysisBasis?.naturalHeight || 0) > 0 && (
+          <View style={styles.savedMarkersSection}>
+            <View style={styles.savedMarkersHeader}>
+              <Ionicons name="bookmark" size={14} color={COLORS.accent} />
+              <Text style={styles.savedMarkersTitle}>
+                SAVED MARKERS ({savedOverlayItems.length})
+              </Text>
+            </View>
+            <SavedAnalysisOverlayImage
+              imageUri={primaryImage}
+              originalWidth={analysisBasis?.naturalWidth || 0}
+              originalHeight={analysisBasis?.naturalHeight || 0}
+              renderedWidth={FITTED_W}
+              renderedHeight={FITTED_H}
+              items={savedOverlayItems}
+              testID="saved-overlay-image-panel"
+            />
+          </View>
+        )}
+
         {/* Selected Overlay Detail */}
         {selectedOverlay && (
           <View style={[styles.overlayDetail, { borderLeftColor: resolveOverlayColor(selectedOverlay) }]}>
@@ -1371,6 +1432,22 @@ const styles = StyleSheet.create({
   pageDotActive: { backgroundColor: COLORS.accent, width: 20 },
   // Reference images
   refImagesSection: { marginTop: 12 },
+  savedMarkersSection: {
+    marginTop: 16,
+    paddingHorizontal: 16,
+  },
+  savedMarkersHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  savedMarkersTitle: {
+    color: COLORS.accent,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
   refImagesTitle: { color: COLORS.fogGray, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 8 },
   refImageCard: { width: 100, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(154, 164, 169, 0.2)' },
   refImage: { width: 100, height: 70 },
