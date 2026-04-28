@@ -5587,3 +5587,121 @@ agent_communication:
       Hunt GPS Assets + Saved Map Image geo metadata is now
       production-ready. Main agent: please summarise and finish.
 
+
+
+# ====================================================================
+# GPS / Pixel coordinate conversion utilities (Emergent Task 2)
+# ====================================================================
+
+frontend:
+  - task: "GPS ↔ saved-image pixel projection utilities"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/utils/geoProjection.ts, /app/frontend/src/utils/__tests__/geoProjection.test.ts, /app/frontend/package.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Added the reusable coordinate-conversion layer that the
+          marker / overlay placement features will build on. Scope
+          was strictly utilities + tests — NO UI, NO marker CRUD,
+          NO AI overlay logic.
+
+          NEW FILE: /app/frontend/src/utils/geoProjection.ts
+            * latLngToPixel({latitude, longitude, bounds,
+              originalDimensions, clamp?}) — equirectangular linear
+              projection from WGS-84 lat/lng to the SavedMapImage's
+              ORIGINAL pixel grid.
+            * pixelToLatLng({x, y, bounds, originalDimensions,
+              clamp?}) — inverse of latLngToPixel.
+            * scaleOriginalPixelToRenderedPixel({x, y,
+              originalDimensions, renderedDimensions}) — uniform
+              per-axis scale into the on-device rendered pixel grid.
+              Doc-string notes callers letterboxing the image inside
+              a container should pair with computeFittedImageRect
+              from imageFit.ts to add the letterbox offset.
+            * scaleRenderedPixelToOriginalPixel({renderedX,
+              renderedY, originalDimensions, renderedDimensions}) —
+              inverse of the above.
+            * GeoProjectionError extends Error — single error type
+              raised by every helper.
+
+          ASSUMPTIONS (called out in the file header):
+            * north-up image, no rotation, no perspective, no post-
+              save crop. Matches the SavedMapImage contract from Task 1.
+            * Antimeridian-crossing rectangles (eastLng < westLng)
+              are intentionally REJECTED here — the linear projection
+              cannot wrap, and silently producing garbage would be
+              worse than throwing.
+
+          VALIDATION / SAFETY (throws GeoProjectionError on):
+            * null / undefined bounds or dimensions
+            * zero or negative width/height
+            * inverted lat bounds (north <= south)
+            * east <= west bounds (zero-width or wrap-around)
+            * non-finite (NaN/Inf) lat / lng / pixel inputs
+            * out-of-range latitude (|lat| > 90) or longitude (|lng| > 180)
+            * clamp:true ONLY clamps the OUTPUT into the valid range.
+              Invalid INPUTS still throw — clamp is NEVER a 422-bypass.
+              Unit-tested.
+
+          NEW FILE: /app/frontend/src/utils/__tests__/geoProjection.test.ts
+            31 unit tests — all PASS via the project's existing
+            node:test + tsx harness (yarn test:unit). Coverage:
+              latLngToPixel:
+                - image center → center pixel
+                - NW corner → (0, 0); SE corner → (w, h)
+                - rejects out-of-range lat / lng / NaN / null bounds /
+                  zero width / zero height / inverted lat / east<=west
+                - outside-box no-clamp extrapolates
+                - outside-box clamp:true snaps to edge
+                - clamp:true does NOT silence invalid lat input
+              pixelToLatLng:
+                - pixel center → center lat/lng
+                - (0,0) → NW corner; (w,h) → SE corner
+                - round-trip with latLngToPixel preserves the point
+                - rejects non-finite x; null bounds; zero dims
+                - outside-image no-clamp extrapolates
+                - outside-image clamp:true snaps to bounds
+              scaleOriginalPixelToRenderedPixel:
+                - uniform 2× scale; non-uniform per-axis scale
+                - rejects zero rendered dims; non-finite x (Infinity)
+              scaleRenderedPixelToOriginalPixel:
+                - inverse halves rendered → original
+                - round-trip preserves the point (1e-9 tolerance)
+                - rejects zero original dims; null dims
+
+          MODIFIED FILE: /app/frontend/package.json
+            * Registered geoProjection.test.ts in the test:unit
+              script so the existing CI/dev runner picks it up.
+
+          PRE-EXISTING TEST FAILURES (UNRELATED):
+            * yarn test:unit shows 2 pre-existing failures in
+              src/__tests__/huntStyles.test.ts. Verified by stashing
+              my changes and re-running: the failures predate this
+              work. Net with my changes: 168 tests / 166 PASS / 2
+              pre-existing FAIL (unchanged), +31 NEW PASSING tests
+              from geoProjection.test.ts.
+
+          INTEGRATION GUIDANCE FOR FUTURE TASKS:
+            * Marker-placement UI should call latLngToPixel with
+              bounds + originalDimensions from SavedMapImage, then
+              pair with imageFit.ts to translate into the rendered
+              + letterbox-aware on-screen position.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Implemented the GPS / pixel coordinate conversion utilities
+      (Emergent Task 2). Pure-function module + 31 unit tests, all
+      green via the existing yarn test:unit runner. NO UI, NO
+      marker CRUD, NO AI overlay — strictly the four conversion
+      helpers + their guards. The 2 unrelated pre-existing
+      huntStyles.test.ts failures are NOT a regression from this
+      work. Frontend testing agent does not need to be involved
+      because there are no UI changes to verify; pure-function
+      tests already cover the contract end-to-end.
+
