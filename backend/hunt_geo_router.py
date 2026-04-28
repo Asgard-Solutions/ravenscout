@@ -588,6 +588,92 @@ def build_hunt_geo_router(db, get_current_user):
             "skipped": skipped,
         }
 
+    # ----------------------------------------------------------------
+    # POST /hunts/{hunt_id}/overlay-items:from-ai-analysis
+    #
+    # Idempotent helper invoked from /results.tsx when the page
+    # detects an analysis with overlays but zero persisted overlay
+    # rows. Translates the legacy `x_percent / y_percent` shape into
+    # absolute pixels (using the saved_map_image's original_width /
+    # original_height), then runs each through the same normalizer
+    # the bulk-normalize endpoint uses.
+    #
+    # Idempotency: when `analysis_id` is supplied, the endpoint
+    # short-circuits if at least one row already exists for that
+    # (user_id, hunt_id, analysis_id) tuple — so a /results reload
+    # cannot double-persist.
+    # ----------------------------------------------------------------
+
+    @router.post("/hunts/{hunt_id}/overlay-items:from-ai-analysis")
+    async def from_ai_analysis(hunt_id: str, request: Request):
+        user = await get_current_user(request)
+        uid = user["user_id"]
+        await _require_hunt(uid, hunt_id)
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail="Invalid JSON body")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=422, detail="Body must be an object")
+
+        ai_overlays = body.get("ai_overlays") or []
+        if not isinstance(ai_overlays, list):
+            raise HTTPException(status_code=422, detail="`ai_overlays` must be a list")
+        analysis_id = body.get("analysis_id")
+        saved_map_image_id = body.get("saved_map_image_id")
+
+        # Idempotency guard.
+        if analysis_id:
+            try:
+                existing = await db.analysis_overlay_items.find_one(
+                    {"user_id": uid, "hunt_id": hunt_id, "analysis_id": analysis_id},
+                    {"_id": 0, "item_id": 1},
+                )
+                if existing:
+                    return {
+                        "ok": True,
+                        "skipped_reason": "already_persisted_for_analysis_id",
+                        "persisted": 0,
+                        "skipped": len(ai_overlays),
+                    }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "from-ai-analysis: idempotency check failed: %s", exc,
+                )
+
+        # Defer to the shared helper — keeps the percent→pixel
+        # conversion + normalizer + insert loop in one place.
+        from persist_ai_overlays import persist_ai_overlays  # noqa: WPS433
+
+        # Load hunt assets once (the helper expects them as a list).
+        try:
+            asset_cursor = db.hunt_location_assets.find(
+                {"user_id": uid, "hunt_id": hunt_id}, {"_id": 0}
+            )
+            hunt_assets = [a async for a in asset_cursor]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "from-ai-analysis: asset load failed for hunt=%s: %s", hunt_id, exc,
+            )
+            hunt_assets = []
+
+        summary = await persist_ai_overlays(
+            db,
+            user_id=uid,
+            hunt_id=hunt_id,
+            analysis_id=analysis_id,
+            saved_map_image_id=saved_map_image_id,
+            overlays=ai_overlays,
+            hunt_assets=hunt_assets,
+        )
+        return {
+            "ok": bool(summary.get("ok")),
+            "persisted": int(summary.get("persisted") or 0),
+            "skipped": int(summary.get("skipped") or 0),
+            "reason": summary.get("reason"),
+        }
+
     return router
 
 

@@ -261,6 +261,38 @@ export async function updateOverlayItem(
 }
 
 // ----------------------------------------------------------------
+// Persist AI-returned overlays for a hunt
+// ----------------------------------------------------------------
+
+export interface AiOverlayInput {
+  type: string;
+  label: string;
+  x_percent: number;
+  y_percent: number;
+  reasoning?: string | null;
+  confidence?: string | null;
+}
+
+export async function persistOverlaysFromAiAnalysis(
+  huntId: string,
+  payload: {
+    analysisId?: string | null;
+    savedMapImageId?: string | null;
+    aiOverlays: AiOverlayInput[];
+  },
+): Promise<ApiResult<{ ok: boolean; persisted: number; skipped: number; reason?: string | null }>> {
+  return request(
+    'POST',
+    `/api/hunts/${encodeURIComponent(huntId)}/overlay-items:from-ai-analysis`,
+    {
+      analysis_id: payload.analysisId ?? null,
+      saved_map_image_id: payload.savedMapImageId ?? null,
+      ai_overlays: payload.aiOverlays,
+    },
+  );
+}
+
+// ----------------------------------------------------------------
 // Delete (utility — used by future marker CRUD)
 // ----------------------------------------------------------------
 

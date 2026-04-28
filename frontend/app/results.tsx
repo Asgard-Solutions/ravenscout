@@ -23,6 +23,7 @@ import {
   createOverlayItem,
   updateOverlayItem,
   deleteOverlayItem,
+  persistOverlaysFromAiAnalysis,
 } from '../src/api/overlayItemsApi';
 import { listSavedMapImages } from '../src/api/savedMapImagesApi';
 import { savedMapImageFromWire } from '../src/types/geo';
@@ -286,6 +287,52 @@ export default function ResultsScreen() {
       cancelled = true;
     };
   }, [params.huntId, hunt?.id]);
+
+  // Task 11 follow-up — auto-persist AI overlays from the analysis
+  // into analysis_overlay_items the FIRST time we see a hunt with
+  // overlays but no persisted rows. Idempotent on the server side
+  // (analysis_id short-circuits a duplicate batch). Best-effort:
+  // failures are silent and the saved-overlay panel just stays
+  // empty for that analysis.
+  const aiPersistAttemptedRef = React.useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const huntId = (params.huntId as string | undefined) || hunt?.id;
+    if (!huntId) return;
+    if (savedOverlayItems.length > 0) return;
+    if (!savedMapImage) return;
+    const overlays = hunt?.result?.overlays;
+    if (!overlays || overlays.length === 0) return;
+    const analysisId = hunt?.result?.id;
+    const key = `${huntId}:${analysisId || 'no-aid'}`;
+    if (aiPersistAttemptedRef.current.has(key)) return;
+    aiPersistAttemptedRef.current.add(key);
+    (async () => {
+      const r = await persistOverlaysFromAiAnalysis(huntId, {
+        analysisId: analysisId || null,
+        savedMapImageId: savedMapImage.id,
+        aiOverlays: overlays.map((o: any) => ({
+          type: String(o.type || 'custom'),
+          label: String(o.label || ''),
+          x_percent: Number(o.x_percent),
+          y_percent: Number(o.y_percent),
+          reasoning: o.reasoning ?? null,
+          confidence: o.confidence ?? null,
+        })),
+      });
+      if (r.ok && (r.data.persisted ?? 0) > 0) {
+        // Re-list so the SAVED MARKERS panel surfaces the new rows.
+        const refresh = await listOverlayItems(huntId);
+        if (refresh.ok) setSavedOverlayItems(refresh.data.items);
+      }
+    })();
+  }, [
+    params.huntId,
+    hunt?.id,
+    hunt?.result?.id,
+    hunt?.result?.overlays?.length,
+    savedOverlayItems.length,
+    savedMapImage,
+  ]);
 
   // Task 10 — handlers for add / edit / delete on the saved-marker
   // panel. Each calls the API, updates local state on success, and

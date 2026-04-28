@@ -1372,6 +1372,11 @@ class AnalyzeRequest(BaseModel):
     # before the hunt has a server-side row. Takes precedence over
     # the Mongo lookup when both are present.
     location_assets: Optional[List[AnalyzeRequestLocationAsset]] = None
+    # Task 11 follow-up: when supplied, AI-returned overlays are
+    # normalized via overlay_normalizer and persisted into
+    # analysis_overlay_items, attached to this saved_map_image_id.
+    # Optional + best-effort — analyze never blocks on persistence.
+    saved_map_image_id: Optional[str] = None
 
 class OverlayMarker(BaseModel):
     type: str
@@ -1868,6 +1873,33 @@ async def analyze_hunt(request: Request):
         # Attach v2 data if available
         if raw_result.get("v2"):
             result["v2"] = raw_result["v2"]
+
+        # Task 11 follow-up: persist AI overlays into
+        # analysis_overlay_items so the SAVED MARKERS panel on
+        # /results restores them after a reload. Best-effort —
+        # logged but never blocks the analyze response.
+        try:
+            from persist_ai_overlays import persist_ai_overlays
+            persist_summary = await persist_ai_overlays(
+                db,
+                user_id=user["user_id"],
+                hunt_id=analyze_req.hunt_id,
+                analysis_id=result_id,
+                saved_map_image_id=analyze_req.saved_map_image_id,
+                overlays=result.get("overlays") or [],
+                hunt_assets=loaded_assets,
+            )
+            logger.info(
+                "persist_ai_overlays summary user=%s hunt=%s -> %s",
+                user["user_id"], analyze_req.hunt_id, persist_summary,
+            )
+            # Surface the analysis_id on the response so the client
+            # can correlate persisted items with this run.
+            result["analysis_id"] = result_id
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "persist_ai_overlays unexpected failure: %s", exc,
+            )
 
         # Enhanced-rollout decision is exposed as a TOP-LEVEL sibling
         # field on the response, NOT as a nested key on `result`. This

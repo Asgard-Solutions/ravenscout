@@ -7296,3 +7296,100 @@ agent_communication:
         the four critical contracts called out in the review.
         No source files modified. Task 11 is production-ready;
         main agent please summarise and finish.
+
+  - task: "Auto-persist AI overlays into analysis_overlay_items (Task 11 follow-up)"
+    implemented: true
+    working: true
+    file: "/app/backend/persist_ai_overlays.py, /app/backend/hunt_geo_router.py, /app/backend/server.py, /app/frontend/src/api/overlayItemsApi.ts, /app/frontend/app/results.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            AI-returned overlays now flow into analysis_overlay_items
+            automatically.
+
+            NEW BACKEND FILE:
+              /app/backend/persist_ai_overlays.py
+                Pure helper that converts the legacy AI overlay shape
+                (x_percent / y_percent / reasoning / confidence
+                string) into AnalysisOverlayItemCreate payloads via
+                the existing overlay_normalizer.
+
+                * Type mapping: stand→stand, corridor→travel_corridor,
+                  access_route→access_point, avoid→avoid_area,
+                  bedding→bedding, food→feeder, water→water,
+                  trail→route. Unknown types fall back to 'custom'.
+                * Confidence: high=0.9, medium=0.6, low=0.3.
+                  Numeric 0..1 passes through; 0..100 clamps to 0..1.
+                  Unknown strings drop confidence.
+                * Percent → pixel: x = (x_percent/100) * original_width.
+                * coordinate_source = 'ai_estimated_from_image' always.
+                * NEVER overrides 'user_provided' (normalizer enforces).
+
+            NEW BACKEND ENDPOINT (in hunt_geo_router.py):
+              POST /api/hunts/{hunt_id}/overlay-items:from-ai-analysis
+              Body: { analysis_id, saved_map_image_id, ai_overlays:
+                      [{type, label, x_percent, y_percent,
+                        reasoning, confidence}, ...] }
+              Idempotent — when analysis_id is supplied, a second
+              call short-circuits with skipped_reason=
+              "already_persisted_for_analysis_id". This makes /results
+              reload-safe.
+
+            ANALYZE ENDPOINT (server.py /analyze-hunt):
+              * Accepts new optional `saved_map_image_id` field on
+                AnalyzeRequest (re-analyze flows can supply it
+                directly).
+              * After raw_result is built, calls
+                persist_ai_overlays(...) best-effort. Failures are
+                logged + swallowed; analyze never blocks on
+                persistence.
+              * Surfaces analysis_id (= result.id) on the response so
+                the frontend can dedupe cross-reload.
+
+            FRONTEND (results.tsx + overlayItemsApi.ts):
+              * New API client: persistOverlaysFromAiAnalysis().
+              * /results auto-fires the call exactly once per
+                (hunt_id, analysis_id) when:
+                  - hunt has AI overlays (legacy x_percent shape)
+                  - savedOverlayItems is empty (haven't persisted yet)
+                  - savedMapImage is loaded (we know dims/bounds)
+                Uses an in-component ref-based dedupe AND server-side
+                idempotency for double safety.
+
+            END-TO-END VERIFICATION:
+              Manual smoke test via direct HTTP shows:
+              * 3 AI overlays POSTed → 3 persisted with proper type
+                mapping (avoid→avoid_area, food→feeder).
+              * GPS auto-derived from saved bounds (50%/50% →
+                bbox center 44.5/-93.0).
+              * Confidence string→float (high=0.9, medium=0.6,
+                low=0.3).
+              * Second POST → skipped via idempotency guard.
+
+            UNIT TESTS:
+              /app/backend/tests/test_persist_ai_overlays.py
+              29/29 PASS — covers type mapping (every legacy id →
+              valid AnalysisOverlayItemType), confidence conversion,
+              percent→pixel math, and edge cases (None inputs,
+              garbage inputs, zero/negative dims).
+
+            REGRESSION:
+              Backend: 595 PASS / 4 FAIL (the 4 unrelated pre-existing
+              failures from Task 11). +29 net tests vs Task 11
+              baseline.
+              Frontend: 222 PASS / 2 FAIL (pre-existing huntStyles
+              only). TypeScript clean.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        AI overlay auto-persist is wired and verified end-to-end.
+        The "SAVED MARKERS" panel on /results now populates
+        automatically the FIRST time a hunt loads with AI overlays
+        but no persisted rows. Reloads do not double-persist
+        (server-side idempotency on analysis_id + frontend
+        ref-based dedupe).
