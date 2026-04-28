@@ -1,262 +1,445 @@
-"""Smoke test for the overlay-taxonomy unification on /api/analyze-hunt.
+"""Backend test harness for Hunt GPS Assets + Saved Map Image geo metadata.
 
-Runs against the preview URL using the seeded Pro test session, exercises
-POST /api/analyze-hunt end-to-end, and asserts:
-  * every overlay.type is one of the 8 canonical slugs,
-  * every overlay.color is the canonical hex per overlay_taxonomy.py,
-  * data.result_v1 (legacy shape) carries the canonical color through,
-  * hunt_style_resolution + region_resolution + enhanced_rollout meta
-    envelopes are still present (no regression).
-
-Also runs a unit-style call to schema_validator.normalize_v2_response
-to confirm that a bogus color like 'rebeccapurple' is overwritten with
-the canonical hex.
+Tests against EXPO_PUBLIC_BACKEND_URL/api per the testing protocol.
+Auth: Bearer test_session_rs_001 (Pro user test-user-001).
+Cross-user check: Bearer test_session_trial_001 (Trial user).
 """
 from __future__ import annotations
 
-import base64
 import os
 import sys
 import time
-from io import BytesIO
+import uuid
+import json
 
 import requests
 
-# Backend import for unit-style validator check.
-sys.path.insert(0, "/app/backend")
-from schema_validator import normalize_v2_response, convert_v2_to_v1  # noqa: E402
-
 BASE = os.environ.get(
-    "RAVEN_TEST_BASE_URL",
-    "https://map-legend.preview.emergentagent.com",
-).rstrip("/")
-API = f"{BASE}/api"
+    "EXPO_PUBLIC_BACKEND_URL",
+    "https://hunt-analysis-pro.preview.emergentagent.com",
+).rstrip("/") + "/api"
+
 PRO_TOKEN = "test_session_rs_001"
+TRIAL_TOKEN = "test_session_trial_001"
 
-CANONICAL_COLORS = {
-    "stand":        "#2E7D32",
-    "corridor":     "#F57C00",
-    "access_route": "#42A5F5",
-    "avoid":        "#C62828",
-    "bedding":      "#8D6E63",
-    "food":         "#66BB6A",
-    "water":        "#29B6F6",
-    "trail":        "#FFCA28",
-}
-CANONICAL_TYPES = set(CANONICAL_COLORS.keys())
+H_PRO = {"Authorization": f"Bearer {PRO_TOKEN}", "Content-Type": "application/json"}
+H_TRIAL = {"Authorization": f"Bearer {TRIAL_TOKEN}", "Content-Type": "application/json"}
 
-passes: list[str] = []
-fails: list[str] = []
+passed = 0
+failed: list[str] = []
 
 
-def check(name: str, cond: bool, detail: str = "") -> None:
+def check(label: str, cond: bool, detail: str = "") -> None:
+    global passed
     if cond:
-        passes.append(name)
-        print(f"PASS  {name}")
+        passed += 1
+        print(f"  PASS  {label}")
     else:
-        fails.append(f"{name}  — {detail}")
-        print(f"FAIL  {name}  — {detail}")
+        failed.append(f"{label}  --  {detail}")
+        print(f"  FAIL  {label}  --  {detail}")
 
 
-# ---------------------------------------------------------------
-# 1) Validator: rebeccapurple -> canonical hex; all 8 types stamped
-# ---------------------------------------------------------------
-print("\n=== Validator color override ===")
-
-raw_bad = {
-    "schema_version": "v2", "summary": "t",
-    "analysis_context": {"image_count": 1, "evidence_level": "moderate",
-                         "used_multi_image_correlation": False},
-    "map_observations": [],
-    "overlays": [{
-        "id": "ov_rp", "type": "corridor", "label": "L", "reason": "R",
-        "color": "rebeccapurple",
-        "x_percent": 50, "y_percent": 50, "radius_percent": 4,
-        "confidence": 0.7, "based_on": [],
-    }],
-    "top_setups": [],
-    "wind_notes": {"prevailing_wind_analysis": "", "danger_zones": [],
-                   "best_downwind_sides": [], "wind_shift_risk": "medium"},
-    "best_time": {"primary_window": "", "secondary_window": "", "explanation": ""},
-    "key_assumptions": [], "species_tips": [],
-    "confidence_summary": {"overall_confidence": 0.5, "main_limitations": []},
-}
-norm, _ = normalize_v2_response(raw_bad)
-check("validator stamps canonical hex over rebeccapurple",
-      norm["overlays"][0]["color"] == "#F57C00",
-      f"got {norm['overlays'][0].get('color')}")
-
-raw_all = {
-    "schema_version": "v2", "summary": "t",
-    "analysis_context": {"image_count": 1, "evidence_level": "moderate",
-                         "used_multi_image_correlation": False},
-    "map_observations": [],
-    "overlays": [
-        {"id": f"ov_{i}", "type": t, "label": "L", "reason": "R",
-         "color": "rebeccapurple",
-         "x_percent": 50, "y_percent": 50, "radius_percent": 4,
-         "confidence": 0.7, "based_on": []}
-        for i, t in enumerate(CANONICAL_TYPES)
-    ],
-    "top_setups": [],
-    "wind_notes": {"prevailing_wind_analysis": "", "danger_zones": [],
-                   "best_downwind_sides": [], "wind_shift_risk": "medium"},
-    "best_time": {"primary_window": "", "secondary_window": "", "explanation": ""},
-    "key_assumptions": [], "species_tips": [],
-    "confidence_summary": {"overall_confidence": 0.5, "main_limitations": []},
-}
-norm_all, _ = normalize_v2_response(raw_all)
-bad = [(ov["type"], ov.get("color")) for ov in norm_all["overlays"]
-       if ov.get("color") != CANONICAL_COLORS[ov["type"]]]
-check("validator stamps canonical hex for all 8 types", not bad,
-      f"mismatches: {bad}")
+def http(method: str, path: str, headers=H_PRO, json_body=None, params=None):
+    url = f"{BASE}{path}"
+    try:
+        r = requests.request(
+            method,
+            url,
+            headers=headers,
+            json=json_body,
+            params=params,
+            timeout=30,
+        )
+    except Exception as exc:
+        return None, {"_error": str(exc)}
+    try:
+        body = r.json()
+    except Exception:
+        body = {"_raw": r.text}
+    return r.status_code, body
 
 
-# ---------------------------------------------------------------
-# 2) Live POST /api/analyze-hunt
-# ---------------------------------------------------------------
-print("\n=== Live POST /api/analyze-hunt ===")
+def main():
+    ts = int(time.time())
+    HUNT_ID = f"hunt_geo_test_{ts}_{uuid.uuid4().hex[:6]}"
 
-def make_png_base64(size: int = 256) -> str:
-    from PIL import Image
-    import random
-    img = Image.new("RGB", (size, size), (90, 110, 70))
-    px = img.load()
-    random.seed(42)
-    for y in range(size):
-        for x in range(size):
-            v = (x * 13 + y * 17 + random.randint(0, 30)) % 256
-            px[x, y] = (v, (v + 40) % 256, (v + 80) % 256)
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+    print("=" * 70)
+    print(f"Base URL: {BASE}")
+    print(f"Test hunt_id: {HUNT_ID}")
+    print("=" * 70)
 
+    # ---------------- PRE-STEP: create parent hunt ----------------
+    print("\n--- PRE-STEP: Create parent hunt ---")
+    code, body = http(
+        "POST",
+        "/hunts",
+        json_body={
+            "hunt_id": HUNT_ID,
+            "metadata": {
+                "species": "whitetail",
+                "speciesName": "Whitetail Deer",
+                "date": "2026-02-01",
+                "timeWindow": "AM",
+                "windDirection": "N",
+            },
+        },
+    )
+    check("PRE: POST /api/hunts -> 200", code == 200, f"got {code} body={body}")
+    if code != 200:
+        print("FATAL: cannot create parent hunt; aborting.")
+        return
 
-payload = {
-    "map_image_base64": make_png_base64(256),
-    "conditions": {
-        "animal": "deer",
-        "hunt_date": "2026-11-15",
-        "time_window": "morning",
-        "wind_direction": "NW",
-        "temperature": "38F",
-        "property_type": "private",
-        "hunt_style": "archery",
-        "latitude": 31.2956,
-        "longitude": -95.9778,
-    },
-}
-headers = {"Authorization": f"Bearer {PRO_TOKEN}",
-           "Content-Type": "application/json"}
-
-t0 = time.time()
-r = requests.post(f"{API}/analyze-hunt", headers=headers, json=payload, timeout=240)
-elapsed = time.time() - t0
-print(f"HTTP {r.status_code} in {elapsed:.1f}s")
-
-check("analyze-hunt returns 200", r.status_code == 200, f"body start: {r.text[:300]}")
-
-data = r.json()
-check("analyze-hunt success=true", data.get("success") is True,
-      f"error: {data.get('error')}")
-
-result = data.get("result") or {}
-overlays = result.get("overlays") or []
-check("result.overlays is non-empty list",
-      isinstance(overlays, list) and len(overlays) > 0,
-      f"overlays len={len(overlays)}")
-
-type_problems: list[str] = []
-color_problems: list[str] = []
-for i, ov in enumerate(overlays):
-    t = ov.get("type")
-    c = ov.get("color")
-    if t not in CANONICAL_TYPES:
-        type_problems.append(f"overlay[{i}] type={t!r}")
-    else:
-        expected = CANONICAL_COLORS[t]
-        if c != expected:
-            color_problems.append(
-                f"overlay[{i}] type={t} color={c!r} expected={expected}"
-            )
-check("every overlay.type ∈ canonical 8", not type_problems,
-      "; ".join(type_problems))
-check("every overlay.color is canonical hex for its type",
-      not color_problems, "; ".join(color_problems))
-
-# Report observed types for transparency
-print(f"Observed overlay types: "
-      f"{sorted({ov.get('type') for ov in overlays})}")
-
-# v1 compat: either inline on response or recomputed locally.
-# v1 compat: either inline on response or recomputed locally from
-# a clean v2 shape. Note that `data.result` is already a v1-shaped
-# AnalysisResult, not v2 (confidence is a string) — so we invoke
-# convert_v2_to_v1 via a freshly validated v2 payload that reuses
-# the LIVE response's overlay types + canonical colors. This proves
-# the legacy conversion path stamps the color through.
-result_v1 = data.get("result_v1") or data.get("resultV1") or {}
-v1_overlays = result_v1.get("overlays") or []
-if not v1_overlays:
-    v2_shaped = {
-        "schema_version": "v2", "summary": "t",
-        "analysis_context": {"image_count": 1, "evidence_level": "moderate",
-                             "used_multi_image_correlation": False},
-        "map_observations": [],
-        "overlays": [
-            {"id": f"ov_{i}", "type": ov.get("type", "stand"),
-             "label": ov.get("label", "L"), "reason": ov.get("reasoning", "R"),
-             "x_percent": ov.get("x_percent", 50),
-             "y_percent": ov.get("y_percent", 50),
-             "radius_percent": 4, "confidence": 0.7, "based_on": []}
-            for i, ov in enumerate(overlays)
-        ],
-        "top_setups": [],
-        "wind_notes": {"prevailing_wind_analysis": "", "danger_zones": [],
-                       "best_downwind_sides": [], "wind_shift_risk": "medium"},
-        "best_time": {"primary_window": "", "secondary_window": "", "explanation": ""},
-        "key_assumptions": [], "species_tips": [],
-        "confidence_summary": {"overall_confidence": 0.5, "main_limitations": []},
+    # ============================================================
+    # A. Hunt Location Assets
+    # ============================================================
+    print("\n--- A1: Happy path POST /api/hunts/{hid}/assets ---")
+    payload = {
+        "type": "stand",
+        "name": "North ridge stand",
+        "latitude": 44.9778,
+        "longitude": -93.265,
+        "notes": "trail cam covers SW",
     }
-    v2_norm, _ = normalize_v2_response(v2_shaped)
-    v1_overlays = convert_v2_to_v1(v2_norm).get("overlays") or []
-    print(f"(v1 overlays computed from normalized v2, count={len(v1_overlays)})")
+    code, body = http("POST", f"/hunts/{HUNT_ID}/assets", json_body=payload)
+    check("A1.status==200", code == 200, f"got {code} body={body}")
+    asset = (body or {}).get("asset", {}) if isinstance(body, dict) else {}
+    aid = asset.get("asset_id", "")
+    check("A1.asset_id starts with 'hla_'", isinstance(aid, str) and aid.startswith("hla_"), f"asset_id={aid}")
+    check("A1.user_id==test-user-001", asset.get("user_id") == "test-user-001", f"user_id={asset.get('user_id')}")
+    check("A1.hunt_id matches path", asset.get("hunt_id") == HUNT_ID, f"hunt_id={asset.get('hunt_id')}")
+    check("A1.created_at == updated_at", asset.get("created_at") and asset.get("created_at") == asset.get("updated_at"),
+          f"c={asset.get('created_at')} u={asset.get('updated_at')}")
+    happy_asset_id = aid
 
-v1_color_problems: list[str] = []
-for i, ov in enumerate(v1_overlays):
-    t = ov.get("type")
-    c = ov.get("color")
-    if t in CANONICAL_TYPES and c != CANONICAL_COLORS[t]:
-        v1_color_problems.append(f"v1_overlay[{i}] type={t} color={c!r}")
-check("convert_v2_to_v1 carries canonical color through",
-      not v1_color_problems, "; ".join(v1_color_problems))
+    # A2 each canonical type
+    print("\n--- A2: All canonical types accepted ---")
+    canonical_types = ["stand", "blind", "feeder", "camera", "parking", "access_point",
+                       "water", "scrape", "rub", "bedding", "custom"]
+    type_asset_ids = {}
+    for t in canonical_types:
+        code, body = http(
+            "POST",
+            f"/hunts/{HUNT_ID}/assets",
+            json_body={
+                "type": t,
+                "name": f"Asset {t}",
+                "latitude": 44.0 + 0.01 * canonical_types.index(t),
+                "longitude": -93.0 - 0.01 * canonical_types.index(t),
+            },
+        )
+        ok = code == 200
+        check(f"A2.type='{t}' -> 200", ok, f"got {code} body={body}")
+        if ok:
+            type_asset_ids[t] = body["asset"]["asset_id"]
 
-# Regressions
-rr = data.get("region_resolution") or {}
-check("region_resolution present with resolvedRegionId",
-      isinstance(rr, dict) and "resolvedRegionId" in rr, f"rr={rr!r}")
+    # A3 invalid latitude
+    print("\n--- A3: Invalid latitude ---")
+    for bad in (99, -91):
+        code, body = http("POST", f"/hunts/{HUNT_ID}/assets", json_body={
+            "type": "stand", "name": "x", "latitude": bad, "longitude": -93.0
+        })
+        check(f"A3.latitude={bad} -> 422", code == 422, f"got {code} body={body}")
 
-hsr = data.get("hunt_style_resolution") or {}
-check("hunt_style_resolution present with styleId",
-      isinstance(hsr, dict) and "styleId" in hsr, f"hsr={hsr!r}")
-check("hunt_style_resolution.styleId == 'archery'",
-      hsr.get("styleId") == "archery", f"got {hsr.get('styleId')!r}")
+    # A4 invalid longitude
+    print("\n--- A4: Invalid longitude ---")
+    for bad in (181, -181):
+        code, body = http("POST", f"/hunts/{HUNT_ID}/assets", json_body={
+            "type": "stand", "name": "x", "latitude": 44.0, "longitude": bad
+        })
+        check(f"A4.longitude={bad} -> 422", code == 422, f"got {code} body={body}")
 
-er = data.get("enhanced_rollout")
-check("enhanced_rollout top-level sibling present",
-      isinstance(er, dict) and "enhanced_analysis_enabled" in er,
-      f"er={er!r}")
+    # A5 NaN latitude (raw JSON allowing NaN)
+    print("\n--- A5: NaN latitude ---")
+    url = f"{BASE}/hunts/{HUNT_ID}/assets"
+    raw = '{"type":"stand","name":"x","latitude":NaN,"longitude":-93.0}'
+    try:
+        r = requests.post(url, headers=H_PRO, data=raw, timeout=30)
+        code = r.status_code
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+    except Exception as exc:
+        code = None
+        body = str(exc)
+    check("A5.NaN latitude -> 422", code == 422, f"got {code} body={body}")
 
-result_meta = result.get("meta") or {}
-leak = "enhanced_analysis" in result_meta
-check("result.meta does NOT leak enhanced_analysis (post-crash-fix holds)",
-      not leak, f"result.meta={result_meta!r}")
+    # A6 unknown type
+    print("\n--- A6: Unknown type 'chair' ---")
+    code, body = http("POST", f"/hunts/{HUNT_ID}/assets", json_body={
+        "type": "chair", "name": "x", "latitude": 44.0, "longitude": -93.0
+    })
+    check("A6.type='chair' -> 422", code == 422, f"got {code} body={body}")
 
-print("\n" + "=" * 70)
-print(f"PASS: {len(passes)}   FAIL: {len(fails)}")
-if fails:
-    print("\nFAILURES:")
-    for f in fails:
-        print("  -", f)
-    sys.exit(1)
-print("All smoke checks green.")
+    # A7 missing name
+    print("\n--- A7: Missing name ---")
+    code, body = http("POST", f"/hunts/{HUNT_ID}/assets", json_body={
+        "type": "stand", "latitude": 44.0, "longitude": -93.0
+    })
+    check("A7.no name -> 422", code == 422, f"got {code} body={body}")
+
+    # A8 blank name
+    print("\n--- A8: Blank name '   ' ---")
+    code, body = http("POST", f"/hunts/{HUNT_ID}/assets", json_body={
+        "type": "stand", "name": "   ", "latitude": 44.0, "longitude": -93.0
+    })
+    check("A8.blank name -> 422", code == 422, f"got {code} body={body}")
+
+    # A9 non-existent hunt
+    print("\n--- A9: Non-existent hunt_id ---")
+    code, body = http("POST", "/hunts/hunt_does_not_exist/assets", json_body={
+        "type": "stand", "name": "x", "latitude": 44.0, "longitude": -93.0
+    })
+    check("A9.unknown hunt -> 404", code == 404, f"got {code} body={body}")
+    detail = (body or {}).get("detail") if isinstance(body, dict) else None
+    check("A9.detail == 'Hunt not found'", detail == "Hunt not found", f"detail={detail}")
+
+    # A10 list assets
+    print("\n--- A10: List assets ---")
+    code, body = http("GET", f"/hunts/{HUNT_ID}/assets")
+    check("A10.GET list -> 200", code == 200, f"got {code} body={body}")
+    assets_list = (body or {}).get("assets") or []
+    expected_count = 1 + len(canonical_types)  # happy + 11 types
+    check(f"A10.count=={expected_count}", (body or {}).get("count") == expected_count,
+          f"count={body.get('count') if isinstance(body, dict) else None} (expected {expected_count})")
+    cas = [a.get("created_at", "") for a in assets_list]
+    check("A10.sorted asc by created_at", cas == sorted(cas), f"cas={cas}")
+
+    # A11 GET single asset
+    print("\n--- A11: GET single asset ---")
+    code, body = http("GET", f"/hunts/{HUNT_ID}/assets/{happy_asset_id}")
+    check("A11.GET asset -> 200", code == 200, f"got {code} body={body}")
+    check("A11.asset_id matches",
+          isinstance(body, dict) and body.get("asset", {}).get("asset_id") == happy_asset_id,
+          f"body={body}")
+
+    # A12 PUT update name
+    print("\n--- A12: PUT rename asset ---")
+    time.sleep(0.05)
+    code, body = http("PUT", f"/hunts/{HUNT_ID}/assets/{happy_asset_id}", json_body={"name": "renamed"})
+    check("A12.PUT -> 200", code == 200, f"got {code} body={body}")
+    upd = (body or {}).get("asset", {}) if isinstance(body, dict) else {}
+    check("A12.name=='renamed'", upd.get("name") == "renamed", f"name={upd.get('name')}")
+    check("A12.updated_at advanced",
+          upd.get("updated_at") and upd.get("updated_at") > upd.get("created_at", ""),
+          f"c={upd.get('created_at')} u={upd.get('updated_at')}")
+
+    # A13 PUT invalid latitude
+    print("\n--- A13: PUT invalid latitude=999 ---")
+    code, body = http("PUT", f"/hunts/{HUNT_ID}/assets/{happy_asset_id}", json_body={"latitude": 999})
+    check("A13.PUT lat=999 -> 422", code == 422, f"got {code} body={body}")
+
+    # A14 DELETE asset
+    print("\n--- A14: DELETE asset ---")
+    code, body = http("DELETE", f"/hunts/{HUNT_ID}/assets/{happy_asset_id}")
+    check("A14.DELETE -> 200", code == 200, f"got {code} body={body}")
+    check("A14.deleted==1", isinstance(body, dict) and body.get("deleted") == 1, f"body={body}")
+    code, body = http("GET", f"/hunts/{HUNT_ID}/assets/{happy_asset_id}")
+    check("A14.GET deleted -> 404", code == 404, f"got {code} body={body}")
+
+    # A15 cross-user isolation
+    print("\n--- A15: Cross-user isolation (Trial GETs Pro asset) ---")
+    target = type_asset_ids.get("stand") or next(iter(type_asset_ids.values()), None)
+    if target:
+        code, body = http("GET", f"/hunts/{HUNT_ID}/assets/{target}", headers=H_TRIAL)
+        check("A15.cross-user GET -> 404", code == 404, f"got {code} body={body}")
+    else:
+        check("A15.cross-user GET -> 404", False, "no type asset available")
+
+    # ============================================================
+    # B. Saved Map Image geo metadata
+    # ============================================================
+    print("\n--- B16: Minimal upsert ---")
+    img1 = f"img_geo_{ts}"
+    code, body = http("POST", "/saved-map-images", json_body={"image_id": img1})
+    check("B16.POST -> 200", code == 200, f"got {code} body={body}")
+    smi = (body or {}).get("saved_map_image", {}) if isinstance(body, dict) else {}
+    check("B16.supports_geo_placement==False", smi.get("supports_geo_placement") is False,
+          f"sgp={smi.get('supports_geo_placement')}")
+    check("B16.source=='upload'", smi.get("source") == "upload", f"source={smi.get('source')}")
+
+    # B17 geo placement without basis
+    print("\n--- B17: supports_geo_placement=True without basis ---")
+    img2 = f"img_geo2_{ts}"
+    code, body = http("POST", "/saved-map-images", json_body={
+        "image_id": img2, "supports_geo_placement": True
+    })
+    check("B17.-> 422", code == 422, f"got {code} body={body}")
+    err_text = json.dumps(body) if isinstance(body, dict) else str(body)
+    needed = ["original_width", "original_height", "north_lat", "south_lat", "west_lng", "east_lng"]
+    for k in needed:
+        check(f"B17.error mentions {k}", k in err_text, f"missing in: {err_text[:300]}")
+
+    # B18 full geo payload happy path
+    print("\n--- B18: Full geo payload ---")
+    img3 = f"img_geo3_{ts}"
+    code, body = http("POST", "/saved-map-images", json_body={
+        "image_id": img3,
+        "hunt_id": HUNT_ID,
+        "image_url": "https://example.com/3.jpg",
+        "original_width": 1024,
+        "original_height": 768,
+        "north_lat": 45.0,
+        "south_lat": 44.0,
+        "west_lng": -93.5,
+        "east_lng": -92.5,
+        "center_lat": 44.5,
+        "center_lng": -93.0,
+        "zoom": 14.5,
+        "bearing": 10,
+        "pitch": 20,
+        "source": "maptiler",
+        "style": "outdoors-v2",
+        "supports_geo_placement": True,
+    })
+    check("B18.-> 200", code == 200, f"got {code} body={body}")
+    smi3 = (body or {}).get("saved_map_image", {}) if isinstance(body, dict) else {}
+    check("B18.persisted geo basis",
+          smi3.get("supports_geo_placement") is True
+          and smi3.get("north_lat") == 45.0
+          and smi3.get("source") == "maptiler",
+          f"smi3={smi3}")
+    img3_created_at = smi3.get("created_at")
+
+    # B19 inverted bounds
+    print("\n--- B19: Inverted bounds ---")
+    img_bad1 = f"img_bad1_{ts}"
+    code, body = http("POST", "/saved-map-images", json_body={
+        "image_id": img_bad1,
+        "original_width": 1024, "original_height": 768,
+        "north_lat": 10, "south_lat": 20,
+        "west_lng": -93.5, "east_lng": -92.5,
+        "supports_geo_placement": True,
+    })
+    check("B19.inverted bounds -> 422", code == 422, f"got {code} body={body}")
+
+    # B20 zero-width bounds
+    print("\n--- B20: Zero-width bounds ---")
+    img_bad2 = f"img_bad2_{ts}"
+    code, body = http("POST", "/saved-map-images", json_body={
+        "image_id": img_bad2,
+        "original_width": 1024, "original_height": 768,
+        "north_lat": 45, "south_lat": 44,
+        "west_lng": 0, "east_lng": 0,
+        "supports_geo_placement": True,
+    })
+    check("B20.zero-width bounds -> 422", code == 422, f"got {code} body={body}")
+
+    # B21 idempotent re-upsert
+    print("\n--- B21: Idempotent re-upsert ---")
+    time.sleep(0.05)
+    code, body = http("POST", "/saved-map-images", json_body={
+        "image_id": img3,
+        "hunt_id": HUNT_ID,
+        "image_url": "https://example.com/3.jpg",
+        "original_width": 1024,
+        "original_height": 768,
+        "north_lat": 45.0,
+        "south_lat": 44.0,
+        "west_lng": -93.5,
+        "east_lng": -92.5,
+        "center_lat": 44.5,
+        "center_lng": -93.0,
+        "zoom": 14.5,
+        "bearing": 10,
+        "pitch": 20,
+        "source": "maptiler",
+        "style": "streets-v2",
+        "supports_geo_placement": True,
+    })
+    check("B21.re-POST -> 200", code == 200, f"got {code} body={body}")
+    smi3b = (body or {}).get("saved_map_image", {}) if isinstance(body, dict) else {}
+    check("B21.style updated", smi3b.get("style") == "streets-v2", f"style={smi3b.get('style')}")
+    check("B21.created_at stable",
+          smi3b.get("created_at") == img3_created_at,
+          f"c was {img3_created_at} now {smi3b.get('created_at')}")
+    check("B21.updated_at advanced",
+          smi3b.get("updated_at") and smi3b.get("updated_at") > img3_created_at,
+          f"u={smi3b.get('updated_at')} c={img3_created_at}")
+
+    # B22 hunt_id that doesn't exist -> 404
+    print("\n--- B22: Non-existent hunt_id on saved-map-images ---")
+    img_bad3 = f"img_bad3_{ts}"
+    code, body = http("POST", "/saved-map-images", json_body={
+        "image_id": img_bad3, "hunt_id": "hunt_does_not_exist_xxxxx",
+    })
+    check("B22.-> 404", code == 404, f"got {code} body={body}")
+
+    # B23 GET single
+    print("\n--- B23: GET /saved-map-images/{id} ---")
+    code, body = http("GET", f"/saved-map-images/{img3}")
+    check("B23.-> 200", code == 200, f"got {code} body={body}")
+    check("B23.image_id matches",
+          isinstance(body, dict) and body.get("saved_map_image", {}).get("image_id") == img3,
+          f"body={body}")
+
+    # B24 GET filtered by hunt_id
+    print("\n--- B24: GET /saved-map-images?hunt_id=... ---")
+    code, body = http("GET", "/saved-map-images", params={"hunt_id": HUNT_ID})
+    check("B24.-> 200", code == 200, f"got {code} body={body}")
+    images = (body or {}).get("saved_map_images") or []
+    check("B24.contains img3", any(i.get("image_id") == img3 for i in images),
+          f"images_count={len(images)}")
+    check("B24.all images for hunt",
+          all(i.get("hunt_id") == HUNT_ID for i in images),
+          f"hunt_ids={[i.get('hunt_id') for i in images]}")
+
+    # B25 PATCH
+    print("\n--- B25: PATCH style ---")
+    code, body = http("PATCH", f"/saved-map-images/{img3}", json_body={"style": "satellite-v2"})
+    check("B25.-> 200", code == 200, f"got {code} body={body}")
+    smi3c = (body or {}).get("saved_map_image", {}) if isinstance(body, dict) else {}
+    check("B25.style updated", smi3c.get("style") == "satellite-v2", f"style={smi3c.get('style')}")
+    check("B25.bounds unchanged",
+          smi3c.get("north_lat") == 45.0 and smi3c.get("south_lat") == 44.0,
+          f"smi3c={smi3c}")
+
+    # B26 DELETE
+    print("\n--- B26: DELETE /saved-map-images/{id} ---")
+    code, body = http("DELETE", f"/saved-map-images/{img3}")
+    check("B26.-> 200", code == 200, f"got {code} body={body}")
+    check("B26.deleted==1", isinstance(body, dict) and body.get("deleted") == 1, f"body={body}")
+    code, body = http("GET", f"/saved-map-images/{img3}")
+    check("B26.GET deleted -> 404", code == 404, f"got {code} body={body}")
+
+    # B27 cross-user
+    print("\n--- B27: Cross-user GET image_id ---")
+    code, body = http("GET", f"/saved-map-images/{img1}", headers=H_TRIAL)
+    check("B27.cross-user GET -> 404", code == 404, f"got {code} body={body}")
+
+    # ============================================================
+    # C. Backward compatibility
+    # ============================================================
+    print("\n--- C28: GET /api/health ---")
+    code, body = http("GET", "/health", headers={})  # public
+    check("C28.health -> 200", code == 200, f"got {code} body={body}")
+
+    print("\n--- C29: GET /api/hunts (Pro) ---")
+    code, body = http("GET", "/hunts")
+    check("C29.list hunts -> 200", code == 200, f"got {code} body={body}")
+    check("C29.contains test hunt",
+          isinstance(body, dict) and any(h.get("hunt_id") == HUNT_ID
+                                          for h in (body.get("hunts") or [])),
+          f"hunts_seen={[h.get('hunt_id') for h in (body or {}).get('hunts', [])][:5]}")
+
+    # ---------------- CLEANUP ----------------
+    print("\n--- CLEANUP: Delete test hunt + remaining saved image ---")
+    code, body = http("DELETE", f"/hunts/{HUNT_ID}")
+    print(f"  DELETE /hunts/{HUNT_ID} -> {code}  body={body}")
+    http("DELETE", f"/saved-map-images/{img1}")
+
+    # ---------------- SUMMARY ----------------
+    total = passed + len(failed)
+    print("\n" + "=" * 70)
+    print(f"RESULT: {passed}/{total} substantive assertions PASS")
+    if failed:
+        print("\nFAILURES:")
+        for f in failed:
+            print(f"  - {f}")
+        sys.exit(1)
+    else:
+        print("ALL ASSERTIONS PASS.")
+
+
+if __name__ == "__main__":
+    main()

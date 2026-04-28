@@ -711,7 +711,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://map-legend.preview.emergentagent.com).
+          https://hunt-analysis-pro.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -1035,7 +1035,7 @@ agent_communication:
 
 test_plan:
   current_focus:
-    - "History thumbnail blank (private S3 bucket) + setup wizard scroll-to-top per step"
+    - "Hunt GPS Assets + Saved Map Image geo metadata — data models, validation, persistence"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1286,7 +1286,7 @@ overlay_taxonomy_unification:
         comment: |
           Backend overlay-taxonomy unification VERIFIED end-to-end
           against the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://map-legend.preview.emergentagent.com) + the local
+          https://hunt-analysis-pro.preview.emergentagent.com) + the local
           pytest suite. Harness: /app/backend_test.py — 13/13
           substantive assertions PASS, 0 failures.
 
@@ -1334,7 +1334,7 @@ overlay_taxonomy_unification:
 
           === 3. Live POST /api/analyze-hunt smoke ===
           Request body (Bearer test_session_rs_001 / Pro):
-            POST https://map-legend.preview.emergentagent.com/api/analyze-hunt
+            POST https://hunt-analysis-pro.preview.emergentagent.com/api/analyze-hunt
             {
               "map_image_base64": "<256x256 deterministic PNG, base64>",
               "conditions": {
@@ -2461,7 +2461,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://map-legend.preview.emergentagent.com
+          https://hunt-analysis-pro.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -2525,7 +2525,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://map-legend.preview.emergentagent.com). Harness:
+          https://hunt-analysis-pro.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -2925,7 +2925,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://map-legend.preview.emergentagent.com/api/auth/verify-otp
+            POST https://hunt-analysis-pro.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -3207,7 +3207,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://map-legend.preview.emergentagent.com/api). Test
+      URL (https://hunt-analysis-pro.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -3546,7 +3546,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://map-legend.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://hunt-analysis-pro.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -3800,7 +3800,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://map-legend.preview.emergentagent.com).
+          https://hunt-analysis-pro.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
@@ -4653,7 +4653,7 @@ enhanced_rollout_wiring:
 
           Harness: /app/backend_test.py — 46/46 substantive assertions
           PASS against the public preview URL
-          (https://map-legend.preview.emergentagent.com/api).
+          (https://hunt-analysis-pro.preview.emergentagent.com/api).
           ZERO failures.
 
           === A. Pro + deer + Iowa GPS (41.5, -93.0)  PASS ===
@@ -4838,7 +4838,7 @@ enhanced_rollout_wiring:
         agent: "testing"
         comment: |
           Enhanced rollout wiring validated end-to-end against the
-          preview URL (https://map-legend.preview.emergentagent.com)
+          preview URL (https://hunt-analysis-pro.preview.emergentagent.com)
           via /app/backend_test.py. RESULT: 21/24 substantive
           assertions PASS, BUT 3 critical assertions FAIL on the
           canonical "Pro + whitetail (deer) + Midwest Agricultural"
@@ -5085,3 +5085,354 @@ enhanced_rollout_wiring:
           above (the legacy→enhanced region map approach #2 is the
           cleanest and matches the existing alias-map pattern in
           species_prompts/regions.py).
+
+
+
+# ====================================================================
+# Hunt GPS Assets + Saved Map Image geo metadata (Emergent Task 1)
+# ====================================================================
+
+backend:
+  - task: "Hunt GPS Assets + Saved Map Image geo metadata — data models, validation, persistence"
+    implemented: true
+    working: false
+    file: "/app/backend/geo_validation.py, /app/backend/models/__init__.py, /app/backend/models/hunt_location_asset.py, /app/backend/models/saved_map_image.py, /app/backend/hunt_geo_router.py, /app/backend/server.py, /app/backend/tests/test_geo_models.py, /app/frontend/src/types/geo.ts"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added the schema/validation foundation for GPS-based hunt
+          assets and georeferenced saved map images. Scope was strictly
+          data models + validation + basic persistence + tests. NO UI
+          changes, NO AI overlay changes, NO map rendering.
+
+          NEW FILES:
+            • /app/backend/geo_validation.py — single source of truth
+              for lat/lng/bbox validation. Range: lat ∈ [-90,90],
+              lng ∈ [-180,180]; rejects NaN/Inf/non-numeric/bool. Bounds
+              check enforces north > south and west ≠ east, while
+              allowing east < west for antimeridian-crossing rectangles.
+            • /app/backend/models/__init__.py — package re-exports.
+            • /app/backend/models/hunt_location_asset.py —
+              HuntLocationAsset / HuntLocationAssetCreate /
+              HuntLocationAssetUpdate Pydantic models. Canonical asset
+              types: stand, blind, feeder, camera, parking,
+              access_point, water, scrape, rub, bedding, custom.
+              Required on create: hunt_id, type, name, latitude,
+              longitude. asset_id is optional (router mints `hla_*`
+              uuid4 when absent). Field validators delegate to
+              geo_validation so the same rules run at the model edge.
+            • /app/backend/models/saved_map_image.py —
+              SavedMapImage / SavedMapImageCreate / SavedMapImageUpdate.
+              Conditional invariant: when supports_geo_placement=True,
+              we require originalWidth, originalHeight, northLat,
+              southLat, westLng, eastLng AND a geometrically valid
+              bounding box. When False, all geo fields are optional.
+              Source enum: 'maptiler' | 'upload' (default 'upload').
+              zoom ∈ [0,24], bearing ∈ [-360,360], pitch ∈ [0,85].
+              Doc-helper saved_map_image_doc_to_dict() coerces legacy
+              records (no source / no supports_geo_placement) to safe
+              defaults so reads of pre-existing rows never crash.
+            • /app/backend/hunt_geo_router.py — APIRouter mounted onto
+              the existing /api router. Endpoints:
+                POST   /api/hunts/{hunt_id}/assets           (create)
+                GET    /api/hunts/{hunt_id}/assets           (list)
+                GET    /api/hunts/{hunt_id}/assets/{id}      (get)
+                PUT    /api/hunts/{hunt_id}/assets/{id}      (update)
+                DELETE /api/hunts/{hunt_id}/assets/{id}      (delete)
+                POST   /api/saved-map-images                 (upsert)
+                GET    /api/saved-map-images                 (list, ?hunt_id=…)
+                GET    /api/saved-map-images/{image_id}      (get)
+                PATCH  /api/saved-map-images/{image_id}      (partial update)
+                DELETE /api/saved-map-images/{image_id}      (delete)
+              All endpoints scoped to the authenticated user_id. Hunt
+              asset writes additionally require the hunt_id to exist
+              for the calling user (404 otherwise).
+            • /app/backend/tests/test_geo_models.py — 35 unit tests
+              covering: lat/lng range / NaN / Inf / non-numeric, bounds
+              validity (normal + antimeridian + inverted + zero-width
+              + out-of-range corner), HuntLocationAssetCreate happy
+              path / each canonical type / unknown type / invalid
+              lat&lng / missing required fields / blank name / asset
+              id minting & preservation, partial-update behaviour,
+              SavedMapImageCreate minimal payload, geo_placement
+              missing-basis errors (with field-name assertions),
+              geo_placement full payload happy path, inverted bounds,
+              zero-width bounds, invalid source, zoom/bearing/pitch
+              bounds, non-geo passthrough, doc helpers.
+            • /app/frontend/src/types/geo.ts — TypeScript domain types
+              that mirror the backend wire shapes plus camelCase
+              UI-friendly variants and `*FromWire` mapper helpers.
+              Also exposes isValidLatitude / isValidLongitude /
+              isValidLatLng so frontend code shares the same range
+              rules without duplicating the constants.
+
+          MODIFIED FILES:
+            • /app/backend/server.py
+                – include_router(build_hunt_geo_router(db, …))
+                – new @app.on_event("startup") hook that calls
+                  _ensure_hunts_indexes() and ensure_hunt_geo_indexes(db).
+                  This is additive — existing hunts setup remained
+                  commented out previously, so this fixes a latent gap.
+
+          NEW MONGO COLLECTIONS + INDEXES:
+            • hunt_location_assets
+                – unique (user_id, asset_id)            "user_asset_unique"
+                – (user_id, hunt_id, created_at desc)   "user_hunt_assets_recent"
+            • saved_map_images
+                – unique (user_id, image_id)            "user_image_unique"
+                – (user_id, hunt_id)                    "user_hunt_images"
+
+          BACKWARD COMPATIBILITY:
+            • Existing `hunts` documents are untouched — no schema
+              migration needed. A hunt with zero assets simply has
+              zero rows in hunt_location_assets; list_assets returns
+              {assets: [], count: 0}.
+            • Existing saved hunt images that have no entry in the
+              new saved_map_images collection default (at the read
+              layer) to supportsGeoPlacement=false. Code that wants
+              to know whether an image is geo-placed must look it up
+              in saved_map_images; absence == not-placed.
+            • saved_map_image_doc_to_dict() coerces legacy partial
+              docs (no `source`, no `supports_geo_placement`) to
+              safe defaults so any future backfill that lands stub
+              records won't crash readers.
+
+          TEST RESULTS:
+            • New test_geo_models.py: 35/35 PASSED in 0.10s.
+            • Existing test_overlay_taxonomy + test_enhanced_rollout +
+              test_master_prompt_access_context: 59/59 PASSED. No
+              regressions from the new router or startup hook.
+            • Live smoke (curl):
+                – GET /api/health → {"status":"ok"}
+                – GET /api/hunts/<missing>/assets w/ Pro session →
+                  404 {"detail":"Hunt not found"} (auth + ownership
+                  guard firing as designed).
+
+          ASSUMPTIONS / OPEN POINTS FOR REVIEW:
+            • Frontend TS types mirror the backend wire format using
+              snake_case at the boundary, with camelCase mapper
+              helpers (`huntLocationAssetFromWire`,
+              `savedMapImageFromWire`) for UI consumption. The spec
+              used camelCase but the project's existing API surface
+              is snake_case — kept the wire format consistent and
+              provided mappers so future UI code can use the spec
+              shape unchanged.
+            • Antimeridian rectangles are intentionally allowed
+              (east < west) because MapTiler-style renders can wrap.
+              Only zero-width boxes (east == west) are rejected.
+            • SavedMapImageUpdate (PATCH) deliberately does NOT re-run
+              the cross-field "geo basis required" invariant — it
+              only writes the fields supplied. A caller that wants
+              to flip supports_geo_placement on must POST the full
+              create payload so the validator re-checks the basis.
+              Documented inline in the model.
+
+          READY FOR BACKEND TESTING:
+            Please verify the new endpoints end-to-end with the seeded
+            test sessions. Suggested coverage:
+              1) Create a hunt via existing POST /api/hunts (test_session_rs_001).
+              2) POST /api/hunts/{hunt_id}/assets with {type:'stand',
+                 name:'X', latitude:44.97, longitude:-93.26}; expect
+                 200 + asset_id starting 'hla_'.
+              3) Reject invalid lat (e.g. 99) → 422.
+              4) Reject missing required field (e.g. no `name`) → 422.
+              5) GET /api/hunts/{hunt_id}/assets → returns the new asset.
+              6) POST /api/saved-map-images with image_id only,
+                 supports_geo_placement omitted → 200 with
+                 supports_geo_placement=false.
+              7) POST /api/saved-map-images with
+                 supports_geo_placement=true and missing widths/bounds
+                 → 422 mentioning the missing fields.
+              8) POST /api/saved-map-images with full valid bounds +
+                 dimensions → 200, persists.
+              9) Re-POST same image_id → upsert (created_at stable,
+                 updated_at advances).
+             10) Cross-user isolation: hitting a Pro user's
+                 image_id from a different session must 404.
+      - working: false
+        agent: "testing"
+        comment: |
+          End-to-end backend test against EXPO_PUBLIC_BACKEND_URL =
+          https://hunt-analysis-pro.preview.emergentagent.com using
+          /app/backend_test.py. Seeded auth: Bearer test_session_rs_001
+          (Pro test-user-001) for primary calls; test_session_trial_001
+          for cross-user isolation.
+
+          RESULT: 44/74 substantive assertions PASS, 30 FAIL.
+          Saved Map Image flow (B16–B27) AND backward-compat (C28–C29)
+          PASS cleanly. Hunt Location Asset flow (A1–A15) is
+          BLOCKED by two backend defects, with one unblocking the rest.
+
+          === CRITICAL BUG #1 — POST/PUT body model rejects path-only
+                                hunt_id ===
+          File: /app/backend/models/hunt_location_asset.py L77
+            class HuntLocationAssetCreate(BaseModel):
+                ...
+                hunt_id: str = Field(..., min_length=1, max_length=128)
+
+          The router (/app/backend/hunt_geo_router.py L98) does:
+            body = body.model_copy(update={"hunt_id": hunt_id})
+            await _require_hunt(uid, hunt_id)
+
+          The intent is: hunt_id comes from the URL path; the body
+          should not require it. But Pydantic validates the body
+          BEFORE the router copies the path value in, so EVERY POST
+          /api/hunts/{hunt_id}/assets without a body-level hunt_id
+          fails:
+            422 {"detail":[{"type":"missing","loc":["body","hunt_id"],
+                            "msg":"Field required"...}]}
+
+          Repro (against preview URL with Bearer test_session_rs_001):
+            POST /api/hunts/<existing hunt>/assets
+            { "type":"stand", "name":"North ridge stand",
+              "latitude":44.9778, "longitude":-93.265 }
+            -> 422 (expected 200)
+
+          IMPACT: A1, A2 (all 11 canonical types), A9 (which expected
+          a 404 but received 422), A10 (count=0 because no asset ever
+          created), A11–A15 (cascade — no asset_id to GET/PUT/DELETE
+          against; PUT/DELETE return 405 because the URL becomes
+          /assets/ with empty asset_id, and that route requires
+          asset_id) all fail because of this one model definition.
+
+          MINIMAL FIX (main agent):
+            hunt_id: Optional[str] = Field(default=None, max_length=128)
+          The router already overrides it from the path so making it
+          optional is safe. (Alternatively, drop hunt_id from the
+          create body model entirely and have the router set it
+          explicitly when constructing the asset.)
+
+          === CRITICAL BUG #2 — Raw NaN body crashes JSON error
+                                response (500 instead of 422) ===
+          When the client POSTs JSON containing a literal NaN
+          (e.g. {"latitude":NaN}), Pydantic correctly produces a
+          RequestValidationError ("latitude must be a finite number"),
+          but FastAPI then tries to JSONResponse the error detail —
+          which echoes the original input value — and Python's stdlib
+          json encoder rejects NaN:
+            ValueError: Out of range float values are not JSON compliant
+            -> 500 Internal Server Error
+
+          File: starlette/responses.py JSONResponse(...) -> json.dumps
+          (default `allow_nan=False` is fine; the issue is that the
+          NaN input gets reflected in the error body).
+
+          IMPACT: Test A5 expected 422; got 500.
+          Note: A non-finite float in JSON is technically not valid
+          JSON either (RFC 8259), but most clients send NaN and
+          Python's stdlib json *parses* it by default. Either:
+            a) reject the body as 400 ("Invalid JSON: NaN") at parse
+               time, or
+            b) sanitise the validation-error payload so non-finite
+               input values are converted to a string before
+               JSON-encoding, or
+            c) install an exception handler for RequestValidationError
+               that strips/serialises non-JSON-safe input echoes.
+
+          IMPACT MAGNITUDE: Lower than Bug #1 — most real clients
+          send numeric latitudes (and Bug #1 would mask this anyway
+          today). But the brief explicitly required NaN -> 422 so this
+          must be addressed for spec compliance.
+
+          === WHAT WORKED CORRECTLY ===
+          • A3 invalid latitude (99 / -91) -> 422  PASS
+          • A4 invalid longitude (181 / -181) -> 422  PASS
+          • A6 unknown type 'chair' -> 422  PASS
+          • A7 missing name -> 422  PASS
+          • A8 blank name '   ' -> 422  PASS
+          • B16 minimal upsert -> 200, supports_geo_placement=false,
+            source='upload'  PASS
+          • B17 supports_geo_placement=true without basis -> 422 with
+            ALL six required fields named in the error body
+            (original_width, original_height, north_lat, south_lat,
+            west_lng, east_lng)  PASS
+          • B18 full geo payload happy path -> 200 with persisted
+            bounds, source='maptiler'  PASS
+          • B19 inverted bounds (north<south) -> 422  PASS
+          • B20 zero-width bounds (west==east) -> 422  PASS
+          • B21 idempotent re-upsert on same image_id: created_at
+            stable, updated_at advances, style updated  PASS
+          • B22 hunt_id that doesn't exist for caller -> 404  PASS
+          • B23 GET /saved-map-images/{image_id} -> 200  PASS
+          • B24 GET /saved-map-images?hunt_id=… -> filtered list  PASS
+          • B25 PATCH style='satellite-v2' -> 200, only style changes,
+            bounds untouched  PASS
+          • B26 DELETE -> 200 {deleted:1}; subsequent GET -> 404  PASS
+          • B27 cross-user GET (Trial token on Pro image) -> 404  PASS
+          • C28 GET /api/health -> 200  PASS
+          • C29 GET /api/hunts (Pro) returns the test hunt  PASS
+
+          === ZERO 5XX (other than the NaN-induced 500) ===
+          All other failure cases produced clean 4xx responses with
+          well-formed JSON bodies. The Saved Map Image flow is fully
+          production-ready as designed.
+
+          === RECOMMENDATION ===
+          Fix Bug #1 (HuntLocationAssetCreate.hunt_id should be
+          Optional with default=None) — this single line will unblock
+          A1, A2, A9, A10, A11, A12, A13, A14, A15 and likely surface
+          all-green for the asset CRUD flow. Fix Bug #2 by either
+          parsing-rejecting raw NaN or sanitising the error payload.
+          Re-run /app/backend_test.py to confirm.
+
+          No source files modified by testing agent.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Added the data-model + validation foundation for Hunt GPS
+      Assets and Saved Map Image geo metadata (Emergent Task 1). New
+      endpoints are mounted under /api but no UI / AI / map-render
+      code was changed. Unit tests pass (35/35) and existing suites
+      remain green. Please run end-to-end backend tests against the
+      live FastAPI service using the seeded `test_session_rs_001`
+      Pro session and report any deviations. See the latest
+      `Hunt GPS Assets + Saved Map Image geo metadata` block above
+      for the suggested coverage list.
+  - agent: "testing"
+    message: |
+      Hunt GPS Assets + Saved Map Image geo metadata tested end-to-end
+      against the preview URL. 44/74 PASS.
+
+      ✅ Saved Map Image (B16–B27) — fully working: minimal upsert,
+        geo-placement basis enforcement, full-payload happy path,
+        inverted/zero-width bounds rejection, idempotent re-upsert
+        (created_at stable, updated_at advances), GET single,
+        GET filtered by hunt_id, PATCH partial update, DELETE,
+        cross-user isolation. All 24 saved-map-image assertions PASS.
+      ✅ Backward compat: GET /api/health and GET /api/hunts both
+        regress-clean.
+
+      ❌ Hunt Location Assets (A1–A15) — BLOCKED by a single bug.
+        HuntLocationAssetCreate.hunt_id is `Field(..., …)` (required),
+        but the router immediately overrides it from the URL path via
+        body.model_copy(update={"hunt_id": hunt_id}). Pydantic
+        validates the body BEFORE the override runs, so every
+        POST /api/hunts/{hunt_id}/assets that follows the brief
+        (no body-level hunt_id) returns
+          422 {"detail":[{"type":"missing","loc":["body","hunt_id"]}]}
+        instead of 200. This single defect cascades into A1, A2 (all
+        11 canonical types), A9 (got 422 instead of the documented
+        404), A10 (count=0 because no asset ever got created), and
+        A11–A15 (no asset_id to act on; PUT/DELETE return 405 because
+        the URL becomes /assets/<empty>).
+        FIX: change to
+          hunt_id: Optional[str] = Field(default=None, max_length=128)
+        in /app/backend/models/hunt_location_asset.py L77.
+
+      ❌ Minor — NaN latitude returns 500 instead of 422 (test A5).
+        Pydantic correctly produces a finite-number validation error,
+        but the JSONResponse echoes the NaN input value and json.dumps
+        crashes ("Out of range float values are not JSON compliant").
+        Lower-priority — most clients won't send NaN — but the brief
+        explicitly required 422 so worth addressing once Bug #1 is
+        fixed (sanitise non-finite input echoes in the error
+        translator, or 400 the body at parse time).
+
+      No source files modified by testing agent. The Saved Map Image
+      half is production-ready; the Hunt GPS Assets half needs the
+      one-line model fix above + a re-run of /app/backend_test.py.

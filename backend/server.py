@@ -2302,6 +2302,11 @@ async def delete_hunt(hunt_id: str, request: Request):
 from password_auth import build_password_auth_router
 api_router.include_router(build_password_auth_router(db, get_current_user))
 
+# Mount hunt-geo endpoints (Hunt Location Assets + Saved Map Image
+# geo metadata). Lives in hunt_geo_router.py for the same reason.
+from hunt_geo_router import build_hunt_geo_router, ensure_hunt_geo_indexes
+api_router.include_router(build_hunt_geo_router(db, get_current_user))
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -2315,3 +2320,19 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+@app.on_event("startup")
+async def _startup_indexes():
+    """Ensure all collection indexes exist. Idempotent and best-effort:
+    failures are logged inside each helper so a transient Mongo blip
+    at boot doesn't crash the API.
+    """
+    try:
+        await _ensure_hunts_indexes()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"hunts index setup failed at startup: {exc}")
+    try:
+        await ensure_hunt_geo_indexes(db)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"hunt_geo index setup failed at startup: {exc}")

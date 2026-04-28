@@ -21,7 +21,7 @@ import requests
 
 
 # Preview URL must come from frontend/.env EXPO_PUBLIC_BACKEND_URL.
-BASE = "https://map-legend.preview.emergentagent.com/api"
+BASE = "https://hunt-analysis-pro.preview.emergentagent.com/api"
 
 USER1_TOKEN = "test_session_rs_001"     # test-user-001, pro
 USER2_TOKEN = "test_session_rs_002"     # test-user-002, pro

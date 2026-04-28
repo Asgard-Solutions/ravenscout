@@ -1,168 +1,154 @@
 <analysis>**original_problem_statement**: 
-The user requested several fixes and features: 
-1. Change Face ID text to Fingerprint / Biometrics across the app and fix a bug where the Android fingerprint scanner did nothing and showed an unwanted Use PIN option.
-2. Fix map tiles appearing blank on Android, ensure all 5 map style chips fit on screen, and fix tapping a chip not switching the style.
-3. Fix the Edit Hunt modal not showing marker options.
-4. Ensure deleting a hunt cascades to delete local data, MongoDB records, and S3 objects.
-5. Verify and secure the AWS S3 image upload flow (presigned URLs, MIME checks).
-6. Implement Non-Expiring Extra Hunt Analytics Packs (5, 10, 15 packs) to act as a top-off once a user exhausts their monthly Core (10) or Pro (40) limits.
+The user requested to:
+1. Replace mocked RevenueCat purchases with the real SDK and prep the EAS Android production build. *(EAS build was later canceled by the user)*
+2. Wire the orphaned S3 cloud cleanup endpoint to the UI.
+3. Wire the Enhanced Species Prompt Framework into the application as a controlled Pro-tier rollout with analytics and a rollout switch.
+4. Fix a crash where the app returns to the new hunt page immediately after analysis, and ensure aborted analyses don't count against user usage.
+5. Update the Select Species, Weapon, and Method pickers to use custom gold/white icons uploaded by the user, and ensure they have transparent backgrounds.
+6. Ensure the frontend map overlay legend colors perfectly match the LLM prompt outputs.
+7. Fix Pro user S3 image uploads missing from .
+8. Update the saved hunts list to show the new custom animal icons instead of old Ionicons.
+9. Fix blank thumbnails in the saved hunts list (caused by private S3 URLs not rendering without signatures).
+10. Fix the setup screen scroll position (ensure it scrolls to the top when navigating between wizard steps).
+11. Generate 12 project documentation files mimicking the ironstag app structure.
 
 PRODUCT REQUIREMENTS:
-- Gate map styles by subscription tier (Free: none, Core: 3 styles, Pro: 5 styles).
-- Add Landscape v4 map style.
-- Extra analytics packs must not expire, monthly credits are consumed first, and RevenueCat integration is required for purchases. 
+- RevenueCat SDK must handle Expo Go/Web fallbacks gracefully.
+- S3 orphan cleanup should run automatically on launch (for Pro users) and have a manual trigger in the Profile.
+- Enhanced prompt rollout must be globally toggleable, isolated, and additive (OFF by default for non-eligible requests).
+- Overlay colors must share a single source of truth between the LLM prompt schema, backend validation, and frontend rendering.
+- Documentation must be placed in  and cover all technical, usage, and legal aspects.
 
 **User's preferred language**: English (INSTRUCT next agent to respond in English only)
 
 **what currently exists?** 
-A full-stack Expo React Native mobile app with FastAPI/MongoDB backend. Features include Google OAuth, AI tactical hunt analysis, MapLibre GL JS mapping with MapTiler, S3 cloud media storage via presigned URLs, and a subscription tier system (Free, Core, Pro) which now supports Non-Expiring Extra Hunt Analytics Packs. 
+A full-stack Expo React Native mobile app with a FastAPI/MongoDB backend. Features include real RevenueCat payment integration, AWS S3 image uploads with orphan cleanup, GPT-5.2 Vision hunt analysis, and a controlled rollout framework for enhanced species prompts. The map overlay taxonomy has been successfully unified between frontend and backend. S3 uploads, image thumbnails, and scroll behaviors have been fixed. Extensive platform documentation has been generated in .
 
 **Last working item**: 
-    - Last item agent was working: Wiring the new  into the legacy Analysis Limit Reached screen in . The agent discovered  returns HTTP 200 with  instead of HTTP 402 on limit exhaustion, triggering a legacy UI. The agent added a BUY EXTRA ANALYTICS button to this screen that pops up the newly created modal.
-    - Status: TESTING PENDING
-    - Agent Testing Done: Y (Jest tests pass, but needs visual verification via screenshot).
-    - Which testing method agent to use? Screenshot tool to visually verify the BUY EXTRA ANALYTICS button appears correctly on the limit reached screen and opens the modal.
+    - Last item agent was working: Generating the 12 requested Markdown documentation files in  based on the user's uploaded list.
+    - Status: USER VERIFICATION PENDING
+    - Agent Testing Done: Y (Files successfully written)
+    - Which testing method agent to use? NA
     - User Testing Done: N
 
 **All Pending/In progress Issue list**: 
-  Issue 1: RevenueCat Mock Replacement
-     - Attempted fixes: Pack purchases and  are currently MOCKED using synthetic transaction IDs in  and .
-     - Next debug checklist: Replace mock  handlers with real  once RevenueCat SDK is fully wired.
-     - Why fix this issue and what will be achieved with the fix? Real monetary transactions are required for production.
-     - Status: NOT STARTED (Blocked pending RevenueCat integration phase)
-     - Is recurring issue? N
-     - Should Test frontend/backend/both after fix? Frontend
+  None. All active bugs have been resolved and the agent is awaiting user feedback on the placeholder data in the generated documentation.
 
 **In progress Task List**: 
-  None actively in-progress (all requested tasks were completed).
+  Task 1: Review and refine generated documentation
+     - Where to resume: The agent just created 12 markdown files in  containing placeholder values for pricing (e.g., .99/9.99), trial limits, hunt caps, and legal jurisdictions. Wait for the user to confirm these values or provide the correct ones, then update the documents accordingly.
+     - What will be achieved with this? Accurate, production-ready documentation for the app.
+     - Status: USER VERIFICATION PENDING
+     - Should Test frontend/backend/both after fix? NA
+     - Blocked on something: Waiting for the user's response regarding the placeholder data.
 
 **Upcoming and Future Tasks**
-    - P1: Wire real RevenueCat  and  (currently mocked).
-    - P2: EAS production build for real RevenueCat purchases and baking in the  for Android.
-    - P2: GIS integration for georeferenced overlays (mapping AI outputs to strict Lat/Lon coordinates so MapLibre can pan to them).
-    - P2: Trail cam integration.
-    - P3: Predictive movement modeling.
-    - P3: Wind shift notifications for stands (premium feature).
-    - P3: Background orphan asset detection/cleanup for local device storage.
-    - P3: Add waterfowl, dove, and quail prompt packs.
+  *(Note: The user explicitly stated in Message 5 to forget P1, P2, and P3 from the previous handoff. Do NOT attempt the EAS build, GIS integration, Trail cam integration, predictive movement modeling, or wind shift notifications).*
+  - No pending feature tasks remain from the history. Stand by for the user's next request or feature addition.
 
 **Completed work in this session**
-- MapTiler Landscape (v4) added as 5th map style. (DONE)
-- Centralized Plan-tier feature gating for map styles and uploads. (DONE)
-- Replaced Face ID with Fingerprint everywhere in UI. (DONE)
-- Fixed biometric login Android read/write mismatch & removed PIN fallback. (DONE)
-- Fixed map UI chip width (all 5 fit) and  bug on Android WebView. (DONE)
-- Fixed Edit Hunt modal so marker buttons are visible (flexbox height bug resolved). (DONE)
-- Cascading Hunt Deletion:  now deletes from local, MongoDB, and S3 simultaneously. (DONE)
-- AWS S3 image upload secured: presigned URLs, MIME whitelist, HEIC support, and fixed swapped env vars. (DONE)
-- Implemented Non-Expiring Extra Hunt Analytics Packs (ledger, API endpoints, Profile UI, OutOfCreditsModal). (DONE)
-- Rewired  out-of-credits response on frontend to allow buying extra analytics. (DONE)
+- Fixed backend test failures in  and  to enforce canonical overlay colors perfectly with LLM responses. (DONE)
+- Fixed the Pro user S3 image sync where saved hunts were dropping  due to swallowed hydration errors. (DONE)
+- Updated  to use custom gold/white species icons instead of Ionicons. (DONE)
+- Fixed blank thumbnails in saved hunts by making  fetch signed download URLs for private S3 assets. (DONE)
+- Fixed the setup flow not scrolling to the top on the next step by adding a  with  in . (DONE)
+- Bulk-generated 12 detailed documentation markdown files in . (DONE)
 
 **Earlier issues found/mentioned but not fixed**
-   - None.
+   - None
 
 **Known issue recurrence from previous fork**
-  - Issue recurrence in previous fork: None.
+  - Issue recurrence in previous fork: None
   - Recurrence count: 0
-  - Status: N/A
+  - Status: NA
 
 **Code Architecture**
 app/
 ├── backend/
-│   ├── server.py (Updated: Extra credits logic, cascade delete, S3 validations)
-│   ├── s3_service.py 
-│   ├── AWS_S3_SETUP.md (NEW - S3 Runbook)
-│   └── tests/
+│   ├── server.py 
+│   ├── overlay_taxonomy.py 
+│   ├── schema_validator.py 
+│   ├── prompt_builder.py
+│   └── s3_service.py
 ├── frontend/
-│   ├── app/ (profile.tsx, setup.tsx, history.tsx, results.tsx, login.tsx)
+│   ├── app/ (results.tsx, history.tsx, setup.tsx)
 │   ├── src/
-│   │   ├── api/ (analyticsApi.ts - NEW)
-│   │   ├── components/ (OutOfCreditsModal.tsx - NEW)
-│   │   ├── constants/ (mapStyles.ts, planCapabilities.ts - NEW)
-│   │   ├── hooks/ (useAnalyticsUsage.ts - NEW)
-│   │   ├── map/ (TacticalMapView.tsx)
-│   │   ├── media/ (huntHydration.ts, cloudPresignClient.ts)
-│   │   └── utils/ (biometric.ts)
-│   └── __tests__/ (analyticsApi.test.ts, planCapabilities.test.ts, mapStyles.test.ts)
+│   │   ├── media/ (Media stores, hydration, CloudMediaStore adapter)
+│   │   ├── constants/ (Taxonomy, icons)
+├── docs/ (NEW - Contains 12 Markdown documentation files)
 
 **Key Technical Concepts**
-React Native (Expo Router), FastAPI, MongoDB, MapLibre GL JS, MapTiler, AWS S3 (Presigned URLs), RevenueCat (Mocked).
+React Native (Expo Router), FastAPI, MongoDB, AWS S3 Presigned URLs (Upload/Download), GPT-5.2 Vision.
 
 **key DB schema**
-  - : Added  (non-expiring count).
-  - : New collection for webhook idempotency.
-  - : New collection tracking credit history.
-  - : Stores  used for cascade deletion.
+  -  (Now correctly persisting  for Pro users).
+  - .
 
 **changes in tech stack**
   - None.
 
-**All files of reference**
-  -  (Contains core analytics ledger, S3 validations, and delete cascade)
-  -  (New modal for extra pack purchases)
-  -  (Contains legacy  screen wired to new modal)
-  -  (Runbook for S3 configuration)
+**All files of reference** 
+  -  (Fixed overlay logic)
+  -  (Modified to resolve signed URLs for thumbnails)
+  -  (Fixed error swallowing during provisional hunt saves)
+  -  (Updated to use custom species icons)
+  -  (Added scroll-to-top hook/effect)
+  -  (12 newly created documentation files)
 
 **Areas that need refactoring**: 
-  - RevenueCat integration is currently mocked.
+  - None required at the moment.
 
 **key api endpoints**
-  -  (Cascades to S3 and DB)
-  -  (NEW)
-  -  (NEW - atomic credit consumer)
-  -  (NEW)
-  -  (NEW)
+  - 
+  - 
+  -  (Utilized for rendering secure thumbnails)
 
 **Critical Info for New Agent**
-  - **CRITICAL AWS ISSUE**: The user's production AWS credentials ( and ) were swapped in their . This caused  errors during S3 uploads. The agent fixed them locally, but the user MUST be reminded to swap them in their production environment.
-  - **CRITICAL APK BUILD ISSUE**: The user's installed Android APK showed blank maps and old biometric text because  was not baked into their build. The user must run An Expo user account is required to proceed.
-Either log in with eas login or set the EXPO_TOKEN environment variable if you're using EAS CLI on CI (Learn more: https://docs.expo.dev/accounts/programmatic-access/) to see all the map tile and UI fixes on their physical device.
-  - **REVENUECAT**: Pack purchases are strictly MOCKED with synthetic transaction IDs. When moving to real RevenueCat, inject  into  and . Ensure  is set in production.
+  - **CANCELLED TASKS:** The user explicitly cancelled the previously mentioned tasks for EAS builds, GIS integrations, and Trail Camera features. Do not bring these up or attempt to implement them.
+  - S3 thumbnails require signed URLs to render because the bucket is private. This was fixed in  by ensuring  calls the presign-download endpoint if the asset is not public.
+  - The documentation in  has been generated but contains best-guess placeholders for pricing, usage caps, and legal specifics. The agent has asked the user to review these. Wait for their instructions before making changes to the docs.
 
-**documents and test reports created in this job**
+**documents and test reports created in this job** 
   - 
-  -  (Updated with S3 and Analytics backend test reports)
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
 
 **Last 10 User Messages and any pending HUMAN messages** 
- 1. (User) Asked to add Landscape (v4) map style. (DONE)
- 2. (User) Asked to gate map styles/uploads by Free/Core/Pro tiers. (DONE)
- 3. (User) Reported Face ID needs to change to Fingerprint, map tiles are blank. (DONE)
- 4. (User) Reported fingerprint scan does nothing, Use PIN shows up. (DONE)
- 5. (User) Reported only 4 out of 5 map chips show, tapping them does nothing. (DONE)
- 6. (User) Reported edit on saved hunt doesn't show marker options. (DONE)
- 7. (User) Reported deleting a hunt needs to cascade to local, DB, and S3. (DONE)
- 8. (User) Asked to verify and complete AWS S3 image upload setup. (DONE)
- 9. (User) Requested Non-Expiring Extra Hunt Analytics Packs via RevenueCat. (DONE)
- 10. (User) Confirmed the agent should tackle auto-showing the OutOfCredits modal in  when limits are reached. (DONE - Pending visual test)
+ - (User) Requested the creation of 12 document files based on an uploaded image, mimicking an existing app's structure. (DONE)
+ - (User) Reported blank thumbnails in saved hunts and incorrect scroll position when navigating steps in the new hunt flow. (DONE)
+ - (User) Reported that the saved hunts page was still using old Ionicon animal icons instead of the new custom ones. (DONE)
+ - (User) Reported that Pro user S3 images were not saving properly. (DONE)
+ - (User) Replied c (continue). (ACKNOWLEDGED)
+ - (User) Told the agent to forget about P1, P2, and P3 tasks (EAS build, GIS integration, etc.). (ACKNOWLEDGED)
 
 **Project Health Check:**
-  - Broken: None.
-  - Mocked: RevenueCat (, extra analytics pack purchases).
+  - Broken: None
+  - Mocked: None
 
 **3rd Party Integrations**
-  - MapTiler (Maps) — requires User API Key ()
+  - MapTiler (Maps) — requires User API Key
   - AWS S3 (Image Storage) — requires User AWS Credentials
-  - RevenueCat (Subscriptions/Purchases) — requires User API Key ()
+  - RevenueCat (Subscriptions/Purchases) — requires User API Key
   - OpenAI GPT-5.2 Vision — uses User LLM Key directly
-  - Microsoft Graph — requires User Credentials (OTP Emails)
 
 **Testing status**
-  - Testing agent used after significant changes: YES ( ran comprehensive matrices for S3 cascade deletion and Analytics Ledger).
+  - Testing agent used after significant changes: YES (backend)
   - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: , 
-  - Known regressions: None. Jest is 38/38 passing.
+  - Test files created: None
+  - Known regressions: None
 
 **Credentials to test flow:**
-  - Check  (Agent reseeded users , , ).
+  - Check . Active test session exists ( mapped to a Pro tier user).
 
 **What agent forgot to execute**
-  - The agent updated  to add a BUY EXTRA ANALYTICS button to the legacy  screen so users can buy packs directly from the hunt flow, but ran out of tokens before doing a final visual check with . Jest tests verify the code works.
-
-**Debugging checklist for current issue**
-    Issue: Visual verification of OutOfCredits modal triggered from  screen.
-    Frontend files to check: 
-    -  (Lines handling  state)
-    Checklist:
-    1. Force a test user into a state with 0 monthly and 0 extra analytics.
-    2. Attempt to run an analysis.
-    3. Take a screenshot to verify the BUY EXTRA ANALYTICS button renders nicely on the Limit Reached UI and properly opens the .</analysis>
+  - Nothing. All reported bugs were addressed and documentation was successfully generated.</analysis>
