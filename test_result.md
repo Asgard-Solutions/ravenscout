@@ -6935,3 +6935,138 @@ agent_communication:
         No backend changes. Ready for user to either accept the
         completion or request the optional UI integration test
         run via expo_frontend_testing_agent.
+
+  - task: "Task 10 — Visual Marker Placement on Saved Images (frontend add/edit/delete)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/MarkerFormModal.tsx, /app/frontend/src/components/SavedAnalysisOverlayImage.tsx, /app/frontend/src/utils/markerPlacement.ts, /app/frontend/src/api/overlayItemsApi.ts, /app/frontend/app/results.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Task 10 implementation:
+
+            NEW FILES:
+              /app/frontend/src/components/MarkerFormModal.tsx
+                Bottom-sheet form for creating or editing a saved-
+                image marker. Type picker (12 user-allowed types:
+                stand, blind, camera, feeder, scrape, rub, trail,
+                bedding, water, parking, access_point, custom),
+                name (required, ≤120 chars), notes (≤2000 chars).
+                Edit mode includes a Delete button with destructive
+                confirm. Placement summary shows GPS for geo-capable
+                hits or "Pixel-only • not available" for pixel-only.
+
+              /app/frontend/src/utils/markerPlacement.ts
+                Pure helper `buildMarkerPlacement(...)` that takes a
+                tap in rendered px space + image dims + optional
+                geo bounds and returns the AnalysisOverlayItem-ready
+                coordinate fields:
+                  * geo-capable → {x, y, latitude, longitude,
+                    coordinateSource: 'derived_from_saved_map_bounds'}
+                  * pixel-only → {x, y, latitude: null, longitude:
+                    null, coordinateSource: 'pixel_only'}
+                Validation: tap_out_of_bounds, invalid_dimensions,
+                projection_failed soft errors. Inverted bounds
+                (south > north etc.) downgrade to pixel-only — no
+                fabricated GPS.
+
+            UPDATED FILES:
+              /app/frontend/src/api/overlayItemsApi.ts
+                Adds createOverlayItem (POST /overlay-items),
+                updateOverlayItem (PUT /overlay-items/:id), and
+                wires the existing deleteOverlayItem caller. Same
+                non-throwing { ok, data | reason } contract.
+
+              /app/frontend/src/components/SavedAnalysisOverlayImage.tsx
+                * New props: addMode, onTapPlaceMarker, onEditItem,
+                  onDeleteItem.
+                * In add-mode the image is wrapped in a Pressable
+                  that captures locationX/locationY and forwards
+                  them to the placement helper. Existing markers
+                  remain tappable (they sit on a higher layer).
+                * Detail panel grows Edit / Delete action buttons
+                  when callbacks are provided. Closing the panel
+                  before invoking the callback prevents double-
+                  modal flicker.
+
+              /app/frontend/app/results.tsx
+                * Loads the most-recent saved_map_image alongside
+                  overlay items (Task 9 fetch effect extended).
+                * "Add Marker" toggle in the SAVED MARKERS header.
+                  When enabled, a hint appears and the image enters
+                  drop-pin mode. Tapping outputs a placement
+                  summary into the MarkerFormModal.
+                * Submit handlers POST/PUT/DELETE through the API
+                  client and re-list afterwards to keep state fresh.
+                * Native confirm dialog on delete; alert on errors.
+
+            UNIT TESTS (yarn test:unit):
+              /app/frontend/src/utils/__tests__/markerPlacement.test.ts
+              11/11 PASS:
+                ✓ geo center → center lat/lng + center x/y
+                ✓ geo top-left → NW corner
+                ✓ geo bottom-right → SE corner
+                ✓ pixel-only (no geo) → x/y, GPS null
+                ✓ supportsGeoPlacement=false → pixel-only
+                ✓ missing/incomplete bounds → pixel-only
+                ✓ inverted bounds → pixel-only (no fabricated GPS)
+                ✓ tap outside rect → tap_out_of_bounds
+                ✓ NaN tap → tap_out_of_bounds
+                ✓ zero/negative dims → invalid_dimensions
+                ✓ 1:1 render: tap maps directly to original pixel
+
+            FULL FRONTEND SUITE: 222/224 PASS (the 2 failures remain
+            the PRE-EXISTING huntStyles.test.ts ones; Task 10 added
+            +11 net tests).
+
+            TYPESCRIPT: `npx tsc --noEmit -p .` clean.
+
+            BACKEND: No backend changes. Existing
+            POST /api/hunts/:id/overlay-items,
+            PUT /api/hunts/:id/overlay-items/:item_id,
+            DELETE /api/hunts/:id/overlay-items/:item_id endpoints
+            (verified working in Task 6/8) drive create/edit/delete.
+
+            VALIDATION COVERAGE:
+              * Type required: enforced by USER_MARKER_TYPES picker
+                (default 'stand', no "no-type" option).
+              * Name required: form blocks submit when blank,
+                shows inline error.
+              * x/y within image bounds: buildMarkerPlacement
+                rejects out-of-bounds taps.
+              * Lat/lng valid for geo-capable: pixelToLatLng is the
+                same helper covered by 35 test cases in
+                geoProjection.test.ts; range invariant maintained.
+              * No fabricated GPS for pixel-only: explicit
+                coordinateSource='pixel_only', latitude/longitude
+                forced to null both client-side (helper) AND
+                server-side (overlay_normalizer.py rule #3 —
+                continues to apply on bulk-normalize, and the
+                create endpoint uses the same Pydantic validation
+                via AnalysisOverlayItemCreate).
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Task 10 frontend implementation complete and unit-tested.
+
+        New on /results:
+          * "Add Marker" toggle in the SAVED MARKERS header opens
+            drop-pin mode; tapping the image opens a marker form
+            that derives GPS for geo-capable images and stores
+            null coords for pixel-only ones.
+          * Edit / Delete buttons live in the marker detail panel
+            and on the marker form footer (edit mode).
+          * 11 new unit tests cover the placement math + the
+            "never fabricate GPS" contract.
+
+        Suite totals: 222/224 PASS (2 pre-existing unrelated
+        failures), TypeScript clean.
+
+        No backend changes — POST/PUT/DELETE on
+        /api/hunts/:id/overlay-items already exist and are
+        unchanged. Awaiting user decision on optional UI test run.

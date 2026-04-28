@@ -86,6 +86,25 @@ export interface SavedAnalysisOverlayImageProps {
    * AnalysisOverlayItem so callers can wire up scrolling-to-item etc.
    */
   onSelectItem?: (item: AnalysisOverlayItem) => void;
+  /**
+   * Task 10 — when true, the image becomes a "drop-pin" target. A
+   * tap fires `onTapPlaceMarker` with the rendered (px) tap position
+   * relative to the image rect; the parent is responsible for
+   * converting + persisting the marker. Existing markers stay
+   * tappable but their press fires `onSelectItem` (so the user can
+   * still inspect details while in add-mode).
+   */
+  addMode?: boolean;
+  onTapPlaceMarker?: (renderedX: number, renderedY: number) => void;
+  /**
+   * Task 10 — show an "Edit" button on the detail panel. The
+   * caller is responsible for opening its own MarkerFormModal.
+   */
+  onEditItem?: (item: AnalysisOverlayItem) => void;
+  /**
+   * Task 10 — show a "Delete" button on the detail panel.
+   */
+  onDeleteItem?: (item: AnalysisOverlayItem) => void;
 }
 
 // --- Helpers ------------------------------------------------------------
@@ -117,6 +136,10 @@ export const SavedAnalysisOverlayImage: React.FC<
   testID,
   sourceAssetNamesById,
   onSelectItem,
+  addMode,
+  onTapPlaceMarker,
+  onEditItem,
+  onDeleteItem,
 }) => {
   const [selectedItem, setSelectedItem] = useState<AnalysisOverlayItem | null>(
     null,
@@ -196,18 +219,39 @@ export const SavedAnalysisOverlayImage: React.FC<
     height: renderedHeight,
   } as const;
 
+  // Task 10 — capture a tap on the image area when add-mode is on.
+  // We translate the gesture's location relative to the inner image
+  // rect (which is the same as the outer container in this component
+  // since we use position:absolute children + cover-fit). The
+  // pressable layer sits BELOW the marker layer (markers come later
+  // and are TouchableOpacity, which stops propagation), so tapping
+  // an existing marker still opens its detail panel as expected.
+  const handleAddTap = (e: any) => {
+    if (!addMode || !onTapPlaceMarker) return;
+    const { locationX, locationY } = e?.nativeEvent || {};
+    if (typeof locationX !== 'number' || typeof locationY !== 'number') return;
+    onTapPlaceMarker(locationX, locationY);
+  };
+
   return (
     <View
       testID={testID || 'saved-analysis-overlay-image'}
       style={[styles.container, containerStyle]}
     >
       {imageUri ? (
-        <Image
-          source={{ uri: imageUri }}
+        <Pressable
+          onPress={handleAddTap}
+          disabled={!addMode || !onTapPlaceMarker}
           style={[styles.image, containerStyle]}
-          resizeMode="cover"
-          testID="saved-analysis-overlay-image-bg"
-        />
+          testID="saved-analysis-overlay-image-touchable"
+        >
+          <Image
+            source={{ uri: imageUri }}
+            style={containerStyle}
+            resizeMode="cover"
+            testID="saved-analysis-overlay-image-bg"
+          />
+        </Pressable>
       ) : (
         <View
           testID="saved-analysis-overlay-image-empty"
@@ -330,6 +374,47 @@ export const SavedAnalysisOverlayImage: React.FC<
                       </Text>
                     </View>
                   ))}
+
+                  {(onEditItem || onDeleteItem) && (
+                    <View style={styles.detailActions}>
+                      {onEditItem && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            const it = selectedItem;
+                            closeDetail();
+                            onEditItem(it);
+                          }}
+                          style={[styles.detailActionBtn, styles.detailActionEdit]}
+                          testID="saved-overlay-edit-btn"
+                        >
+                          <Ionicons
+                            name="create-outline"
+                            size={16}
+                            color={COLORS.accent}
+                          />
+                          <Text style={styles.detailActionEditText}>Edit</Text>
+                        </TouchableOpacity>
+                      )}
+                      {onDeleteItem && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            const it = selectedItem;
+                            closeDetail();
+                            onDeleteItem(it);
+                          }}
+                          style={[styles.detailActionBtn, styles.detailActionDelete]}
+                          testID="saved-overlay-delete-btn"
+                        >
+                          <Ionicons
+                            name="trash-outline"
+                            size={16}
+                            color={COLORS.avoidZones}
+                          />
+                          <Text style={styles.detailActionDeleteText}>Delete</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  )}
                 </ScrollView>
               </>
             )}
@@ -454,6 +539,41 @@ const styles = StyleSheet.create({
     fontSize: 14,
     flex: 1,
     textAlign: 'right',
+  },
+  detailActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.cardBorder,
+  },
+  detailActionBtn: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+  },
+  detailActionEdit: {
+    borderColor: COLORS.accent,
+  },
+  detailActionEditText: {
+    color: COLORS.accent,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  detailActionDelete: {
+    borderColor: COLORS.avoidZones,
+  },
+  detailActionDeleteText: {
+    color: COLORS.avoidZones,
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
 
