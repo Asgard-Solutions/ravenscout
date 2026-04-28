@@ -21,13 +21,13 @@ A quick map of every external service Raven Scout talks to, what it sends, and w
   - Purpose: auto-fill the hunt's wind / weather fields. You can override any field manually.
 
 ## Cloud Storage (Pro tier only)
-- **AWS S3 (us-east-2, bucket `ravenscout-media-prod`, private)** — your full-resolution map images.
+- **AWS S3 (private, server-configured bucket and region)** — your full-resolution map images.
   - Sent: pre-signed PUT upload (from device to S3 directly; the server never holds the bytes).
   - Received: pre-signed GET on demand when you open a saved hunt.
   - Purpose: cross-device hunt backup and fresh-signed streaming on resume.
 
 ## Account Database
-- **MongoDB Atlas** — account, hunt metadata, overlay edits, entitlement state.
+- **MongoDB** — account, hunt metadata, overlay edits, entitlement state.
   - Purpose: source of truth for the read API (`GET /api/hunts`) and cross-device sync.
 
 ## Auth

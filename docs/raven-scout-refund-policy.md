@@ -1,7 +1,7 @@
 # Raven Scout — Refund Policy
 
 ## Short version
-Raven Scout subscriptions (Core, Pro) are sold through Apple App Store and Google Play. **All refunds are issued by Apple or Google** under their respective refund policies. Raven Scout does not directly process refunds — but we will always help you navigate the platform's refund flow.
+Raven Scout subscriptions and Extra Analytics packs are sold through Apple App Store and Google Play. **All refunds are issued by Apple or Google** under their respective refund policies. Raven Scout does not directly process refunds — but we will help you navigate the platform's refund flow.
 
 ## How to Request a Refund
 
@@ -9,25 +9,28 @@ Raven Scout subscriptions (Core, Pro) are sold through Apple App Store and Googl
 1. Visit **reportaproblem.apple.com** and sign in with the Apple ID that purchased the subscription.
 2. Find the most recent Raven Scout charge.
 3. Select **Request a refund** → choose a reason → **Submit**.
-4. Apple responds by email, typically within 48 hours.
+4. Apple responds by email; review timing is at Apple's discretion.
 
 ### Android (Google Play)
-1. Open **play.google.com** on a browser and sign in.
+1. Open **play.google.com** in a browser and sign in.
 2. Account → Order history → locate the Raven Scout subscription → **Report a problem**.
-3. Google Play refund window is typically within 48 hours of purchase for auto-refund; older charges go through a support review.
+3. Google Play handles the refund decision per its own policy.
+
+Both platforms publish their own refund eligibility rules — we cannot guarantee a refund window, since the decision is theirs, not ours.
 
 ## What Raven Scout Will Do
-If Apple or Google declines a refund you feel should be honored (e.g. a failed charge on a brand-new Trial user, duplicate charge, or a bug that prevented the service from working), email **support@asgardsolution.io** with:
+If Apple or Google declines a refund you feel should be honored (e.g. a duplicate charge, or a bug that prevented the service from working), email **support@asgardsolution.io** with:
 - your App Store / Play Store receipt number
 - the Apple ID email or Google account used
 - a short description of the issue
 
-We'll review it and, where we can, issue a RevenueCat-side entitlement (effectively a free month of Pro / Core) while you work with the store on the cash refund. We may ask for logs — if you can, enable **Settings → Send Diagnostics** before contacting support.
+Where we can, we'll grant a goodwill RevenueCat-side entitlement (effectively a free month of Core / Pro) while you work with the store on the cash refund. We may ask for diagnostic logs.
 
 ## Trial Users
-The 14-day Trial is free. No refund is needed if you don't convert — your account simply drops to a read-only state at the end of the Trial.
+The Trial tier is free — 3 lifetime AI analyses, no card on file. There is nothing to refund.
 
-## Annual vs Monthly
-Apple and Google apply prorated refund rules differently. Annual subscriptions are usually eligible for a prorated refund for the unused portion within the first 14 days; after that refunds are discretionary. Monthly subscriptions are generally refunded only within 48 hours of charge.
+## Subscriptions vs. Extra Analytics Packs
+Subscriptions (Core, Pro) and one-time Extra Analytics packs ($5.99 / $10.99 / $14.99) all flow through the same App Store / Play Store refund process. Apple and Google apply different rules to each — please check the refund-eligibility text shown in the store at the time you request the refund.
 
-This policy applies to Raven Scout v2.0 and later. For questions about charges older than 90 days, please contact your card issuer directly.
+## Older Charges
+For charges older than the platform's refund-eligibility window, please contact your card issuer directly.

@@ -1,42 +1,50 @@
 # Raven Scout — Pricing & Plans
 
-Raven Scout offers three tiers. Everyone starts on Trial — no credit card required.
+Raven Scout offers three subscription tiers plus optional one-time credit packs. Everyone starts on the **Trial** tier with 3 free AI hunt analyses — no credit card, no time limit.
 
-## Trial — Free (14 days)
-- 3 AI hunt analyses total
-- 1 map image per hunt
-- All 8 supported species
-- Local hunt history only (no cloud backup)
-- Full overlay editor + offline viewing
+## Trial — Free
+- **3 AI hunt analyses, lifetime total** (not per month — once you've used your 3, you upgrade or wait for analyses to be granted manually).
+- All 8 supported species.
+- Map upload + interactive MapLibre map.
+- Local hunt history only (no cloud backup).
+- **Weather auto-fill is not included** on Trial — fill wind / weather fields manually.
+- Full overlay editor + offline viewing of saved hunts.
 
-## Core — $9.99 / month or $89.99 / year
-- **10 AI hunt analyses per month**
-- 1 map image per hunt
-- All species, weapon + method context
-- Local hunt history only
-- Weather + wind auto-fill
-- Full overlay editor + offline viewing
-- Standard email support
+## Core — $7.99 / month or $79.99 / year
+- **10 AI hunt analyses per month**.
+- 1-month rollover: unused analyses from this billing cycle carry into the next month (capped at one cycle's worth).
+- All species, weapon + method context.
+- Local hunt history only — no cloud backup.
+- **Weather + wind auto-fill** for the hunt date and GPS.
+- Full overlay editor + offline viewing.
+- Standard email support.
 
-## Pro — $19.99 / month or $179.99 / year
+## Pro — $14.99 / month or $149.99 / year
 Everything in Core, plus:
-- **Unlimited AI hunt analyses**
-- **Up to 4 map images per hunt** (multi-image correlation — the model cross-references all images)
-- **Cloud backup of full-resolution maps** (private AWS S3, signed download, cross-device sync)
-- **Enhanced species prompt framework** (controlled rollout — deeper behavioral + regional modeling for supported regions)
-- Automatic orphan S3 cleanup — we keep your storage tidy
-- Priority email support
+- **40 AI hunt analyses per month**.
+- **12-month rollover** — unused analyses accumulate for up to 12 billing cycles.
+- **Multi-image correlation** — up to 5 map images per hunt; the AI cross-references all of them.
+- **Cloud backup** of full-resolution map images (private AWS S3, signed download, cross-device sync).
+- **Enhanced species prompt framework** — deeper behavioral + regional modeling for supported regions (controlled rollout).
+- Automatic orphan-image cleanup so you never pay for abandoned uploads.
+- Priority email support.
+
+## Extra Hunt Analytics Packs (one-time, non-expiring)
+When your monthly analyses run out you can buy a top-off pack instead of upgrading. Packs never expire and stack on top of any subscription. Monthly subscription credits are spent first; extra credits drain after the monthly allowance is used up.
+
+| Pack | Price | Credits |
+|---|---|---|
+| 5 Extra Hunt Analytics  | $5.99  | +5 analyses |
+| 10 Extra Hunt Analytics | $10.99 | +10 analyses |
+| 15 Extra Hunt Analytics | $14.99 | +15 analyses |
 
 ## Payment
-- Purchases go through the **App Store** (iOS) or **Google Play** (Android) via RevenueCat.
-- Subscriptions auto-renew; cancel any time in your store account — access continues through the paid-through date.
+- Subscriptions and packs are processed by **Apple App Store** (iOS) or **Google Play** (Android) via RevenueCat. Raven Scout does not bill your card directly.
+- Subscriptions auto-renew until cancelled. Cancellation must be done in your store account; access continues through the paid-through date.
 - Taxes are applied by the platform where applicable.
 
 ## Changing Plans
-Upgrade, downgrade, or cancel under **Profile → Subscription**. Changes flow through the store and take effect at the next renewal (downgrades) or immediately (upgrades).
+Upgrade, downgrade, or cancel under **Profile → Subscription**. Changes flow through the store: upgrades take effect immediately, downgrades take effect at the next renewal.
 
-## Family Sharing
-- iOS: Family Sharing for subscriptions is **not currently enabled**.
-- Android: Google Family Library support is **not enabled** for this app.
-
-Pricing is subject to change; your current subscription is grandfathered at the price you signed up at for as long as the subscription is continuous.
+## Pricing Changes
+Pricing is subject to change. Active subscribers continue at the price they signed up at for as long as their subscription remains continuous and the platform supports the legacy SKU.

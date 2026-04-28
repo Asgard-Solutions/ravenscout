@@ -9,7 +9,7 @@
 | Free storage | 150 MB | 500 MB |
 | Screen | 4.7" | 5.5"+ |
 
-The app is an Expo / React Native build shipped as a standalone iOS IPA and Android APK / AAB. It is NOT an Expo Go-only app.
+The app is an Expo / React Native build shipped as a standalone iOS IPA and Android APK / AAB.
 
 ## Connectivity
 - Creating a hunt or running an AI analysis **requires** an internet connection (cellular 4G/LTE or Wi-Fi). Analysis uploads compressed map imagery and round-trips to our AI backend.
@@ -17,7 +17,7 @@ The app is an Expo / React Native build shipped as a standalone iOS IPA and Andr
 - Cloud backup (Pro tier) requires Wi-Fi or LTE good enough to PUT your full-resolution maps to AWS S3 (typically a few MB per image).
 
 ## Permissions
-- **Location** (optional, recommended) — pre-fills GPS and auto-fetches weather / wind.
+- **Location** (optional, recommended) — pre-fills GPS and auto-fetches weather / wind on Core and Pro.
 - **Photo library** (optional) — pick saved map screenshots.
 - **Camera** (optional) — snap a map inside the app.
 - **Notifications** (optional) — subscription / billing alerts only.
@@ -25,7 +25,7 @@ The app is an Expo / React Native build shipped as a standalone iOS IPA and Andr
 Every permission can be declined and re-enabled later in your device settings.
 
 ## Account
-You need an email address OR a Google account. Password reset uses a 6-digit code sent to your registered email.
+You need an email address OR a Google account. Password reset uses a 6-digit code sent to your registered email; codes are valid for 15 minutes.
 
-## Payment (Pro / Core)
-Purchases are processed by the App Store (iOS) or Google Play (Android) through RevenueCat. A valid store account with a payment method on file is required for paid tiers. No card is required for the 14-day Trial.
+## Payment (Core / Pro)
+Purchases are processed by the App Store (iOS) or Google Play (Android) through RevenueCat. A valid store account with a payment method on file is required for paid tiers and for Extra Hunt Analytics packs. **No card is required for the Trial tier** — you start with 3 free AI analyses, no time limit.

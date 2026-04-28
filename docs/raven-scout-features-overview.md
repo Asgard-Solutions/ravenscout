@@ -5,8 +5,9 @@ Raven Scout is an AI-assisted tactical hunting companion for iOS and Android. Po
 ## Core Features
 
 ### 1. AI Hunt Analysis (GPT-5.2 Vision)
-- Upload up to 4 map images per hunt — satellite, topo, onX / HuntWise exports, trail-cam screenshots, or the built-in interactive MapLibre viewer.
-- The model reads the imagery alongside your selections (species, weapon, method, hunt date, time window, wind direction, GPS) and returns:
+- Upload up to 5 map images per hunt — satellite, topo, onX / HuntWise exports, trail-cam screenshots, or the built-in interactive MapLibre viewer.
+- On Pro, the model reads ALL provided images alongside your selections (species, weapon, method, hunt date, time window, wind direction, GPS) and cross-references them. On Core / Trial only the primary map image is sent to the model.
+- The analysis returns:
   - 3–6 placed **overlays**: stands, travel corridors, access routes, avoid zones, bedding, food, water, trails.
   - 1–3 ranked **top setups** with entry/exit strategy, wind risk, thermals risk, pressure risk, and a best window.
   - Written **summary, wind notes, best-time window, key assumptions, species-specific tips**.
@@ -25,39 +26,45 @@ Pick your **weapon** (archery / rifle / muzzleloader) and **method** (still hunt
 - Pinch / pan, long-press to drop a custom waypoint, auto-fly to your analysis bounds.
 
 ### 5. Hunt History + Saved Hunts
-- All analyses are saved locally first (offline-first) and synced to your account via MongoDB + AWS S3.
-- Pro tier: full-resolution map images upload to a private S3 bucket under `hunts/{userId}/{huntId}/…` and stream via signed download URLs.
-- Core / Trial: images live on the device only.
+- All analyses are saved locally first (offline-first) and synced to your account via MongoDB.
+- **Pro** tier additionally backs up full-resolution map images to a private AWS S3 bucket under `hunts/{userId}/{huntId}/…` and streams them via signed download URLs.
+- **Core / Trial**: images live on the device only.
 
-### 6. Weather + Wind Integration
-Auto-fetches forecast data for the hunt date and GPS so wind / temperature / precipitation are already filled in. You can always override manually.
+### 6. Weather + Wind Integration (Core / Pro only)
+Auto-fetches forecast data for the hunt date and GPS so wind / temperature / precipitation are already filled in. Trial users enter wind / weather manually. You can always override the auto-filled values.
 
-### 7. Overlay Editor
-After analysis you can nudge, rename, hide, or add custom waypoints. Edits are stamped on the hunt record so your ground-truth tweaks follow you across devices.
+### 7. Saved Marker Editor
+After analysis you can:
+- Tap any marker to view its details and GPS coordinates (when the source image is georeferenced).
+- Long-press and drag to reposition.
+- Edit name / type / notes, or delete.
+- Add brand-new markers by tapping the image — geo-capable images store GPS automatically; pixel-only uploads store on-image x/y only (no fabricated GPS).
 
 ### 8. Offline Support
 Every saved hunt renders its map + overlays + written brief with no signal. Great for trucks in the dark before sunrise.
 
 ### 9. Privacy
-No ads. No selling your location. Your GPS, imagery, and hunt notes are scoped to your account; Pro storage is a private AWS S3 bucket.
+No ads. No selling your location. Your GPS, imagery, and hunt notes are scoped to your account; Pro storage is a private AWS S3 bucket with user-scoped, short-lived signed URLs.
 
 ## Tier Differences
 
 | Capability | Trial | Core | Pro |
 |---|---|---|---|
-| Hunts per month | 3 | 10 | Unlimited |
-| Image count per hunt | 1 | 1 | Up to 4 |
+| AI hunt analyses | 3 lifetime | 10 / month | 40 / month |
+| Rollover of unused analyses | — | 1 cycle | 12 cycles |
+| Multi-image correlation per hunt | Primary only | Primary only | Up to 5 images |
 | Cloud image backup (S3) | — | — | ✓ |
 | Enhanced species prompt framework | — | — | Rollout-gated |
-| Overlay editor | ✓ | ✓ | ✓ |
-| Offline access | ✓ | ✓ | ✓ |
-| Weather integration | ✓ | ✓ | ✓ |
+| Weather / wind auto-fill | — | ✓ | ✓ |
+| Saved-marker editor | ✓ | ✓ | ✓ |
+| Offline access to saved hunts | ✓ | ✓ | ✓ |
 | Interactive map | ✓ | ✓ | ✓ |
 
 ## Integrations Under the Hood
 - **OpenAI GPT-5.2 Vision** — map analysis.
-- **AWS S3 (us-east-2)** — private cloud image storage for Pro.
+- **AWS S3** — private cloud image storage for Pro.
 - **MapTiler** — base map tiles.
+- **WeatherAPI.com** — weather / wind auto-fill (Core, Pro).
 - **RevenueCat** — subscriptions on both iOS and Android.
-- **Google OAuth / Email OTP** — sign-in.
+- **Google OAuth / Email + Password (with email OTP reset)** — sign-in.
 - **Microsoft Graph** — transactional password-reset email.

@@ -1,13 +1,13 @@
 # Raven Scout — Terms of Service (Plain-English Summary)
 
-> This is a plain-English summary of the full Terms of Service. In case of any conflict between this summary and the full ToS, the full ToS governs. Read the full document at **ravenscout.app/terms**.
+> This is a plain-English summary intended to make the published Terms of Service easier to navigate. The full Terms govern in case of any conflict. Specific clauses such as governing law, liability cap, refund eligibility windows, and notice-of-change duration are set in the published Terms — please read them on `ravenscout.app/terms`.
 
 ## What Raven Scout Is
-Raven Scout is an AI-assisted map analysis tool for hunters. It produces tactical suggestions based on imagery and parameters you provide. It is a decision-support tool — **not a substitute for scouting, law, or common sense**.
+Raven Scout is an AI-assisted map analysis tool for hunters. It produces tactical suggestions based on imagery and parameters you provide. It is a decision-support tool — **not a substitute for scouting, knowledge of local law, or common sense**.
 
 ## What You Agree To
-- You're 18 or older (or have parental consent).
-- You'll obey all applicable hunting laws in your jurisdiction — Raven Scout cannot detect whether a map you upload represents legal hunting ground, posted property, a Wildlife Management Area with special rules, or a protected species habitat.
+- You meet the minimum age and consent requirements set by the published Terms in your jurisdiction.
+- You'll obey all applicable hunting laws where you hunt — Raven Scout cannot detect whether a map you upload represents legal hunting ground, posted property, a Wildlife Management Area with special rules, or a protected species habitat.
 - You won't feed the app content you don't have the right to use (e.g. paid-subscription map exports whose license forbids third-party processing).
 - You won't reverse-engineer the AI output, resell analyses, scrape the app, or use it to automate commercial guiding without a written agreement.
 
@@ -15,7 +15,7 @@ Raven Scout is an AI-assisted map analysis tool for hunters. It produces tactica
 - Provide the service as described in the app and the Features Overview.
 - Keep your data private per our Privacy Policy.
 - Not sell your personal data, hunt notes, or imagery.
-- Give 30 days' notice before any material change to these terms.
+- Provide reasonable advance notice before any material change to the published Terms (specific notice window is set in the Terms themselves).
 
 ## Subscription Terms
 - Purchases are through Apple App Store or Google Play via RevenueCat.
@@ -29,14 +29,15 @@ Raven Scout is an AI-assisted map analysis tool for hunters. It produces tactica
   - Injuries sustained while approaching, setting up, or leaving any location.
   - Trespass, boundary violations, or any regulatory enforcement arising from acting on an analysis.
   - Encounters with wildlife or other people on recommended routes.
-- Maximum aggregate liability to you is capped at the last 12 months of subscription fees you paid us.
+- A maximum aggregate liability cap is specified in the published Terms.
 
 ## Termination
 We can suspend an account for abuse, fraud, regulatory requests, or repeated terms violations. You can delete your account any time under **Profile → Account → Delete account**.
 
 ## Governing Law
-These terms are governed by the laws of the State of Texas, USA, with exclusive jurisdiction in the state / federal courts of Harris County, Texas.
+The governing-law and dispute-resolution clauses are set in the published Terms; please review them at `ravenscout.app/terms`.
 
-Last updated: 27 April 2026.
+---
+
 Full text: **ravenscout.app/terms**.
 Contact: **support@asgardsolution.io**.
