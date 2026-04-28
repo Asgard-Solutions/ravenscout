@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { BACKEND_URL } from '../constants/theme';
 import { identifyUser as rcIdentifyUser, logoutPurchases as rcLogoutPurchases } from '../lib/purchases';
+import { isBiometricEnabled } from '../utils/biometric';
 
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT
 // URLS, THIS BREAKS THE AUTH.
@@ -398,7 +399,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    if (sessionToken) {
+    // If the user has biometric login enabled, this is a "lock the
+    // app" moment, not a real account sign-out: revoking the server
+    // session here would invalidate the very token that the next
+    // biometric unlock relies on, forcing the user back through
+    // password sign-in and breaking the entire feature. We keep the
+    // server session + the SecureStore-backed biometric token alive
+    // and only clear the local in-memory state and AsyncStorage
+    // copy of the token. The next app open lands on the login
+    // screen with "Use Biometrics" available, which re-hydrates
+    // the session via /api/users/me.
+    const keepSessionAlive = await isBiometricEnabled().catch(() => false);
+    if (sessionToken && !keepSessionAlive) {
       try {
         await fetch(`${BACKEND_URL}/api/auth/logout`, {
           method: 'POST',
