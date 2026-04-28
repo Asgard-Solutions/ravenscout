@@ -1035,10 +1035,85 @@ agent_communication:
 
 test_plan:
   current_focus:
-    - "Saved hunts custom species icons + Pro user S3 image upload sync (mongo image_s3_keys)"
+    - "History thumbnail blank (private S3 bucket) + setup wizard scroll-to-top per step"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+history_thumbs_and_setup_scroll:
+  - task: "History thumbnails resolve via signed-download on private S3 + setup wizard scrolls to top on every step change"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/media/adapters/CloudMediaStore.ts, /app/frontend/app/setup.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          USER REPORT (verbatim):
+            1. "now that the S3 images are working when you go on
+               the saved hunts page the images are 'thumbnails'
+               are blank but when you open them all the images
+               are there."
+            2. "when you start new hunt and move through the pages
+               they are not starting at the top of the page like
+               they should, if you scrolled down on the page when
+               you move to the next on that is where it starts at."
+
+          ROOT CAUSES:
+
+          • Thumbnails blank — the S3 bucket `ravenscout-media-prod`
+            is PRIVATE (no CLOUDFRONT_BASE_URL / S3_PUBLIC_BASE_URL
+            env vars set). `CloudMediaStore.save` was stamping the
+            asset with `uri: presign.assetUrl` which is the direct
+            S3 object URL. On resolve, CloudMediaStore.resolve
+            preferred this stored `uri` over minting a signed GET,
+            so `<Image>` fetched `https://…amazonaws.com/…` and
+            got HTTP 403 (private bucket). The primary image on
+            /results happens to still be in the in-session
+            base64 cache, which masks the bug until you leave
+            the /results route and come back via history.
+
+          • Setup wizard not scrolling to top — setup.tsx uses a
+            single ScrollView for all wizard steps and only has
+            `useScrollToTopOnFocus` (fires on ROUTE focus, not on
+            in-screen step transitions). Moving step 0→1→2 kept
+            the previous scroll offset.
+
+          FIXES APPLIED:
+
+          • /app/frontend/src/media/adapters/CloudMediaStore.ts:
+              - resolve(): stamp-aware. Cloud assets ALWAYS mint
+                a fresh signed-download URL via
+                `/api/media/presign-download` unless the asset was
+                explicitly flagged `publicDelivery: true` at save
+                time. Legacy / URI-only records still fall through
+                to the stored URL.
+              - save(): stamp `publicDelivery = !presign.privateDelivery`
+                on every new cloud asset so the resolver knows the
+                delivery mode statically (forward compat for when
+                CloudFront eventually gets added).
+
+          • /app/frontend/app/setup.tsx:
+              - Added `useEffect` that calls
+                `scrollRef.current.scrollTo({ y: 0, animated: false })`
+                on every `step` change. No dependency on navigation
+                focus — handles all wizard step transitions
+                (species → maps → weather → hunt-style → confirm).
+
+          NOT TESTABLE BY BACKEND TESTING AGENT:
+            Both changes are frontend-only. Server presign endpoints
+            were already working. Action: user verifies on device
+            (saved hunts thumbnails render; new-hunt wizard starts
+            at top of each step).
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Two frontend-only follow-up fixes. No backend retest needed.
+      User will validate on device.
 
 saved_hunts_icons_and_s3_sync:
   - task: "Saved Hunts: use custom gold/white species icons + fix mongo image_s3_keys/media_refs sync from finalizeProvisionalHunt"

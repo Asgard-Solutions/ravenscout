@@ -70,6 +70,16 @@ export default function SetupScreen() {
   const scrollRef = useRef<ScrollView>(null);
   useScrollToTopOnFocus(scrollRef);
   const [step, setStep] = useState(0);
+  // Reset scroll to the top whenever the setup wizard advances or
+  // retreats between steps — the ScrollView is reused across all
+  // steps (single screen, variable content), so without this the
+  // previous step's scroll offset carries over. Use `scrollTo`
+  // instead of `scrollToEnd` to always land at the first field.
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ y: 0, animated: false });
+    }
+  }, [step]);
   const [loading, setLoading] = useState(false);
   const speciesCatalog = useSpeciesCatalog();
   const [limitReached, setLimitReached] = useState(false);
