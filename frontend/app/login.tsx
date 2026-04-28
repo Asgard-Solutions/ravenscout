@@ -14,7 +14,7 @@ import { isBiometricAvailable, isBiometricEnabled, enableBiometric, authenticate
 // URLS, THIS BREAKS THE AUTH.
 export default function LoginScreen() {
   const router = useRouter();
-  const { user, loading, loginWithGoogle, loginWithPassword, sessionToken } = useAuth();
+  const { user, loading, loginWithGoogle, loginWithPassword, loginWithToken, sessionToken } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -115,9 +115,22 @@ export default function LoginScreen() {
       Alert.alert('Biometric failed', 'Sign in with your password instead.');
       return;
     }
-    // Token is already valid — just persist it and reload.
-    await AsyncStorage.setItem('session_token', r.sessionToken);
-    // Force full reload so useAuth re-hydrates with the new token.
+    // Token is already valid — install it into the AuthContext so the
+    // root layout sees the new session and routes us to the home screen.
+    // Just writing AsyncStorage is NOT enough: the AuthProvider's mount
+    // effect already ran, and `user`/`sessionToken` state stay null,
+    // so the redirect-on-user effect never fires.
+    const installed = await loginWithToken(r.sessionToken);
+    if (!installed.ok) {
+      // Stored token was rejected by the server (revoked / expired).
+      // Disable biometric and force a fresh password sign-in.
+      await disableBiometric();
+      Alert.alert(
+        'Session expired',
+        'Your saved session is no longer valid. Please sign in with your password and re-enable biometric login from the prompt or Profile.',
+      );
+      return;
+    }
     router.replace('/');
   };
 

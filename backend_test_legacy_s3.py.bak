@@ -16,7 +16,7 @@ import requests
 
 BASE_URL = (
     os.environ.get("EXPO_PUBLIC_BACKEND_URL")
-    or "https://hunt-geo-overlay.preview.emergentagent.com"
+    or "https://geo-overlay-hunt.preview.emergentagent.com"
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 

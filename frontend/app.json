@@ -13,7 +13,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload map images for hunt analysis",
-        "NSLocationWhenInUseUsageDescription": "Get weather data for your hunt location"
+        "NSLocationWhenInUseUsageDescription": "Get weather data for your hunt location",
+        "NSFaceIDUsageDescription": "Unlock Raven Scout with Face ID"
       }
     },
     "android": {
@@ -28,6 +29,8 @@
         "READ_MEDIA_IMAGES",
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
         "com.android.vending.BILLING"
       ]
     },
@@ -48,6 +51,12 @@
         }
       ],
       "expo-web-browser",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Unlock Raven Scout with Face ID"
+        }
+      ],
       [
         "@react-native-google-signin/google-signin",
         {

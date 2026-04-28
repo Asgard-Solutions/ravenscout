@@ -40,6 +40,7 @@ interface AuthContextType {
   login: (sessionId: string) => Promise<boolean>;
   loginWithGoogle: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   loginWithPassword: (email: string, password: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  loginWithToken: (sessionToken: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   registerWithPassword: (email: string, password: string, name: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   requestPasswordReset: (email: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   verifyOtp: (email: string, otp: string) => Promise<{ ok: true; resetToken: string } | { ok: false; reason: string }>;
@@ -57,6 +58,7 @@ const AuthContext = createContext<AuthContextType>({
   login: async () => false,
   loginWithGoogle: async () => ({ ok: false, reason: 'not_ready' }),
   loginWithPassword: async () => ({ ok: false, reason: 'not_ready' }),
+  loginWithToken: async () => ({ ok: false, reason: 'not_ready' }),
   registerWithPassword: async () => ({ ok: false, reason: 'not_ready' }),
   requestPasswordReset: async () => ({ ok: false, reason: 'not_ready' }),
   verifyOtp: async () => ({ ok: false, reason: 'not_ready' }),
@@ -266,6 +268,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { ok: true as const };
   };
 
+  // Re-install a session from a stored biometric-protected token.
+  // Validates the token against /api/users/me before committing it,
+  // so a stale/expired token can't put the app in a half-signed-in
+  // state. On failure the caller should clear local biometric state.
+  const loginWithToken = async (token: string) => {
+    if (!token) return { ok: false as const, reason: 'no_token' };
+    const u = await fetchUser(token);
+    if (!u) return { ok: false as const, reason: 'invalid_token' };
+    await AsyncStorage.setItem('session_token', token);
+    setSessionToken(token);
+    setUser(u);
+    return { ok: true as const };
+  };
+
   const registerWithPassword = async (email: string, password: string, name: string) => {
     const r = await authJsonFetch('/api/auth/register', { email, password, name });
     if (!r.ok) return r;
@@ -398,7 +414,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, loading, sessionToken,
-      login, loginWithGoogle, loginWithPassword, registerWithPassword,
+      login, loginWithGoogle, loginWithPassword, loginWithToken, registerWithPassword,
       requestPasswordReset, verifyOtp, resetPassword,
       updateProfile, changePassword, setPassword, deleteAccount,
       logout, refreshUser,
