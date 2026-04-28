@@ -54,4 +54,7 @@ Active App Store / Play Store subscriptions must be cancelled separately in your
 None of these see your password or your billing instrument.
 
 ## Contact
-Questions, access requests, or deletion requests → **support@asgardsolution.io**.
+Questions, access requests, or deletion requests:
+- Web: **https://asgardsolution.io/raven-scout/data-deletion**
+- Support center: **https://asgardsolution.io/raven-scout/support**
+- Email: **support@asgardsolution.io**

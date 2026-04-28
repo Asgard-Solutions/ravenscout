@@ -44,12 +44,16 @@ import {
 import { cleanupOrphanMedia } from '../src/api/mediaCleanupApi';
 
 // ---------------------------------------------------------------------
-// Config — tweak these if legal/marketing URLs change.
+// Config — Raven Scout marketing / legal URLs (live on
+// asgardsolution.io). If any of these change, update them here only —
+// every Profile link below reads from this block.
 // ---------------------------------------------------------------------
-const PRIVACY_POLICY_URL = 'https://asgardsolution.io/privacy';
-const TERMS_OF_SERVICE_URL = 'https://asgardsolution.io/terms';
-const DATA_DELETION_MAILTO =
-  'mailto:privacy@asgardsolution.io?subject=Raven%20Scout%20data%20deletion%20request&body=Please%20delete%20all%20data%20associated%20with%20this%20account.%20';
+const PRIVACY_POLICY_URL = 'https://asgardsolution.io/raven-scout/privacy';
+const TERMS_OF_SERVICE_URL = 'https://asgardsolution.io/raven-scout/terms';
+const USER_MANUAL_URL = 'https://asgardsolution.io/raven-scout/user-manual';
+const RELEASE_NOTES_URL = 'https://asgardsolution.io/raven-scout/release-notes';
+const SUPPORT_URL = 'https://asgardsolution.io/raven-scout/support';
+const DATA_DELETION_URL = 'https://asgardsolution.io/raven-scout/data-deletion';
 
 const TIER_COPY: Record<string, { title: string; subtitle: string; icon: keyof typeof Ionicons.glyphMap }> = {
   trial: {
@@ -745,7 +749,7 @@ export default function ProfileScreen() {
             <Ionicons name="open-outline" size={18} color={COLORS.textSecondary} />
           </TouchableOpacity>
           <View style={styles.listDivider} />
-          <TouchableOpacity style={styles.listRow} onPress={() => openUrl(DATA_DELETION_MAILTO)} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.listRow} onPress={() => openUrl(DATA_DELETION_URL)} activeOpacity={0.7}>
             <View style={[styles.listIconCircle, { backgroundColor: 'rgba(200,155,60,0.9)' }]}>
               <Ionicons name="trash-outline" size={18} color={COLORS.primary} />
             </View>
@@ -753,7 +757,38 @@ export default function ProfileScreen() {
               <Text style={styles.listRowTitle}>Request Data Deletion</Text>
               <Text style={styles.listRowSubtitle}>Delete your data from our servers</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={COLORS.textSecondary} />
+            <Ionicons name="open-outline" size={18} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Help & Resources */}
+        <Text style={styles.sectionLabel}>HELP &amp; RESOURCES</Text>
+        <View style={styles.groupedList}>
+          <TouchableOpacity style={styles.listRow} onPress={() => openUrl(USER_MANUAL_URL)} activeOpacity={0.7}>
+            <View style={styles.listIconCircle}><Ionicons name="book-outline" size={18} color={COLORS.accent} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.listRowTitle}>User Manual</Text>
+              <Text style={styles.listRowSubtitle}>Step-by-step guide to every screen</Text>
+            </View>
+            <Ionicons name="open-outline" size={18} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+          <View style={styles.listDivider} />
+          <TouchableOpacity style={styles.listRow} onPress={() => openUrl(RELEASE_NOTES_URL)} activeOpacity={0.7}>
+            <View style={styles.listIconCircle}><Ionicons name="newspaper-outline" size={18} color={COLORS.accent} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.listRowTitle}>Release Notes</Text>
+              <Text style={styles.listRowSubtitle}>What's new in this version</Text>
+            </View>
+            <Ionicons name="open-outline" size={18} color={COLORS.textSecondary} />
+          </TouchableOpacity>
+          <View style={styles.listDivider} />
+          <TouchableOpacity style={styles.listRow} onPress={() => openUrl(SUPPORT_URL)} activeOpacity={0.7}>
+            <View style={styles.listIconCircle}><Ionicons name="help-buoy-outline" size={18} color={COLORS.accent} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.listRowTitle}>Support</Text>
+              <Text style={styles.listRowSubtitle}>FAQ, troubleshooting, contact</Text>
+            </View>
+            <Ionicons name="open-outline" size={18} color={COLORS.textSecondary} />
           </TouchableOpacity>
         </View>
 
