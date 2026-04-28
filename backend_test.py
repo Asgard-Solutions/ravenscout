@@ -1,394 +1,388 @@
-"""Backend test for Task 8 — /api/hunts/{hunt_id}/overlay-items:bulk-normalize.
+"""Task 11 spot-check: replay 4 critical contracts via direct HTTP.
 
-Runs against the preview URL (EXPO_PUBLIC_BACKEND_URL). Uses seeded
-test users from /app/memory/test_credentials.md.
+Covers:
+  (a) user_provided override — asset GPS wins over AI's
+  (b) geo-capable image — derive both ways
+  (c) pixel-only no-fabrication — lat/lng null even when supplied
+  (d) cross-user isolation — user B cannot read user A's items
+
+Run: python /app/backend_test.py
 """
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 import uuid
-from typing import Any
 
 import requests
 
-BASE_URL = (
-    os.environ.get("EXPO_PUBLIC_BACKEND_URL")
-    or "https://hunt-geo-overlay.preview.emergentagent.com"
-).rstrip("/")
-API = f"{BASE_URL}/api"
+BASE = "http://localhost:8001/api"
+PRO_A = {"Authorization": "Bearer test_session_rs_001"}
+PRO_B = {"Authorization": "Bearer test_session_rs_002"}
 
-USER_A_TOKEN = "test_session_rs_001"
-USER_B_TOKEN = "test_session_rs_002"
+fails = []
+passes = []
 
 
-def hdr(tok: str | None = None) -> dict:
-    h = {"Content-Type": "application/json"}
-    if tok:
-        h["Authorization"] = f"Bearer {tok}"
-    return h
+def _ok(tag):
+    passes.append(tag)
+    print(f"  PASS  {tag}")
 
 
-_results: list[tuple[str, bool, str]] = []
+def _bad(tag, detail):
+    fails.append((tag, detail))
+    print(f"  FAIL  {tag}: {detail}")
 
 
-def check(name: str, cond: bool, detail: str = "") -> None:
-    _results.append((name, bool(cond), detail))
-    marker = "PASS" if cond else "FAIL"
-    msg = f"[{marker}] {name}"
-    if detail:
-        msg += f"  :: {detail}"
-    print(msg)
+def _post(path, body, headers=PRO_A, expect=200):
+    r = requests.post(
+        f"{BASE}{path}",
+        headers={**headers, "Content-Type": "application/json"},
+        json=body,
+        timeout=15,
+    )
+    return r
 
 
-def create_hunt(tok: str, hunt_id: str | None = None) -> str:
-    hunt_id = hunt_id or f"rs-task8-{uuid.uuid4().hex[:10]}"
-    body = {
-        "hunt_id": hunt_id,
-        "metadata": {
-            "species": "deer",
-            "speciesName": "Whitetail Deer",
-            "date": "2026-04-28",
-            "timeWindow": "morning",
-            "windDirection": "NW",
-            "temperature": "42F",
-            "propertyType": "private",
-            "region": "upper_midwest",
+def _get(path, headers=PRO_A):
+    r = requests.get(f"{BASE}{path}", headers=headers, timeout=15)
+    return r
+
+
+def _delete(path, headers=PRO_A):
+    r = requests.delete(f"{BASE}{path}", headers=headers, timeout=15)
+    return r
+
+
+def _create_hunt(headers=PRO_A):
+    hid = f"hunt_spot_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    r = _post(
+        "/hunts",
+        {
+            "hunt_id": hid,
+            "metadata": {
+                "species": "whitetail",
+                "speciesName": "Whitetail Deer",
+                "date": "2026-02-01",
+                "timeWindow": "AM",
+                "windDirection": "N",
+            },
         },
-        "analysis": {"summary": "Task 8 fixture hunt"},
-        "analysis_context": {"prompt_version": "v2"},
-        "media_refs": [],
-        "image_s3_keys": [],
-        "storage_strategy": "local-first",
-    }
-    r = requests.post(f"{API}/hunts", headers=hdr(tok), data=json.dumps(body), timeout=30)
-    assert r.status_code == 200, f"create hunt failed: {r.status_code} {r.text[:300]}"
-    return r.json()["hunt"]["hunt_id"]
-
-
-def create_asset(tok: str, hunt_id: str, lat: float, lng: float) -> str:
-    body = {
-        "type": "stand",
-        "name": "North Ridge Stand",
-        "latitude": lat,
-        "longitude": lng,
-        "notes": "fixture",
-    }
-    r = requests.post(
-        f"{API}/hunts/{hunt_id}/assets",
-        headers=hdr(tok),
-        data=json.dumps(body),
-        timeout=30,
+        headers=headers,
     )
-    assert r.status_code == 200, f"create asset failed: {r.status_code} {r.text[:300]}"
-    return r.json()["asset"]["asset_id"]
+    assert r.status_code == 200, f"create hunt -> {r.status_code}: {r.text}"
+    return hid
 
 
-def create_saved_map_image(tok: str, hunt_id: str, *, geo: bool) -> str:
-    image_id = f"img_{uuid.uuid4().hex[:10]}"
-    if geo:
-        body = {
-            "image_id": image_id,
-            "hunt_id": hunt_id,
-            "supports_geo_placement": True,
-            "original_width": 1000,
-            "original_height": 800,
-            "north_lat": 45.0,
-            "south_lat": 44.0,
-            "west_lng": -93.5,
-            "east_lng": -92.5,
-            "source": "maptiler",
-        }
-    else:
-        body = {
-            "image_id": image_id,
-            "hunt_id": hunt_id,
-            "supports_geo_placement": False,
-            "original_width": 1200,
-            "original_height": 900,
-            "source": "upload",
-        }
-    r = requests.post(
-        f"{API}/saved-map-images", headers=hdr(tok), data=json.dumps(body), timeout=30
-    )
-    assert r.status_code == 200, f"create saved image failed: {r.status_code} {r.text[:300]}"
-    return r.json()["saved_map_image"]["image_id"]
-
-
-def delete_hunt(tok: str, hunt_id: str) -> None:
+# -------------------------------------------------------------------
+# (a) user_provided override
+# -------------------------------------------------------------------
+def scenario_a():
+    print("\n[A] user_provided override — asset GPS wins over AI's")
+    hid = _create_hunt()
     try:
-        requests.delete(f"{API}/hunts/{hunt_id}", headers=hdr(tok), timeout=30)
-    except Exception:
-        pass
+        asset_r = _post(
+            f"/hunts/{hid}/assets",
+            {
+                "type": "stand",
+                "name": "Oak Ridge Ladder",
+                "latitude": 44.5,
+                "longitude": -93.0,
+            },
+        )
+        if asset_r.status_code != 200:
+            _bad("A.create_asset", f"{asset_r.status_code} {asset_r.text}")
+            return
+        asset_id = asset_r.json()["asset"]["asset_id"]
 
+        img_r = _post(
+            "/saved-map-images",
+            {
+                "hunt_id": hid,
+                "image_id": f"img_{uuid.uuid4().hex[:8]}",
+                "image_url": "https://example.invalid/map.png",
+                "original_width": 1000,
+                "original_height": 800,
+                "north_lat": 45.0,
+                "south_lat": 44.0,
+                "west_lng": -93.5,
+                "east_lng": -92.5,
+                "supports_geo_placement": True,
+                "source": "maptiler",
+            },
+        )
+        if img_r.status_code != 200:
+            _bad("A.create_img", f"{img_r.status_code} {img_r.text}")
+            return
+        image_id = img_r.json()["saved_map_image"]["image_id"]
 
-def bulk_normalize(tok: str | None, hunt_id: str, body: Any) -> requests.Response:
-    url = f"{API}/hunts/{hunt_id}/overlay-items:bulk-normalize"
-    if isinstance(body, (dict, list)):
-        return requests.post(url, headers=hdr(tok), data=json.dumps(body), timeout=30)
-    return requests.post(url, headers=hdr(tok), data=body, timeout=30)
-
-
-def approx(a: Any, b: float, tol: float = 0.5) -> bool:
-    try:
-        return abs(float(a) - float(b)) <= tol
-    except Exception:
-        return False
-
-
-def scenario_a_auth(hunt_id: str) -> None:
-    print("\n=== (a) Auth missing/invalid -> 401 ===")
-    r = bulk_normalize(None, hunt_id, {"items": []})
-    check("no-auth returns 401", r.status_code == 401, f"status={r.status_code} body={r.text[:200]}")
-    r = bulk_normalize("totally_bogus_token", hunt_id, {"items": []})
-    check("invalid bearer returns 401", r.status_code == 401, f"status={r.status_code} body={r.text[:200]}")
-
-
-def scenario_b_not_owned(other_hunt_id: str) -> None:
-    print("\n=== (b) Hunt not owned -> 404 ===")
-    r = bulk_normalize(USER_B_TOKEN, other_hunt_id, {"items": []})
-    check("user B can't see user A's hunt (404)", r.status_code == 404, f"status={r.status_code} body={r.text[:200]}")
-
-
-def scenario_c_body_shapes(hunt_id: str) -> None:
-    print("\n=== (c) Body shape validation -> 422 ===")
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, [])
-    check("non-object body returns 422", r.status_code == 422, f"status={r.status_code} body={r.text[:200]}")
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, {"items": {"bad": "not-a-list"}})
-    check("non-list items returns 422", r.status_code == 422, f"status={r.status_code} body={r.text[:200]}")
-
-
-def scenario_d_user_provided(hunt_id: str, image_id: str, asset_id: str) -> None:
-    print("\n=== (d) user_provided override — lat/lng forced from asset ===")
-    body = {
-        "saved_map_image_id": image_id,
-        "analysis_id": "analysis-d-" + uuid.uuid4().hex[:6],
-        "items": [{
-            "type": "stand",
-            "label": "X",
-            "coordinateSource": "user_provided",
-            "sourceAssetId": asset_id,
-            "latitude": 99.999,
-            "longitude": -1.234,
-        }],
-    }
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, body)
-    ok = r.status_code == 200
-    check("status 200", ok, f"status={r.status_code} body={r.text[:400]}")
-    if not ok:
-        return
-    data = r.json()
-    check("created_count == 1", data.get("created_count") == 1, f"data={data}")
-    check("skipped_count == 0", data.get("skipped_count") == 0, f"skipped={data.get('skipped')}")
-    if data.get("created_count") != 1:
-        return
-    c = data["created"][0]
-    check("latitude forced to asset 44.5 (not 99.999)", approx(c.get("latitude"), 44.5, 0.0001), f"lat={c.get('latitude')}")
-    check("longitude forced to asset -93.0 (not -1.234)", approx(c.get("longitude"), -93.0, 0.0001), f"lng={c.get('longitude')}")
-    check("x ≈ 500", approx(c.get("x"), 500, 1), f"x={c.get('x')}")
-    check("y ≈ 400", approx(c.get("y"), 400, 1), f"y={c.get('y')}")
-    check("coordinate_source == 'user_provided'", c.get("coordinate_source") == "user_provided", f"coord_src={c.get('coordinate_source')}")
-    check("source_asset_id preserved", c.get("source_asset_id") == asset_id, f"saved={c.get('source_asset_id')}")
-
-
-def scenario_e_unknown_asset(hunt_id: str, image_id: str) -> None:
-    print("\n=== (e) Unknown sourceAssetId -> skipped 'unknown_source_asset' ===")
-    body = {
-        "saved_map_image_id": image_id,
-        "items": [{
-            "type": "stand", "label": "X",
-            "coordinateSource": "user_provided", "sourceAssetId": "bogus",
-            "latitude": 44.5, "longitude": -93.0,
-        }],
-    }
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, body)
-    check("status 200", r.status_code == 200, f"status={r.status_code} body={r.text[:300]}")
-    if r.status_code != 200:
-        return
-    data = r.json()
-    check("created_count == 0", data.get("created_count") == 0, f"data={data}")
-    check("skipped_count == 1", data.get("skipped_count") == 1, f"skipped={data.get('skipped')}")
-    sk = (data.get("skipped") or [{}])[0]
-    check(
-        "skipped reason starts with 'unknown_source_asset'",
-        isinstance(sk.get("reason"), str) and sk["reason"].startswith("unknown_source_asset"),
-        f"reason={sk.get('reason')}",
-    )
-    check("skipped entry has index=0", sk.get("index") == 0, f"index={sk.get('index')}")
-
-
-def scenario_f_gps_only(hunt_id: str, image_id: str) -> None:
-    print("\n=== (f) GPS only on geo image -> derived_from_saved_map_bounds ===")
-    body = {
-        "saved_map_image_id": image_id,
-        "items": [{"type": "funnel", "label": "Saddle", "latitude": 44.5, "longitude": -93.0}],
-    }
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, body)
-    check("status 200", r.status_code == 200, f"status={r.status_code} body={r.text[:300]}")
-    if r.status_code != 200:
-        return
-    data = r.json()
-    check("created_count == 1", data.get("created_count") == 1, f"data={data}")
-    if data.get("created_count") != 1:
-        return
-    c = data["created"][0]
-    check("x ≈ 500", approx(c.get("x"), 500, 1), f"x={c.get('x')}")
-    check("y ≈ 400", approx(c.get("y"), 400, 1), f"y={c.get('y')}")
-    check("coordinate_source == 'derived_from_saved_map_bounds'", c.get("coordinate_source") == "derived_from_saved_map_bounds", f"coord_src={c.get('coordinate_source')}")
-
-
-def scenario_g_pixel_on_geo(hunt_id: str, image_id: str) -> None:
-    print("\n=== (g) Pixel only on geo image -> derived_from_saved_map_bounds ===")
-    body = {
-        "saved_map_image_id": image_id,
-        "items": [{"type": "funnel", "label": "Saddle", "x": 500, "y": 400}],
-    }
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, body)
-    check("status 200", r.status_code == 200, f"status={r.status_code} body={r.text[:300]}")
-    if r.status_code != 200:
-        return
-    data = r.json()
-    check("created_count == 1", data.get("created_count") == 1, f"data={data}")
-    if data.get("created_count") != 1:
-        return
-    c = data["created"][0]
-    check("latitude ≈ 44.5", approx(c.get("latitude"), 44.5, 0.001), f"lat={c.get('latitude')}")
-    check("longitude ≈ -93.0", approx(c.get("longitude"), -93.0, 0.001), f"lng={c.get('longitude')}")
-    check("coordinate_source == 'derived_from_saved_map_bounds'", c.get("coordinate_source") == "derived_from_saved_map_bounds", f"coord_src={c.get('coordinate_source')}")
-
-
-def scenario_h_pixel_only_image(hunt_id: str, pixel_image_id: str) -> None:
-    print("\n=== (h) Pixel-only image -> lat/lng None, coordinate_source='pixel_only' ===")
-    body = {
-        "saved_map_image_id": pixel_image_id,
-        "items": [{
-            "type": "stand", "label": "X",
-            "latitude": 30, "longitude": -97,
-            "x": 100, "y": 200,
-            "coordinateSource": "ai_estimated_from_image",
-        }],
-    }
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, body)
-    check("status 200", r.status_code == 200, f"status={r.status_code} body={r.text[:300]}")
-    if r.status_code != 200:
-        return
-    data = r.json()
-    check("created_count == 1", data.get("created_count") == 1, f"data={data}")
-    if data.get("created_count") != 1:
-        return
-    c = data["created"][0]
-    check("latitude is None (not fabricated)", c.get("latitude") is None, f"lat={c.get('latitude')}")
-    check("longitude is None (not fabricated)", c.get("longitude") is None, f"lng={c.get('longitude')}")
-    check("x == 100", approx(c.get("x"), 100, 0.001), f"x={c.get('x')}")
-    check("y == 200", approx(c.get("y"), 200, 0.001), f"y={c.get('y')}")
-    check("coordinate_source coerced to 'pixel_only'", c.get("coordinate_source") == "pixel_only", f"coord_src={c.get('coordinate_source')}")
-
-
-def scenario_i_surface_failures(hunt_id: str, image_id: str) -> None:
-    print("\n=== (i) Surface failures: invalid_type / missing_label + index bookkeeping ===")
-    body = {
-        "saved_map_image_id": image_id,
-        "items": [
-            {"type": "rocketship", "label": "Lift-off", "x": 10, "y": 10},  # idx 0
-            {"type": "stand", "x": 10, "y": 10},                             # idx 1 missing label
-            {"type": "funnel", "label": "GoodOne", "latitude": 44.5, "longitude": -93.0},  # idx 2
-        ],
-    }
-    r = bulk_normalize(USER_A_TOKEN, hunt_id, body)
-    check("status 200", r.status_code == 200, f"status={r.status_code} body={r.text[:300]}")
-    if r.status_code != 200:
-        return
-    data = r.json()
-    check("created_count == 1", data.get("created_count") == 1, f"data={data}")
-    check("skipped_count == 2", data.get("skipped_count") == 2, f"skipped={data.get('skipped')}")
-    sk_by_idx = {s.get("index"): s for s in (data.get("skipped") or [])}
-    sk0 = sk_by_idx.get(0, {})
-    sk1 = sk_by_idx.get(1, {})
-    check(
-        "idx 0 reason starts 'invalid_type'",
-        isinstance(sk0.get("reason"), str) and sk0["reason"].startswith("invalid_type"),
-        f"reason={sk0.get('reason')}",
-    )
-    check(
-        "idx 1 reason == 'missing_label'",
-        sk1.get("reason") == "missing_label",
-        f"reason={sk1.get('reason')}",
-    )
-
-
-def scenario_jk_cross_user_persistence(hunt_id_A: str, hunt_id_B: str) -> None:
-    print("\n=== (j) Cross-user isolation + (k) Persistence ===")
-    r = requests.get(f"{API}/hunts/{hunt_id_A}/overlay-items", headers=hdr(USER_A_TOKEN), timeout=30)
-    check("GET /overlay-items (owner) status 200", r.status_code == 200, f"status={r.status_code}")
-    if r.status_code == 200:
-        lst = (r.json() or {}).get("overlay_items") or []
-        check("GET returns >0 items for owner (persistence)", len(lst) > 0, f"count={len(lst)}")
-
-    r2 = requests.get(f"{API}/hunts/{hunt_id_A}/overlay-items", headers=hdr(USER_B_TOKEN), timeout=30)
-    check("GET /overlay-items (cross-user) returns 404", r2.status_code == 404, f"status={r2.status_code} body={r2.text[:200]}")
-
-    r3 = requests.get(f"{API}/hunts/{hunt_id_B}/overlay-items", headers=hdr(USER_B_TOKEN), timeout=30)
-    check("GET /overlay-items (user B own hunt) 200", r3.status_code == 200, f"status={r3.status_code}")
-    if r3.status_code == 200:
-        lst = (r3.json() or {}).get("overlay_items") or []
-        check("user B own hunt has no overlay items", len(lst) == 0, f"count={len(lst)}")
-
-
-def main() -> int:
-    print(f"BASE_URL = {BASE_URL}")
-    t0 = time.time()
-
-    # Auth smoke
-    r = requests.get(f"{API}/auth/me", headers=hdr(USER_A_TOKEN), timeout=30)
-    assert r.status_code == 200, f"auth smoke failed for user A: {r.status_code} {r.text}"
-    r = requests.get(f"{API}/auth/me", headers=hdr(USER_B_TOKEN), timeout=30)
-    assert r.status_code == 200, f"auth smoke failed for user B: {r.status_code} {r.text}"
-
-    hunt_A = None
-    hunt_B = None
-    try:
-        hunt_A = create_hunt(USER_A_TOKEN)
-        print(f"hunt_A = {hunt_A}")
-        asset_id = create_asset(USER_A_TOKEN, hunt_A, 44.5, -93.0)
-        print(f"asset_id = {asset_id}")
-        geo_image_id = create_saved_map_image(USER_A_TOKEN, hunt_A, geo=True)
-        pixel_image_id = create_saved_map_image(USER_A_TOKEN, hunt_A, geo=False)
-        print(f"geo_image_id = {geo_image_id}  pixel_image_id = {pixel_image_id}")
-
-        hunt_B = create_hunt(USER_B_TOKEN)
-        print(f"hunt_B = {hunt_B}")
-
-        scenario_a_auth(hunt_A)
-        scenario_b_not_owned(hunt_A)
-        scenario_c_body_shapes(hunt_A)
-        scenario_d_user_provided(hunt_A, geo_image_id, asset_id)
-        scenario_e_unknown_asset(hunt_A, geo_image_id)
-        scenario_f_gps_only(hunt_A, geo_image_id)
-        scenario_g_pixel_on_geo(hunt_A, geo_image_id)
-        scenario_h_pixel_only_image(hunt_A, pixel_image_id)
-        scenario_i_surface_failures(hunt_A, geo_image_id)
-        scenario_jk_cross_user_persistence(hunt_A, hunt_B)
+        norm_r = _post(
+            f"/hunts/{hid}/overlay-items:bulk-normalize",
+            {
+                "saved_map_image_id": image_id,
+                "items": [
+                    {
+                        "type": "stand",
+                        "label": "Oak Ridge Ladder",
+                        "coordinateSource": "user_provided",
+                        "sourceAssetId": asset_id,
+                        "latitude": 99.999,  # AI lie
+                        "longitude": -1.234,  # AI lie
+                    }
+                ],
+            },
+        )
+        if norm_r.status_code != 200:
+            _bad("A.bulk_normalize", f"{norm_r.status_code} {norm_r.text}")
+            return
+        body = norm_r.json()
+        if body.get("created_count") != 1:
+            _bad("A.created_count", f"expected 1 got {body.get('created_count')}")
+            return
+        created = body["created"][0]
+        print(f"  created.latitude={created.get('latitude')} longitude={created.get('longitude')} src={created.get('coordinate_source')}")
+        if created.get("coordinate_source") != "user_provided":
+            _bad("A.coord_source", f"got {created.get('coordinate_source')}")
+        else:
+            _ok("A.coord_source=user_provided")
+        lat = created.get("latitude")
+        lng = created.get("longitude")
+        if lat is None or abs(lat - 44.5) > 1e-6:
+            _bad("A.latitude_matches_asset", f"got {lat}, expected 44.5")
+        else:
+            _ok("A.latitude_matches_asset (44.5, not AI's 99.999)")
+        if lng is None or abs(lng - -93.0) > 1e-6:
+            _bad("A.longitude_matches_asset", f"got {lng}, expected -93.0")
+        else:
+            _ok("A.longitude_matches_asset (-93.0, not AI's -1.234)")
     finally:
-        if hunt_A:
-            delete_hunt(USER_A_TOKEN, hunt_A)
-        if hunt_B:
-            delete_hunt(USER_B_TOKEN, hunt_B)
+        _delete(f"/hunts/{hid}")
 
-    total = len(_results)
-    passed = sum(1 for _, ok, _ in _results if ok)
-    failed = total - passed
-    print("\n" + "=" * 72)
-    print(f"RESULTS: {passed}/{total} PASS  ({failed} fail)   elapsed={time.time()-t0:.2f}s")
-    if failed:
-        print("\nFAILURES:")
-        for name, ok, det in _results:
-            if not ok:
-                print(f"  - {name}  :: {det}")
-    print("=" * 72)
-    return 0 if failed == 0 else 1
+
+# -------------------------------------------------------------------
+# (b) geo-capable derive both ways
+# -------------------------------------------------------------------
+def scenario_b():
+    print("\n[B] Geo-capable derive both ways — GPS-only & xy-only")
+    hid = _create_hunt()
+    try:
+        img_r = _post(
+            "/saved-map-images",
+            {
+                "hunt_id": hid,
+                "image_id": f"img_{uuid.uuid4().hex[:8]}",
+                "image_url": "https://example.invalid/m.png",
+                "original_width": 1000,
+                "original_height": 800,
+                "north_lat": 45.0,
+                "south_lat": 44.0,
+                "west_lng": -93.5,
+                "east_lng": -92.5,
+                "supports_geo_placement": True,
+                "source": "maptiler",
+            },
+        )
+        image_id = img_r.json()["saved_map_image"]["image_id"]
+        norm = _post(
+            f"/hunts/{hid}/overlay-items:bulk-normalize",
+            {
+                "saved_map_image_id": image_id,
+                "items": [
+                    {
+                        "type": "funnel",
+                        "label": "GPS-only",
+                        "latitude": 44.5,
+                        "longitude": -93.0,
+                    },
+                    {
+                        "type": "funnel",
+                        "label": "XY-only",
+                        "x": 500,
+                        "y": 400,
+                    },
+                ],
+            },
+        )
+        if norm.status_code != 200:
+            _bad("B.bulk_normalize", f"{norm.status_code} {norm.text}")
+            return
+        body = norm.json()
+        print(f"  created_count={body.get('created_count')} skipped={body.get('skipped_count')}")
+        if body.get("created_count") != 2:
+            _bad("B.created_count", f"expected 2 got {body.get('created_count')}")
+            return
+        by_label = {it["label"]: it for it in body["created"]}
+        gps = by_label.get("GPS-only")
+        xy = by_label.get("XY-only")
+        if not gps or not xy:
+            _bad("B.labels_present", "missing GPS-only or XY-only")
+            return
+        if gps.get("x") is None or abs(gps["x"] - 500) > 1e-3:
+            _bad("B.gps_x_derived", f"got {gps.get('x')}")
+        else:
+            _ok("B.gps_only.x derived to 500")
+        if gps.get("y") is None or abs(gps["y"] - 400) > 1e-3:
+            _bad("B.gps_y_derived", f"got {gps.get('y')}")
+        else:
+            _ok("B.gps_only.y derived to 400")
+        if xy.get("latitude") is None or abs(xy["latitude"] - 44.5) > 1e-6:
+            _bad("B.xy_lat_derived", f"got {xy.get('latitude')}")
+        else:
+            _ok("B.xy_only.latitude derived to 44.5")
+        if xy.get("longitude") is None or abs(xy["longitude"] - -93.0) > 1e-6:
+            _bad("B.xy_lng_derived", f"got {xy.get('longitude')}")
+        else:
+            _ok("B.xy_only.longitude derived to -93.0")
+        for lbl, it in (("GPS-only", gps), ("XY-only", xy)):
+            cs = it.get("coordinate_source")
+            if cs != "derived_from_saved_map_bounds":
+                _bad(f"B.{lbl}.coord_source", f"got {cs}")
+            else:
+                _ok(f"B.{lbl}.coordinate_source=derived_from_saved_map_bounds")
+    finally:
+        _delete(f"/hunts/{hid}")
+
+
+# -------------------------------------------------------------------
+# (c) pixel-only — no fabrication
+# -------------------------------------------------------------------
+def scenario_c():
+    print("\n[C] Pixel-only image — no GPS fabrication")
+    hid = _create_hunt()
+    try:
+        img_r = _post(
+            "/saved-map-images",
+            {
+                "hunt_id": hid,
+                "image_id": f"img_{uuid.uuid4().hex[:8]}",
+                "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                "original_width": 800,
+                "original_height": 600,
+                "source": "upload",
+            },
+        )
+        if img_r.status_code != 200:
+            _bad("C.create_image", f"{img_r.status_code} {img_r.text}")
+            return
+        saved = img_r.json()["saved_map_image"]
+        if saved.get("supports_geo_placement") is not False:
+            _bad("C.supports_geo_false", f"got {saved.get('supports_geo_placement')}")
+        else:
+            _ok("C.supports_geo_placement == False")
+        image_id = saved["image_id"]
+        norm = _post(
+            f"/hunts/{hid}/overlay-items:bulk-normalize",
+            {
+                "saved_map_image_id": image_id,
+                "items": [
+                    {
+                        "type": "stand",
+                        "label": "Should have no GPS",
+                        "latitude": 44.9,
+                        "longitude": -93.2,
+                        "x": 100,
+                        "y": 200,
+                    }
+                ],
+            },
+        )
+        if norm.status_code != 200:
+            _bad("C.bulk_normalize", f"{norm.status_code} {norm.text}")
+            return
+        body = norm.json()
+        print(f"  created={body.get('created_count')} skipped={body.get('skipped_count')}")
+        if body.get("created_count") != 1:
+            print(f"  details: {json.dumps(body)[:700]}")
+            _bad("C.created_count", f"expected 1 got {body.get('created_count')}")
+            return
+        it = body["created"][0]
+        print(f"  item.latitude={it.get('latitude')} longitude={it.get('longitude')} src={it.get('coordinate_source')}")
+        if it.get("latitude") is not None:
+            _bad("C.latitude_null", f"got {it.get('latitude')} expected None")
+        else:
+            _ok("C.latitude is None (no fabrication)")
+        if it.get("longitude") is not None:
+            _bad("C.longitude_null", f"got {it.get('longitude')} expected None")
+        else:
+            _ok("C.longitude is None (no fabrication)")
+        cs = it.get("coordinate_source")
+        if cs != "pixel_only":
+            _bad("C.coord_source", f"got {cs} expected pixel_only")
+        else:
+            _ok("C.coordinate_source == pixel_only")
+    finally:
+        _delete(f"/hunts/{hid}")
+
+
+# -------------------------------------------------------------------
+# (d) Cross-user isolation
+# -------------------------------------------------------------------
+def scenario_d():
+    print("\n[D] Cross-user isolation — user B cannot read user A's items")
+    hid = _create_hunt(headers=PRO_A)
+    try:
+        asset_r = _post(
+            f"/hunts/{hid}/assets",
+            {
+                "type": "stand",
+                "name": "A's Stand",
+                "latitude": 44.5,
+                "longitude": -93.0,
+            },
+            headers=PRO_A,
+        )
+        aid = asset_r.json()["asset"]["asset_id"]
+        _post(
+            f"/hunts/{hid}/overlay-items:bulk-normalize",
+            {
+                "items": [
+                    {
+                        "type": "stand",
+                        "label": "Private to A",
+                        "coordinateSource": "user_provided",
+                        "sourceAssetId": aid,
+                    }
+                ],
+            },
+            headers=PRO_A,
+        )
+        a_listing = _get(f"/hunts/{hid}/overlay-items", headers=PRO_A)
+        if a_listing.status_code != 200 or a_listing.json().get("count", 0) < 1:
+            _bad("D.a_sees", f"{a_listing.status_code} {a_listing.text[:200]}")
+        else:
+            _ok(f"D.user_A GET own hunt -> 200 count={a_listing.json()['count']}")
+
+        b_listing = _get(f"/hunts/{hid}/overlay-items", headers=PRO_B)
+        print(f"  user_B GET A's hunt -> {b_listing.status_code} body_prefix={b_listing.text[:120]}")
+        if b_listing.status_code == 200:
+            _bad("D.b_forbidden", "B got 200 (data leak!)")
+        elif b_listing.status_code in (403, 404):
+            _ok(f"D.user_B blocked with {b_listing.status_code}")
+        else:
+            _bad("D.b_unexpected_status", f"{b_listing.status_code} {b_listing.text[:200]}")
+    finally:
+        _delete(f"/hunts/{hid}", headers=PRO_A)
+
+
+def main():
+    print(f"=== Task 11 spot-checks against {BASE} ===")
+    r1 = _get("/auth/me", headers=PRO_A)
+    r2 = _get("/auth/me", headers=PRO_B)
+    print(f"Pro A /auth/me: {r1.status_code}  Pro B /auth/me: {r2.status_code}")
+    assert r1.status_code == 200, f"test_session_rs_001 not valid: {r1.text}"
+    assert r2.status_code == 200, f"test_session_rs_002 not valid: {r2.text}"
+
+    scenario_a()
+    scenario_b()
+    scenario_c()
+    scenario_d()
+
+    print(f"\n=== SPOT-CHECK TOTALS: {len(passes)} pass / {len(fails)} fail ===")
+    for tag, detail in fails:
+        print(f"  FAIL  {tag}: {detail}")
+    sys.exit(0 if not fails else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

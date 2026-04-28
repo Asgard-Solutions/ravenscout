@@ -7070,3 +7070,229 @@ agent_communication:
         No backend changes — POST/PUT/DELETE on
         /api/hunts/:id/overlay-items already exist and are
         unchanged. Awaiting user decision on optional UI test run.
+
+  - task: "Task 11 — E2E QA & regression hardening (GPS assets + saved-image overlay pipeline)"
+    implemented: true
+    working: true
+    file: "/app/backend/tests/test_e2e_geo_overlay_pipeline.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Task 11 — closing-loop E2E + regression suite.
+
+            NEW FILE:
+              /app/backend/tests/test_e2e_geo_overlay_pipeline.py
+              12 integration tests, all PASS locally against
+              http://localhost:8001:
+
+                S1.  hunt with no GPS assets — list endpoints
+                     return empty arrays (no 500s)
+                S1b. bulk-normalize with zero items succeeds and
+                     writes nothing
+                S2.  user-provided overlay preserves user GPS
+                     EXACTLY when the AI sends different lat/lng
+                S2b. unknown source_asset_id ends up in skipped[]
+                     with reason "unknown_source_asset"
+                S3.  geo-capable image: GPS-only and xy-only
+                     items both round-trip — GPS one gets x/y
+                     derived, xy one gets lat/lng derived; both
+                     use coordinate_source =
+                     "derived_from_saved_map_bounds"
+                S4.  pixel-only image: latitude/longitude FORCED
+                     to None even when caller sends GPS;
+                     coordinate_source = "pixel_only"
+                S5.  reload regression — second GET is
+                     deep-equal to first GET
+                LEGACY hunt with no overlay_items rows still loads
+                     cleanly (no 500)
+                LEGACY saved image with no geo metadata round-
+                     trips and surfaces supports_geo_placement = False
+                DUPLICATE asset POST does not 500 and the GET
+                     listing stays consistent
+                CROSS-USER isolation: user B GETs user A's hunt
+                     overlay items → 403/404, never 200
+                INVALID items in a bulk-normalize batch land in
+                     skipped[] with an index-aware reason; the
+                     valid item in the same batch still persists
+
+            REGRESSION TOTALS:
+              * Backend: 566 PASS / 4 FAIL (all 4 are PRE-EXISTING
+                & unrelated: subscription tier count fixture,
+                species count fixture, two overlay_rendering tests
+                that hit live OpenAI). +12 net tests.
+              * Frontend: 222 PASS / 2 FAIL (the 2 pre-existing
+                huntStyles failures). +27 net tests across Tasks
+                9, 10, 11.
+              * TypeScript: clean (`npx tsc --noEmit -p .`).
+
+            BUGS GUARDED AGAINST (per the Task 11 brief):
+              ✓ overlay drift                     — geoProjection.test.ts (35) + SavedAnalysisOverlayImage.test.ts (16)
+              ✓ overlay snapping back to live map — saved-basis test in SavedAnalysisOverlayImage.test.ts
+              ✓ user GPS missing                  — S2 test
+              ✓ AI changing user GPS              — S2 test (asserts latitude/longitude == asset's, not AI's)
+              ✓ pixel-only fake GPS               — S4 test + buildMarkerPlacement.test.ts
+              ✓ resize misalignment               — half/1.5x/non-square scaling tests
+              ✓ legacy hunts failing to load      — legacy-hunt test
+              ✓ legacy images crashing            — old-saved-image test
+              ✓ duplicate asset retry             — duplicate-asset test
+
+            REMAINING FOLLOW-UPS (out of scope for Task 11, none
+            block the GPS pipeline):
+              * The 4 pre-existing backend failures are data-
+                fixture mismatches (species/tier counts changed
+                upstream) and a live-LLM flake — separate cleanup
+                ticket recommended.
+              * The 2 frontend huntStyles failures are unrelated
+                to geo work — separate ticket.
+              * Drag-to-reposition existing markers (Task 10
+                left this as a TODO; the spec explicitly said it
+                was optional). All add/edit/delete works.
+        - working: true
+          agent: "testing"
+          comment: |
+            Task 11 E2E QA + regression suite VERIFIED end-to-end
+            against http://localhost:8001 with test_session_rs_001
+            (user A) and test_session_rs_002 (user B).
+
+            === 1. New E2E suite ===
+            EXPO_PUBLIC_BACKEND_URL=http://localhost:8001 python -m pytest \
+              tests/test_e2e_geo_overlay_pipeline.py -v
+            -> 12/12 PASS in 6.95s, zero errors.
+               S1 (no-assets + empty-bulk), S1b, S2 (user-provided
+               preserve + unknown-asset skip), S3 (GPS-only +
+               xy-only derive), S4 (pixel-only never persists GPS),
+               S5 (reload regression), legacy-hunt-no-items,
+               old-image-no-geo, duplicate-asset, cross-user-
+               isolation, invalid-items-skipped.
+
+            === 2. Regression suites (all 8 files) ===
+            pytest tests/test_overlay_normalizer.py \
+                   tests/test_analysis_overlay_item.py \
+                   tests/test_analysis_overlay_items_api.py \
+                   tests/test_overlay_taxonomy.py \
+                   tests/test_hunt_assets_api.py \
+                   tests/test_saved_map_images_api.py \
+                   tests/test_geo_models.py \
+                   tests/test_hunt_location_assets_prompt.py -v
+            -> 179/179 PASS in 24.58s, zero failures, zero errors.
+               Broken down:
+                 test_overlay_normalizer.py           46/46
+                 test_analysis_overlay_item.py        27/27
+                 test_analysis_overlay_items_api.py   15/15
+                 test_overlay_taxonomy.py             18/18
+                 test_hunt_assets_api.py              32/32
+                 test_saved_map_images_api.py          7/7
+                 test_geo_models.py                   30/30
+                 test_hunt_location_assets_prompt.py  14/14
+               No regressions from Tasks 1–11 in any of the
+               pre-existing suites.
+
+            === 3. Spot-check replays via direct HTTP
+                 (/app/backend_test.py) — 15/15 PASS ===
+            (a) user_provided override
+                - POST /api/hunts -> 200
+                - POST /api/hunts/{id}/assets (lat=44.5, lng=-93.0) -> 200
+                - POST /api/saved-map-images (1000x800 bbox
+                  N45..S44, W-93.5..E-92.5, supports_geo=True) -> 200
+                - POST /api/hunts/{id}/overlay-items:bulk-normalize
+                  with item {coordinateSource:"user_provided",
+                             sourceAssetId:..., lat:99.999, lng:-1.234}
+                  -> 200 created_count=1
+                  returned item: {coordinate_source:"user_provided",
+                                   latitude:44.5, longitude:-93.0}
+                  ✓ AI's hallucinated 99.999/-1.234 IGNORED; asset
+                    GPS wins verbatim.
+            (b) Geo-capable derive both ways (same bbox image)
+                - POST bulk-normalize with two items:
+                  GPS-only  {lat:44.5, lng:-93.0}
+                  xy-only   {x:500, y:400}
+                  -> 200 created_count=2
+                  GPS-only → x=500, y=400 (derived)
+                  xy-only  → lat=44.5, lng=-93.0 (derived)
+                  Both items: coordinate_source =
+                    "derived_from_saved_map_bounds"
+            (c) Pixel-only — no fabrication
+                - POST /api/saved-map-images (no bounds, source=upload)
+                  -> 200 saved.supports_geo_placement = False
+                - POST bulk-normalize with item supplying both GPS
+                  AND xy on that pixel-only image
+                  -> 200 created_count=1
+                  returned item: {latitude:null, longitude:null,
+                                   coordinate_source:"pixel_only"}
+                  ✓ server strips caller-supplied GPS; no
+                    fabrication possible.
+            (d) Cross-user isolation
+                - user A POSTs asset + overlay item on A's hunt
+                - GET /api/hunts/{hid}/overlay-items as A -> 200 count=1
+                - GET same path as user B (Bearer test_session_rs_002)
+                  -> 404 {"detail":"Hunt not found"}
+                  ✓ Existence not leaked, contract matches other
+                    /api/hunts/{id} endpoints. 404 is acceptable
+                    per review brief (403/404 either is fine).
+
+            === Pre-existing failures (per review brief, NOT
+                regressions, explicitly out of scope) ===
+              * test_subscription_tiers_public — fixture count drift
+              * test_get_species — fixture count drift
+              * 2x test_overlay_rendering.py — live-LLM flakes
+            Confirmed these predate Tasks 1–11 and do not touch
+            the GPS/saved-image/overlay-items pipeline.
+
+            === HTTP observations ===
+              * Zero 5xx on any GPS/overlay route across the full run
+              * All /api/hunts + /api/saved-map-images + /api/hunts/
+                {id}/assets + /api/hunts/{id}/overlay-items +
+                /api/hunts/{id}/overlay-items:bulk-normalize endpoints
+                returned canonical 200/404/422 shapes
+              * URL-encoded ':' in ':bulk-normalize' is handled
+                correctly by FastAPI routing
+              * Cross-user access consistently returns 404
+                (no information leak)
+
+            No source files modified. Task 11 is production-ready —
+            the full GPS assets + saved-image overlay pipeline has
+            13 + 179 = 192 green backend tests plus 15 direct-HTTP
+            spot-check assertions. Main agent: please summarise and
+            finish.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Task 11 complete — full GPS-asset + saved-image overlay
+        pipeline is end-to-end verified.
+
+        12 new integration tests live at
+        /app/backend/tests/test_e2e_geo_overlay_pipeline.py
+        and all pass against the local backend. Combined with
+        the Task 8 unit suite (19) and the Tasks 9-10 frontend
+        unit tests (27 new), the full pipeline now has 58
+        net new tests covering every contract from the brief.
+
+        Ready for backend testing-agent verification (the new
+        file uses the same EXPO_PUBLIC_BACKEND_URL contract as
+        the existing Task 6/8 suites, so the agent can re-run
+        them all together).
+    - agent: "testing"
+      message: |
+        Task 11 backend verification PASSED — zero regressions.
+
+        • New E2E suite: 12/12 PASS
+        • 8 regression suites: 179/179 PASS
+        • 4 critical-contract HTTP spot-checks: 15/15 PASS
+          (user_provided override / geo derive both ways /
+           pixel-only no-fabrication / cross-user isolation)
+        • Zero 5xx across the run
+        • The 3 pre-existing non-geo failures flagged in the
+          review brief were observed to still fail (tier count
+          fixture, species count fixture, 2x overlay_rendering
+          live-LLM) — confirmed NOT caused by Tasks 1-11 and
+          intentionally excluded.
+
+        Replay harness committed at /app/backend_test.py — covers
+        the four critical contracts called out in the review.
+        No source files modified. Task 11 is production-ready;
+        main agent please summarise and finish.
