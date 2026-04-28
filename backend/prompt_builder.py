@@ -343,7 +343,17 @@ STRICT CONSTRAINTS:
   - confidence values must be between 0.0 and 1.0.
   - All coordinates are relative to the PRIMARY image only.
   - If imagery does not support a conclusion, lower confidence and document uncertainty in key_assumptions.
-  - Provide 3-6 overlays covering stands, corridors, access routes, and avoid zones.
+  - Provide 6-12 overlays. Cover the full tactical picture, NOT just stands and avoid zones.
+    REQUIRED COVERAGE (when imagery supports it — DO NOT invent features that are not visible / inferable):
+      * 1-3 `stand` placements (best setup points).
+      * 1-3 `corridor` overlays for travel routes, funnels, saddles, draws, fence-crossings.
+      * 1-2 `access_route` overlays for hunter entry / exit.
+      * 1-2 `avoid` zones (sanctuary, pressure, scent-busting wind lines, posted boundaries).
+      * 1-2 `bedding` overlays when daytime cover is visible / inferable from terrain.
+      * 1-2 `food` overlays for ag fields, mast oak flats, browse pockets, food plots, OR FEEDERS visible on the map.
+      * 0-2 `water` points where reliable water is visible (creek, pond, seep, river bend).
+      * 0-2 `trail` lines where animal trails or two-tracks are visible.
+    The overlays MUST span at least 4 distinct `type` values when the imagery supports more than just stands and avoids — sparse maps are an exception, not the default. If a category truly cannot be supported by the imagery, omit it AND note the gap in `key_assumptions` rather than padding with low-confidence guesses.
   - Provide 1-3 top_setups ranked by tactical advantage.
   - Provide 2-5 map_observations describing key terrain features you identified.
   - Road/access scan is mandatory: if roads, trails, gates, parking, ramps, or field entrances are visible, mention tactically relevant ones in map_observations and reflect pressure/access implications in top_setups.

@@ -50,7 +50,7 @@ OVERLAY_TYPES: Tuple[OverlayType, ...] = (
         color="#F57C00",
         icon="trail-sign",
         geometry="polygon",
-        description="Likely game travel route between bedding and food / water — funnels, draws, saddles.",
+        description="Likely game travel route between bedding and food / water — funnels, pinch points, draws, saddles, fence-crossings, ridge benches. USE THIS for any 'funnel' or 'pinch' overlay.",
     ),
     OverlayType(
         type_id="access_route",
@@ -82,7 +82,7 @@ OVERLAY_TYPES: Tuple[OverlayType, ...] = (
         color="#66BB6A",
         icon="nutrition",
         geometry="polygon",
-        description="Active food source visible or strongly inferred — ag field, mast oak flat, browse pocket, food plot.",
+        description="Active food source visible or strongly inferred — ag field, mast oak flat, browse pocket, food plot, OR a feeder / bait pile when visible. USE THIS for any 'feeder' overlay.",
     ),
     OverlayType(
         type_id="water",
