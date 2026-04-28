@@ -2167,14 +2167,49 @@ async def list_hunts(request: Request, limit: int = 50, skip: int = 0):
 
 
 @api_router.get("/hunts/{hunt_id}")
-async def get_hunt(hunt_id: str, request: Request):
-    """Fetch a single hunt scoped to the current user."""
+async def get_hunt(hunt_id: str, request: Request, include_assets: bool = True):
+    """Fetch a single hunt scoped to the current user.
+
+    By default also hydrates the hunt's GPS assets (Hunt Location
+    Assets — see /app/backend/hunt_geo_router.py) into the response
+    under the `location_assets` key. Pass `include_assets=false` to
+    skip the join when the caller doesn't need them.
+    """
     user = await get_current_user(request)
     uid = user["user_id"]
     doc = await db.hunts.find_one({"user_id": uid, "hunt_id": hunt_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Hunt not found")
-    return {"ok": True, "hunt": _scrub_hunt(doc)}
+
+    hunt_payload = _scrub_hunt(doc)
+
+    if include_assets:
+        # Lazy-import to avoid a circular at module load (the asset
+        # helper lives in models/, which already imports from server
+        # only via the router builder).
+        from models import asset_doc_to_dict  # noqa: WPS433
+
+        try:
+            cursor = (
+                db.hunt_location_assets.find(
+                    {"user_id": uid, "hunt_id": hunt_id}, {"_id": 0}
+                )
+                .sort("created_at", 1)
+            )
+            assets = [asset_doc_to_dict(d) async for d in cursor]
+        except Exception as exc:  # noqa: BLE001
+            # Hydration failures must NEVER break the hunt read path.
+            # Log + return an empty list so the UI can still render.
+            logger.warning(
+                "get_hunt: asset hydration failed for user=%s hunt=%s: %s",
+                uid,
+                hunt_id,
+                exc,
+            )
+            assets = []
+        hunt_payload["location_assets"] = assets
+
+    return {"ok": True, "hunt": hunt_payload}
 
 
 class HuntPatchBody(BaseModel):
@@ -2281,6 +2316,20 @@ async def delete_hunt(hunt_id: str, request: Request):
     # S3 failure leaves the hunt visible (and retryable) instead of
     # silently disappearing while its assets linger.
     result = await db.hunts.delete_one({"user_id": uid, "hunt_id": hunt_id})
+
+    # Step 4: cascade-clean associated GPS location assets so they
+    # don't dangle orphaned in the hunt_location_assets collection.
+    # Best-effort — failures are logged but don't block the response.
+    try:
+        await db.hunt_location_assets.delete_many(
+            {"user_id": uid, "hunt_id": hunt_id},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "delete_hunt: location asset cleanup failed for hunt=%s: %s",
+            hunt_id,
+            exc,
+        )
 
     return {
         "ok": True,

@@ -5705,3 +5705,105 @@ agent_communication:
       because there are no UI changes to verify; pure-function
       tests already cover the contract end-to-end.
 
+
+
+# ====================================================================
+# Hunt GPS Assets API — full CRUD, hydration, cascade delete (Task 3)
+# ====================================================================
+
+backend:
+  - task: "Hunt GPS Assets API — CRUD + hunt-detail hydration + cascade delete"
+    implemented: true
+    working: true
+    file: "/app/backend/hunt_geo_router.py, /app/backend/server.py, /app/backend/tests/test_hunt_assets_api.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Task 3 capabilities (CRUD endpoints) were already delivered
+          end-to-end in Task 1 via /app/backend/hunt_geo_router.py.
+          This pass closed the two remaining gaps the Task 3 brief
+          called for: hydrating GPS assets into the hunt detail
+          response, plus a proper pytest integration suite that
+          exercises the live API surface (auth, ownership, validation,
+          and back-compat).
+
+          MODIFIED FILE: /app/backend/server.py
+            * GET /api/hunts/{hunt_id} now hydrates the hunt's GPS
+              assets into the response body under `location_assets`,
+              sorted by created_at ascending. New optional query
+              parameter `include_assets` (default true) lets callers
+              opt out of the join when they don't need it.
+            * Asset hydration is wrapped in a try/except that returns
+              an empty list on Mongo errors so a transient read-side
+              failure NEVER breaks the hunt detail screen.
+            * DELETE /api/hunts/{hunt_id} now cascades into
+              hunt_location_assets via a best-effort delete_many
+              after the hunt doc is removed. Failures are logged but
+              don't surface as 5xx — the hunt is already gone, so
+              the user-visible state is correct.
+
+          NEW FILE: /app/backend/tests/test_hunt_assets_api.py
+            32 live integration tests (run via pytest with
+            EXPO_PUBLIC_BACKEND_URL pointing at the API). Coverage
+            mirrors the Task 3 acceptance list 1:1 plus extras for
+            the hunt-detail hydration behaviour:
+              ✓ create valid asset (returns hla_… id, owner=test-user-001)
+              ✓ create each canonical type (11 parametrised cases:
+                stand/blind/feeder/camera/parking/access_point/water/
+                scrape/rub/bedding/custom)
+              ✓ list assets for hunt (count + ordering by created_at asc)
+              ✓ update asset (type/name/lat/lng/notes; updated_at advances)
+              ✓ delete asset (returns 200, subsequent GET 404)
+              ✓ reject invalid latitude (parametrised: 99, -91, 1000)
+              ✓ reject invalid longitude (parametrised: 181, -181, 1000)
+              ✓ reject missing name → 422
+              ✓ reject blank name "    " → 422
+              ✓ reject invalid type "rocketship" → 422
+              ✓ reject update with invalid lat 999 → 422
+              ✓ create against unknown hunt_id → 404 Hunt not found
+              ✓ other user (Trial session) cannot GET / list / update /
+                delete the Pro user's asset → 404 (existence not
+                leaked)
+              ✓ other user cannot POST against the Pro user's hunt → 404
+              ✓ hunt detail (GET /hunts/{id}) hydrates location_assets
+              ✓ hunt detail with zero assets returns location_assets=[]
+                (back-compat for hunts created before this feature)
+              ✓ include_assets=false skips the join in the response
+              ✓ deleting a hunt cascades into hunt_location_assets
+                (re-create the same hunt id — no zombie assets reappear)
+
+          TEST RESULTS:
+            * tests/test_hunt_assets_api.py: 32/32 PASSED in 13s
+              against the live preview backend (localhost:8001).
+            * Unit + existing suites green:
+              tests/test_geo_models.py (35) +
+              tests/test_overlay_taxonomy.py (18) +
+              tests/test_enhanced_rollout.py (37) +
+              tests/test_master_prompt_access_context.py (4) =
+              94/94 PASSED.
+
+          AUTH NOTES (for the testing agent and future forks):
+            * The cross-user isolation tests use
+              `test_session_trial_001` as OTHER_AUTH because
+              `test_session_rs_002` documented in test_credentials.md
+              is NOT seeded into the live `user_sessions` collection
+              in this environment. Trial vs Pro is a different
+              user_id, which is exactly what the isolation test
+              needs — file documents this explicitly so a future
+              env reseed can swap to rs_002 if desired.
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Task 3 (Hunt GPS Assets backend API) is complete. CRUD was
+      already in place from Task 1; this pass added (a) location_assets
+      hydration on GET /api/hunts/{id}, (b) cascade-delete of assets
+      on hunt deletion, and (c) a 32-case pytest integration suite
+      covering every requirement in the brief. All tests green
+      against the live backend; no regressions in the existing
+      pytest suites. No frontend / UI work was done.
+
