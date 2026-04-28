@@ -711,7 +711,7 @@ frontend:
         comment: |
           Full /api/hunts CRUD contract verified end-to-end against
           the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-geo-overlay.preview.emergentagent.com).
+          https://geo-overlay-hunt.preview.emergentagent.com).
           Harness: /app/hunts_crud_test.py — 66/66 substantive
           assertions PASS.
 
@@ -1286,7 +1286,7 @@ overlay_taxonomy_unification:
         comment: |
           Backend overlay-taxonomy unification VERIFIED end-to-end
           against the preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-geo-overlay.preview.emergentagent.com) + the local
+          https://geo-overlay-hunt.preview.emergentagent.com) + the local
           pytest suite. Harness: /app/backend_test.py — 13/13
           substantive assertions PASS, 0 failures.
 
@@ -1334,7 +1334,7 @@ overlay_taxonomy_unification:
 
           === 3. Live POST /api/analyze-hunt smoke ===
           Request body (Bearer test_session_rs_001 / Pro):
-            POST https://hunt-geo-overlay.preview.emergentagent.com/api/analyze-hunt
+            POST https://geo-overlay-hunt.preview.emergentagent.com/api/analyze-hunt
             {
               "map_image_base64": "<256x256 deterministic PNG, base64>",
               "conditions": {
@@ -2461,7 +2461,7 @@ species_expansion_v1_modifiers:
 
           SCENARIO 6 — LIVE /api/analyze-hunt SMOKE  (zero 500s)
           Backend base URL: EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-geo-overlay.preview.emergentagent.com
+          https://geo-overlay-hunt.preview.emergentagent.com
           POST /api/analyze-hunt
             Headers: Authorization: Bearer test_session_rs_001
                      Content-Type: application/json
@@ -2525,7 +2525,7 @@ species_expansion_v1:
         comment: |
           Species expansion validated end-to-end against the preview URL
           (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-geo-overlay.preview.emergentagent.com). Harness:
+          https://geo-overlay-hunt.preview.emergentagent.com). Harness:
           /app/species_expansion_test.py — 40 PASS / 1 non-blocking FAIL
           (the one FAIL is pre-existing stale pytest assertions, see
           Scenario 6 below).
@@ -2925,7 +2925,7 @@ password_auth:
             (First option is cleaner.)
 
           Exact failing request body (for debugging):
-            POST https://hunt-geo-overlay.preview.emergentagent.com/api/auth/verify-otp
+            POST https://geo-overlay-hunt.preview.emergentagent.com/api/auth/verify-otp
             Content-Type: application/json
             {"email":"pwtest_b1ffa166ad@example.com","otp":"740587"}   <- real captured OTP
               -> 500 "Internal Server Error"
@@ -3207,7 +3207,7 @@ agent_communication:
   - agent: "testing"
     message: |
       Backend presign contract validated end-to-end against the preview
-      URL (https://hunt-geo-overlay.preview.emergentagent.com/api). Test
+      URL (https://geo-overlay-hunt.preview.emergentagent.com/api). Test
       harness: /app/backend_test.py — 34/34 assertions pass.
 
       Summary of verified behavior:
@@ -3546,7 +3546,7 @@ agent_communication:
   - agent: "testing"
     message: |
       password_auth suite validated against the preview URL
-      (EXPO_PUBLIC_BACKEND_URL = https://hunt-geo-overlay.preview.emergentagent.com).
+      (EXPO_PUBLIC_BACKEND_URL = https://geo-overlay-hunt.preview.emergentagent.com).
       Harness: /app/password_auth_test.py — 50 PASS / 5 FAIL across 9 scenarios.
 
       SCENARIO-BY-SCENARIO RESULTS
@@ -3800,7 +3800,7 @@ tier_limits_rollover_v2:
         comment: |
           Tier limits + rollover v2 verified end-to-end against the
           preview URL (EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-geo-overlay.preview.emergentagent.com).
+          https://geo-overlay-hunt.preview.emergentagent.com).
           Harness: /app/tier_rollover_test.py — 33/33 assertions PASS.
           Zero 500s on any /api/auth/me call during the run
           (supervisor access log shows only 200/401).
@@ -4653,7 +4653,7 @@ enhanced_rollout_wiring:
 
           Harness: /app/backend_test.py — 46/46 substantive assertions
           PASS against the public preview URL
-          (https://hunt-geo-overlay.preview.emergentagent.com/api).
+          (https://geo-overlay-hunt.preview.emergentagent.com/api).
           ZERO failures.
 
           === A. Pro + deer + Iowa GPS (41.5, -93.0)  PASS ===
@@ -4838,7 +4838,7 @@ enhanced_rollout_wiring:
         agent: "testing"
         comment: |
           Enhanced rollout wiring validated end-to-end against the
-          preview URL (https://hunt-geo-overlay.preview.emergentagent.com)
+          preview URL (https://geo-overlay-hunt.preview.emergentagent.com)
           via /app/backend_test.py. RESULT: 21/24 substantive
           assertions PASS, BUT 3 critical assertions FAIL on the
           canonical "Pro + whitetail (deer) + Midwest Agricultural"
@@ -5257,7 +5257,7 @@ backend:
         agent: "testing"
         comment: |
           End-to-end backend test against EXPO_PUBLIC_BACKEND_URL =
-          https://hunt-geo-overlay.preview.emergentagent.com using
+          https://geo-overlay-hunt.preview.emergentagent.com using
           /app/backend_test.py. Seeded auth: Bearer test_session_rs_001
           (Pro test-user-001) for primary calls; test_session_trial_001
           for cross-user isolation.
@@ -5490,7 +5490,7 @@ agent_communication:
     message: |
       Re-test of Hunt GPS Assets after main-agent bug fixes completed
       end-to-end against EXPO_PUBLIC_BACKEND_URL =
-      https://hunt-geo-overlay.preview.emergentagent.com. Harness:
+      https://geo-overlay-hunt.preview.emergentagent.com. Harness:
       /app/backend_test.py — 74/74 substantive assertions PASS, zero
       failures, zero 5xx on any route during this run.
 
@@ -6660,7 +6660,7 @@ agent_communication:
           comment: |
             Task 8 bulk-normalize endpoint VERIFIED end-to-end against
             the preview URL (EXPO_PUBLIC_BACKEND_URL =
-            https://hunt-geo-overlay.preview.emergentagent.com).
+            https://geo-overlay-hunt.preview.emergentagent.com).
             Harness: /app/backend_test.py.
 
             PRE-FLIGHT UNIT TESTS (from /app/backend):
