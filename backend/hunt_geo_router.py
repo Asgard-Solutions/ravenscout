@@ -19,6 +19,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 
 from models import (
+    AnalysisOverlayItem,
+    AnalysisOverlayItemCreate,
+    AnalysisOverlayItemUpdate,
     HuntLocationAsset,
     HuntLocationAssetCreate,
     HuntLocationAssetUpdate,
@@ -26,6 +29,7 @@ from models import (
     SavedMapImageCreate,
     SavedMapImageUpdate,
     asset_doc_to_dict,
+    overlay_item_doc_to_dict,
     saved_map_image_doc_to_dict,
 )
 
@@ -56,6 +60,19 @@ async def ensure_hunt_geo_indexes(db) -> None:
         await db.saved_map_images.create_index(
             [("user_id", 1), ("hunt_id", 1)],
             name="user_hunt_images",
+        )
+        await db.analysis_overlay_items.create_index(
+            [("user_id", 1), ("item_id", 1)],
+            unique=True,
+            name="user_overlay_unique",
+        )
+        await db.analysis_overlay_items.create_index(
+            [("user_id", 1), ("hunt_id", 1), ("created_at", 1)],
+            name="user_hunt_overlays_chronological",
+        )
+        await db.analysis_overlay_items.create_index(
+            [("user_id", 1), ("hunt_id", 1), ("analysis_id", 1)],
+            name="user_hunt_analysis_overlays",
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"hunt_geo index setup failed (non-fatal): {exc}")
@@ -318,6 +335,129 @@ def build_hunt_geo_router(db, get_current_user):
         )
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Saved map image not found")
+        return {"ok": True, "deleted": result.deleted_count}
+
+    # ================================================================
+    # Analysis Overlay Items (Task 6)
+    # ================================================================
+
+    @router.post("/hunts/{hunt_id}/overlay-items")
+    async def create_overlay_item(
+        hunt_id: str, body: AnalysisOverlayItemCreate, request: Request
+    ):
+        user = await get_current_user(request)
+        uid = user["user_id"]
+        body = body.model_copy(update={"hunt_id": hunt_id})
+        await _require_hunt(uid, hunt_id)
+
+        # When the caller links a user_provided overlay to a
+        # HuntLocationAsset, verify that the asset actually belongs
+        # to this user + hunt. Prevents cross-hunt asset references.
+        if (
+            body.coordinate_source == "user_provided"
+            and body.source_asset_id
+        ):
+            asset_doc = await db.hunt_location_assets.find_one(
+                {
+                    "user_id": uid,
+                    "hunt_id": hunt_id,
+                    "asset_id": body.source_asset_id,
+                },
+                {"_id": 1},
+            )
+            if not asset_doc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="source_asset_id does not exist for this hunt",
+                )
+
+        item = AnalysisOverlayItem.new_from_create(user_id=uid, payload=body)
+        try:
+            await db.analysis_overlay_items.insert_one(item.model_dump())
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "analysis_overlay_items insert failed user=%s hunt=%s: %s",
+                uid,
+                hunt_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409, detail="Could not save overlay item"
+            )
+        return {"ok": True, "overlay_item": item.model_dump()}
+
+    @router.get("/hunts/{hunt_id}/overlay-items")
+    async def list_overlay_items(
+        hunt_id: str, request: Request, analysis_id: Optional[str] = None
+    ):
+        user = await get_current_user(request)
+        uid = user["user_id"]
+        await _require_hunt(uid, hunt_id)
+
+        query: dict = {"user_id": uid, "hunt_id": hunt_id}
+        if analysis_id:
+            query["analysis_id"] = analysis_id
+
+        cursor = db.analysis_overlay_items.find(query, {"_id": 0}).sort(
+            "created_at", 1
+        )
+        items = [overlay_item_doc_to_dict(d) async for d in cursor]
+        return {"ok": True, "overlay_items": items, "count": len(items)}
+
+    @router.get("/hunts/{hunt_id}/overlay-items/{item_id}")
+    async def get_overlay_item(hunt_id: str, item_id: str, request: Request):
+        user = await get_current_user(request)
+        uid = user["user_id"]
+        doc = await db.analysis_overlay_items.find_one(
+            {"user_id": uid, "hunt_id": hunt_id, "item_id": item_id},
+            {"_id": 0},
+        )
+        if not doc:
+            raise HTTPException(status_code=404, detail="Overlay item not found")
+        return {"ok": True, "overlay_item": overlay_item_doc_to_dict(doc)}
+
+    @router.put("/hunts/{hunt_id}/overlay-items/{item_id}")
+    async def update_overlay_item(
+        hunt_id: str,
+        item_id: str,
+        body: AnalysisOverlayItemUpdate,
+        request: Request,
+    ):
+        user = await get_current_user(request)
+        uid = user["user_id"]
+
+        update_fields: dict = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        for key in body.model_dump(exclude_unset=True).keys():
+            val = getattr(body, key, None)
+            if val is not None:
+                update_fields[key] = val
+
+        result = await db.analysis_overlay_items.update_one(
+            {"user_id": uid, "hunt_id": hunt_id, "item_id": item_id},
+            {"$set": update_fields},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Overlay item not found")
+
+        doc = await db.analysis_overlay_items.find_one(
+            {"user_id": uid, "hunt_id": hunt_id, "item_id": item_id},
+            {"_id": 0},
+        )
+        return {"ok": True, "overlay_item": overlay_item_doc_to_dict(doc or {})}
+
+    @router.delete("/hunts/{hunt_id}/overlay-items/{item_id}")
+    async def delete_overlay_item(
+        hunt_id: str, item_id: str, request: Request
+    ):
+        user = await get_current_user(request)
+        uid = user["user_id"]
+        result = await db.analysis_overlay_items.delete_one(
+            {"user_id": uid, "hunt_id": hunt_id, "item_id": item_id}
+        )
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Overlay item not found")
         return {"ok": True, "deleted": result.deleted_count}
 
     return router

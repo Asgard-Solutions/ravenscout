@@ -160,6 +160,114 @@ export function savedMapImageFromWire(w: SavedMapImageWire): SavedMapImage {
   };
 }
 
+// ---------- Analysis Overlay Item (Task 6) ----------
+
+export const ANALYSIS_OVERLAY_ITEM_TYPES = [
+  'stand',
+  'blind',
+  'feeder',
+  'camera',
+  'parking',
+  'access_point',
+  'water',
+  'scrape',
+  'rub',
+  'bedding',
+  'route',
+  'wind',
+  'funnel',
+  'travel_corridor',
+  'recommended_setup',
+  'avoid_area',
+  'custom',
+] as const;
+
+export type AnalysisOverlayItemType =
+  (typeof ANALYSIS_OVERLAY_ITEM_TYPES)[number];
+
+export const COORDINATE_SOURCES = [
+  'user_provided',
+  'ai_estimated_from_image',
+  'derived_from_saved_map_bounds',
+  'pixel_only',
+] as const;
+
+export type CoordinateSource = (typeof COORDINATE_SOURCES)[number];
+
+/** Wire shape returned by the backend. */
+export interface AnalysisOverlayItemWire {
+  item_id: string;
+  user_id: string;
+  hunt_id: string;
+  analysis_id?: string | null;
+  saved_map_image_id?: string | null;
+
+  type: AnalysisOverlayItemType;
+  label: string;
+  description?: string | null;
+
+  latitude?: number | null;
+  longitude?: number | null;
+
+  x?: number | null;
+  y?: number | null;
+
+  coordinate_source: CoordinateSource;
+  confidence?: number | null;
+  source_asset_id?: string | null;
+
+  created_at: string;
+  updated_at: string;
+}
+
+/** UI-friendly shape (camelCase) — matches the spec exactly. */
+export interface AnalysisOverlayItem {
+  id: string;
+  huntId: string;
+  analysisId?: string | null;
+  savedMapImageId?: string | null;
+
+  type: AnalysisOverlayItemType;
+  label: string;
+  description?: string | null;
+
+  latitude?: number | null;
+  longitude?: number | null;
+
+  x?: number | null;
+  y?: number | null;
+
+  coordinateSource: CoordinateSource;
+  confidence?: number | null;
+  sourceAssetId?: string | null;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function analysisOverlayItemFromWire(
+  w: AnalysisOverlayItemWire,
+): AnalysisOverlayItem {
+  return {
+    id: w.item_id,
+    huntId: w.hunt_id,
+    analysisId: w.analysis_id ?? null,
+    savedMapImageId: w.saved_map_image_id ?? null,
+    type: w.type,
+    label: w.label,
+    description: w.description ?? null,
+    latitude: w.latitude ?? null,
+    longitude: w.longitude ?? null,
+    x: w.x ?? null,
+    y: w.y ?? null,
+    coordinateSource: w.coordinate_source,
+    confidence: w.confidence ?? null,
+    sourceAssetId: w.source_asset_id ?? null,
+    createdAt: w.created_at,
+    updatedAt: w.updated_at,
+  };
+}
+
 // ---------- Shared validation (mirrors backend/geo_validation.py) ----------
 
 export function isValidLatitude(value: unknown): value is number {

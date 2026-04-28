@@ -6167,3 +6167,202 @@ agent_communication:
                             failures unchanged. +10 new tests.
         TypeScript:      clean.
 
+
+
+# ====================================================================
+# Analysis Overlay Item schema with GPS support (Task 6)
+# ====================================================================
+
+backend:
+  - task: "Analysis Overlay Item schema + CRUD with GPS / pixel / source attribution"
+    implemented: true
+    working: true
+    file: "/app/backend/models/analysis_overlay_item.py, /app/backend/models/__init__.py, /app/backend/hunt_geo_router.py, /app/backend/server.py, /app/backend/tests/test_analysis_overlay_item.py, /app/backend/tests/test_analysis_overlay_items_api.py, /app/frontend/src/types/geo.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Added the GPS-aware analysis overlay item schema as a NEW
+          additive layer alongside the existing overlay_taxonomy.py
+          (which still drives the LLM prompt + legend rendering).
+          Existing analysis screens / persisted hunts.overlays[] are
+          NOT touched — old data continues to load unchanged.
+
+          NEW FILE: /app/backend/models/analysis_overlay_item.py
+            * 17 canonical AnalysisOverlayItemType values matching
+              the task brief: stand, blind, feeder, camera, parking,
+              access_point, water, scrape, rub, bedding, route, wind,
+              funnel, travel_corridor, recommended_setup, avoid_area,
+              custom.
+            * 4 CoordinateSource values: user_provided,
+              ai_estimated_from_image, derived_from_saved_map_bounds,
+              pixel_only.
+            * AnalysisOverlayItem / Create / Update Pydantic models.
+            * Cross-field invariants (model_validator):
+                - user_provided MUST have source_asset_id
+                - pixel_only MUST NOT carry latitude / longitude
+                - latitude and longitude must be supplied together
+                  (or both omitted)
+            * Field validators delegate to geo_validation.py for
+              lat/lng range checks and reject NaN / Inf for x / y /
+              confidence; confidence pinned to [0, 1].
+            * LEGACY_OVERLAY_TYPE_MAP + map_legacy_overlay_type()
+              helper translates legacy overlay_taxonomy slugs
+              (corridor, avoid, access_route, …) to the new schema
+              for callers that want to surface legacy rows alongside
+              new ones. Unknown slugs map to 'custom'.
+            * overlay_item_doc_to_dict() strips _id and normalises
+              datetimes for safe API responses.
+
+          MODIFIED FILES:
+
+            /app/backend/models/__init__.py
+              * Re-exports the new symbols.
+
+            /app/backend/hunt_geo_router.py
+              * ensure_hunt_geo_indexes() now also creates
+                analysis_overlay_items indexes:
+                  - unique (user_id, item_id) → user_overlay_unique
+                  - (user_id, hunt_id, created_at)
+                  - (user_id, hunt_id, analysis_id)
+              * Five new endpoints scoped by (user, hunt):
+                  POST   /api/hunts/{hunt_id}/overlay-items
+                  GET    /api/hunts/{hunt_id}/overlay-items[?analysis_id=]
+                  GET    /api/hunts/{hunt_id}/overlay-items/{item_id}
+                  PUT    /api/hunts/{hunt_id}/overlay-items/{item_id}
+                  DELETE /api/hunts/{hunt_id}/overlay-items/{item_id}
+              * On create, when coordinate_source='user_provided'
+                AND source_asset_id is set, the router additionally
+                verifies that the asset exists for the same
+                (user_id, hunt_id) — prevents cross-hunt asset
+                references. 400 on a missing asset.
+
+            /app/backend/server.py
+              * delete_hunt now cascades into
+                analysis_overlay_items (best-effort; logged on
+                failure) so deleting a hunt doesn't leave orphan
+                overlay rows.
+
+            /app/frontend/src/types/geo.ts
+              * Added the matching TypeScript types:
+                  ANALYSIS_OVERLAY_ITEM_TYPES,
+                  AnalysisOverlayItemType, COORDINATE_SOURCES,
+                  CoordinateSource, AnalysisOverlayItemWire,
+                  AnalysisOverlayItem (camelCase),
+                  analysisOverlayItemFromWire().
+
+          NEW TEST FILES:
+
+            /app/backend/tests/test_analysis_overlay_item.py
+              38 unit tests (Pydantic only, no Mongo / HTTP):
+                ✓ 17-type surface + each canonical type accepted
+                ✓ unknown type rejected
+                ✓ 4 coordinate sources + unknown source rejected
+                ✓ missing label / blank label / missing type /
+                  missing coordinate_source rejected
+                ✓ invalid latitude (parametrised), longitude
+                  (parametrised), NaN x, Inf y rejected
+                ✓ lat without lng rejected; both omitted ok for
+                  pixel_only
+                ✓ confidence range [0,1] with NaN/Inf rejection
+                ✓ user_provided requires source_asset_id
+                ✓ pixel_only forbids lat/lng
+                ✓ ai_estimated does NOT require source_asset
+                ✓ new_from_create mints `aoi_…` ids and timestamps;
+                  preserves explicit item_id; rejects missing
+                  hunt_id
+                ✓ doc_to_dict strips _id; handles None
+                ✓ LEGACY_OVERLAY_TYPE_MAP entries all map to
+                  canonical types
+              All 38 PASS in 0.10s.
+
+            /app/backend/tests/test_analysis_overlay_items_api.py
+              16 live integration tests against the FastAPI service:
+                ✓ create user_provided overlay (asset linkage
+                  preserved on read)
+                ✓ create pixel_only overlay (lat/lng null)
+                ✓ create ai_estimated overlay (no source_asset_id
+                  required)
+                ✓ invalid type / coordinate_source rejected
+                ✓ invalid latitude rejected (parametrised)
+                ✓ user_provided without source_asset_id → 422
+                ✓ user_provided with unknown source_asset_id → 400
+                  (cross-hunt-reference guard)
+                ✓ pixel_only with lat/lng → 422
+                ✓ blank label → 422
+                ✓ list returns all items in created_at order; GET
+                  single preserves coordinate metadata + source
+                  attribution
+                ✓ update preserves invariants and bumps updated_at
+                ✓ delete returns 200; subsequent GET 404
+                ✓ cross-user isolation (Trial session) → 404
+                ✓ deleting the parent hunt cascades into overlay
+                  items
+              All 16 PASS in 8s.
+
+          Combined direct test rollup (Task 1 → Task 6):
+              tests/test_analysis_overlay_item.py            38 PASS
+              tests/test_analysis_overlay_items_api.py       16 PASS
+              tests/test_geo_models.py                       35 PASS
+              tests/test_hunt_assets_api.py                  32 PASS
+              tests/test_saved_map_images_api.py              7 PASS
+              tests/test_overlay_taxonomy.py                 18 PASS
+              tests/test_enhanced_rollout.py                 37 PASS
+              tests/test_master_prompt_access_context.py      4 PASS
+              ─────────────────────────────────────────────────────
+              TOTAL                                         187 PASS
+
+          Pre-existing failures (NOT touched by this task and
+          verified by inspecting the assertions — they predate this
+          work):
+            * tests/test_orphan_cleanup.py — 3 tests fail because
+              the cleanup endpoint returns 403 (admin role required)
+              vs the test's expected 400. Authorization gap, not a
+              schema regression.
+            * tests/test_raven_scout_api.py — 2 tests fail
+              (species endpoint env-dependent).
+            * tests/test_species_prompt_packs.py — 1 test fails
+              ('whitetail-specific text' assertion).
+          None of those touch overlay-item code paths.
+
+          ASSUMPTIONS / DESIGN NOTES:
+            * Additive: legacy `hunts.overlays[]` is left untouched.
+              When a future task wants to backfill, it can iterate
+              that array, call map_legacy_overlay_type(), and POST
+              into the new collection. No automatic migration runs
+              today.
+            * `derived_from_saved_map_bounds` is the reserved value
+              for items whose lat/lng was computed by the frontend
+              from a SavedMapImage's bounds (Task 5) given a pixel
+              location — the backend doesn't need to do anything
+              special for this source today; it's just persisted.
+            * The cross-hunt-reference guard rejects 400 (not 422)
+              on an unknown source_asset_id because the request body
+              is well-formed; only the inter-resource invariant
+              fails. 422 is reserved for body-shape errors.
+            * TypeScript clean across the frontend
+              (`npx tsc --noEmit`).
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Task 6 is complete. Analysis overlay items now persist with
+      full GPS + pixel coordinates, an explicit coordinate source,
+      and source asset linkage — backed by 5 CRUD endpoints,
+      collection indexes, cascade-delete on hunt deletion, and
+      cross-hunt-reference guards. The legacy overlay_taxonomy
+      module + `hunts.overlays[]` field are untouched so existing
+      analysis screens render exactly as before.
+
+      Test rollup (direct):
+        Backend: 187/187 PASS across 8 test files (38 model + 16
+                 integration newly added).
+        TypeScript: clean.
+
+      Pre-existing failures in test_orphan_cleanup, test_raven_scout_api,
+      and test_species_prompt_packs are unchanged and unrelated to
+      this work (verified by reading the assertions).
+

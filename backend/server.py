@@ -2331,6 +2331,19 @@ async def delete_hunt(hunt_id: str, request: Request):
             exc,
         )
 
+    # Step 5: cascade-clean analysis overlay items (Task 6) for the
+    # same hunt. Same best-effort semantics.
+    try:
+        await db.analysis_overlay_items.delete_many(
+            {"user_id": uid, "hunt_id": hunt_id},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "delete_hunt: overlay item cleanup failed for hunt=%s: %s",
+            hunt_id,
+            exc,
+        )
+
     return {
         "ok": True,
         "deleted": result.deleted_count,
