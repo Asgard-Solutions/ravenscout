@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -2308,6 +2309,47 @@ from hunt_geo_router import build_hunt_geo_router, ensure_hunt_geo_indexes
 api_router.include_router(build_hunt_geo_router(db, get_current_user))
 
 app.include_router(api_router)
+
+
+# ----------------------------------------------------------------
+# Global validation-error handler
+# ----------------------------------------------------------------
+# FastAPI's default 422 handler echoes the offending input value back
+# in `errors[].input`. When the input contains non-JSON-finite floats
+# (NaN, +Inf, -Inf) — or non-serialisable objects like the embedded
+# `ctx.error` ValueError that Pydantic surfaces from custom field
+# validators — Starlette's JSONResponse.render() crashes with
+# `ValueError: Out of range float values are not JSON compliant`
+# (or `TypeError: ... not JSON serializable`), turning a clean 422
+# into a 500. We coerce the payload through `jsonable_encoder` and
+# rewrite non-finite floats so the response always serialises.
+import math as _math
+from fastapi.encoders import jsonable_encoder as _jsonable_encoder
+
+
+def _sanitise_non_finite(obj):
+    if isinstance(obj, float):
+        if _math.isnan(obj):
+            return "NaN"
+        if _math.isinf(obj):
+            return "Infinity" if obj > 0 else "-Infinity"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitise_non_finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitise_non_finite(v) for v in obj]
+    return obj
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(_request: Request, exc: RequestValidationError):
+    # jsonable_encoder turns embedded ValueError / Decimal / datetime
+    # objects into JSON-safe primitives; _sanitise_non_finite then
+    # finishes the job for NaN / +Inf / -Inf which jsonable_encoder
+    # leaves as float.
+    safe_errors = _sanitise_non_finite(_jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
+
 
 app.add_middleware(
     CORSMiddleware,

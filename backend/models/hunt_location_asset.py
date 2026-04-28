@@ -74,7 +74,11 @@ class HuntLocationAssetCreate(BaseModel):
     """
 
     asset_id: Optional[str] = Field(default=None, min_length=4, max_length=64)
-    hunt_id: str = Field(..., min_length=1, max_length=128)
+    # Optional in the wire payload: routes mounted at
+    # `POST /api/hunts/{hunt_id}/assets` overwrite this from the URL
+    # path before persistence. Tests / direct callers may still supply
+    # it explicitly when posting to a generic create endpoint.
+    hunt_id: Optional[str] = Field(default=None, max_length=128)
     type: HuntLocationAssetType
     name: str = Field(..., min_length=1, max_length=120)
     latitude: float

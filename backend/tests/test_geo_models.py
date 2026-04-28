@@ -171,7 +171,10 @@ class TestHuntLocationAssetCreate:
                 HuntLocationAssetCreate(**{**VALID_ASSET_PAYLOAD, "longitude": bad})
 
     def test_rejects_missing_required_fields(self):
-        for missing in ("hunt_id", "type", "name", "latitude", "longitude"):
+        # `hunt_id` is intentionally optional on the model — the
+        # router that handles POST /api/hunts/{hunt_id}/assets fills
+        # it in from the URL path. Everything else is mandatory.
+        for missing in ("type", "name", "latitude", "longitude"):
             payload = dict(VALID_ASSET_PAYLOAD)
             payload.pop(missing)
             with pytest.raises(ValidationError):
