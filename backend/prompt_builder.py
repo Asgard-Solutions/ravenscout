@@ -115,6 +115,95 @@ HUNT CONDITIONS:
   Region: {conditions.get('region') or 'Not specified'}"""
 
 
+def build_hunt_location_assets_block(assets: Optional[list]) -> str:
+    """Render the user-provided Hunt GPS Assets block (Task 7).
+
+    Emits a block describing each known stand / blind / feeder / camera /
+    parking spot / access point / etc. that the hunter pinned during
+    the New Hunt flow. The block also carries explicit guardrails so
+    the LLM:
+      * Uses the assets as concrete reference points
+      * NEVER fabricates or alters their coordinates
+      * Returns matching `sourceAssetId` values when an overlay item
+        corresponds to one of them
+      * Marks AI-generated geometry as estimated, not user_provided
+
+    Backward compatible: when `assets` is None or empty, returns a
+    short "no user-provided assets" notice so the prompt still has a
+    stable structure (legacy callers passing None get a benign string,
+    not a hard error).
+    """
+    if not assets:
+        return (
+            "\nUSER-PROVIDED HUNT LOCATION ASSETS:\n"
+            "  None provided for this hunt. Build recommendations from map evidence and species rules only."
+        )
+
+    lines: list[str] = ["\nUSER-PROVIDED HUNT LOCATION ASSETS:"]
+    lines.append(
+        f"  The hunter has marked {len(assets)} known location"
+        f"{'s' if len(assets) != 1 else ''} on the ground."
+    )
+    lines.append(
+        "  Each entry below is authoritative \u2014 the GPS coordinates were entered by the hunter, not derived from the image."
+    )
+    lines.append("")
+
+    for a in assets:
+        try:
+            asset_id = str(a.get("asset_id") or a.get("id") or "")
+            type_id = str(a.get("type") or "custom")
+            name = str(a.get("name") or "Unnamed location")
+            lat = a.get("latitude")
+            lng = a.get("longitude")
+            notes = a.get("notes")
+            lines.append(f"  - Asset ID: {asset_id}")
+            lines.append(f"    Type: {type_id}")
+            lines.append(f"    Name: {name}")
+            if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+                lines.append(f"    GPS: {float(lat):.6f}, {float(lng):.6f}")
+            if notes and isinstance(notes, str) and notes.strip():
+                lines.append(f"    Notes: {notes.strip()}")
+            lines.append("")
+        except Exception:  # noqa: BLE001
+            # Defensive: skip malformed entries rather than poison the
+            # entire prompt assembly.
+            continue
+
+    lines.append("ASSET USAGE RULES (HARD CONSTRAINTS):")
+    lines.append(
+        "  - Use the user-provided assets above as anchor points when relevant to the recommended setup."
+    )
+    lines.append(
+        "  - Do NOT alter, round, or invent GPS coordinates for any user-provided asset. Echo them back exactly when referenced."
+    )
+    lines.append(
+        "  - If an overlay item you return represents one of these assets, set:"
+    )
+    lines.append("        coordinateSource = \"user_provided\"")
+    lines.append("        sourceAssetId    = the matching Asset ID")
+    lines.append(
+        "        latitude / longitude = the EXACT values from the asset above"
+    )
+    lines.append(
+        "  - If an overlay item is your own AI-generated recommendation (a setup, funnel, corridor, avoid area, etc.), use:"
+    )
+    lines.append("        coordinateSource = \"ai_estimated_from_image\"")
+    lines.append(
+        "                          or  \"derived_from_saved_map_bounds\""
+    )
+    lines.append(
+        "        and DO NOT reuse a sourceAssetId that the hunter did not actually pin."
+    )
+    lines.append(
+        "  - When the source image does NOT support geo placement, do NOT fabricate latitude/longitude. Use:"
+    )
+    lines.append("        coordinateSource = \"pixel_only\"")
+    lines.append("        latitude = null, longitude = null")
+    lines.append("        and provide x / y for rendering only.")
+    return "\n".join(lines)
+
+
 def build_master_analysis_directives_block() -> str:
     return """
 MASTER ANALYSIS DIRECTIVES:
@@ -404,6 +493,13 @@ def assemble_system_prompt(
     enhanced_region_id: Optional[str] = None,
     enhanced_behavior_pattern_types: Optional[Tuple[str, ...]] = None,
     enhanced_species_id: Optional[str] = None,          # prompt_pack_id override
+    # ------------------------------------------------------------------
+    # Task 7: user-provided Hunt GPS Assets. Optional + additive: when
+    # None / [], the prompt contains a short "no user-provided assets"
+    # notice and the rest of the prompt is byte-identical to the legacy
+    # build (so existing snapshot tests stay green).
+    # ------------------------------------------------------------------
+    hunt_location_assets: Optional[list] = None,
 ) -> str:
     """Assemble the complete system prompt from modular parts.
 
@@ -525,6 +621,14 @@ def assemble_system_prompt(
         build_output_schema_block(),
         build_output_constraints(),
     ]
+
+    # Task 7: append the user-provided Hunt GPS Assets block after
+    # the constraint block. Kept ADDITIVE — when no assets are
+    # supplied the prompt is byte-identical to the legacy build, so
+    # existing snapshot tests remain valid.
+    if hunt_location_assets:
+        parts.append(build_hunt_location_assets_block(hunt_location_assets))
+
     legacy_prompt = "\n".join(parts)
 
     # Enhanced extensions \u2014 OPT-IN, ADDITIVE. When all flags are False

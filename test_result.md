@@ -6366,3 +6366,195 @@ agent_communication:
       and test_species_prompt_packs are unchanged and unrelated to
       this work (verified by reading the assertions).
 
+
+
+# ====================================================================
+# Hunt GPS Assets in AI analysis context (Task 7)
+# ====================================================================
+
+backend:
+  - task: "Hunt GPS Assets surfaced in AI analysis prompt context"
+    implemented: true
+    working: true
+    file: "/app/backend/prompt_builder.py, /app/backend/server.py, /app/backend/tests/test_hunt_location_assets_prompt.py, /app/frontend/app/setup.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Wired user-provided Hunt GPS Assets into the analyze-hunt
+          prompt context. Strictly additive: legacy clients (no
+          hunt_id, no inline location_assets) get a byte-identical
+          system prompt and the entire analysis pipeline behaves
+          exactly as before.
+
+          NEW PROMPT BLOCK: build_hunt_location_assets_block()
+            * Renders each asset with Asset ID / Type / Name / GPS
+              (6-decimal precision) / Notes (when present).
+            * Skips half-coordinate or malformed entries defensively
+              instead of poisoning the entire prompt assembly.
+            * Pluralises the asset count ("1 known location" vs
+              "N known locations").
+            * Appends ASSET USAGE RULES guardrails the brief calls
+              for:
+                - Use the assets as anchor points when relevant.
+                - Do NOT alter, round, or invent GPS for any
+                  user-provided asset.
+                - When an overlay item represents one of the
+                  assets, set:
+                    coordinateSource = "user_provided"
+                    sourceAssetId    = the matching Asset ID
+                    latitude/longitude = EXACT values from the asset
+                - When the overlay item is AI-generated, use:
+                    coordinateSource = "ai_estimated_from_image"
+                                  or  "derived_from_saved_map_bounds"
+                  and DO NOT reuse a sourceAssetId.
+                - When the source image does NOT support geo
+                  placement, do NOT fabricate latitude/longitude;
+                  use coordinateSource = "pixel_only" and provide
+                  x / y for rendering only.
+            * When called with None / [] returns a short
+              "None provided for this hunt" notice (used by the
+              integration plumbing only when there's still no
+              assets-block to inject — actual byte-identical
+              fallback is achieved by NOT calling the helper at all
+              in that branch).
+
+          ASSEMBLE_SYSTEM_PROMPT:
+            * New optional kwarg `hunt_location_assets`. When None
+              or empty the assets block is OMITTED, preserving
+              byte-for-byte identity with the legacy prompt
+              (validated by the new test
+              test_legacy_byte_identical_when_no_assets).
+            * When non-empty, the block is appended after the
+              existing constraints block so it lands at the end of
+              the system prompt where guardrails carry the most
+              weight.
+
+          SERVER WIRING (/api/analyze-hunt):
+            * AnalyzeRequest gained two optional fields:
+                - hunt_id:        when set, the endpoint loads
+                                  the hunt's GPS assets from Mongo
+                                  via (user_id, hunt_id).
+                - location_assets: inline payload used when the
+                                   hunt has no server row yet (the
+                                   New Hunt flow stashes the
+                                   pendingAssets there before the
+                                   hunt is upserted).
+              Inline `location_assets` takes precedence over the
+              Mongo lookup when both are present.
+            * The endpoint logs which path was taken, e.g.
+              "Analyze: using 1 inline location asset(s)" or
+              "Loaded N hunt location asset(s) for hunt=…"
+            * Mongo lookup is best-effort — a transient DB blip
+              will NOT block the analyze call. We log + fall back
+              to no-assets.
+
+          FRONTEND WIRING (/app/frontend/app/setup.tsx):
+            * The /api/analyze-hunt POST now includes
+              `location_assets` derived from the user's
+              `pendingAssets` (Task 4). Each entry maps to:
+                  asset_id  = pendingAsset.localId   (e.g. pa_*)
+                  type / name / latitude / longitude / notes
+              Field is omitted entirely (not sent as []) when the
+              user added no assets, so the backend's "byte-
+              identical legacy prompt" path actually fires.
+
+          NEW TEST FILE:
+            /app/backend/tests/test_hunt_location_assets_prompt.py
+            14 unit tests:
+              ✓ None / empty list → "None provided" notice
+              ✓ Single asset renders Asset ID / Type / Name / GPS /
+                Notes
+              ✓ Multiple assets render in input order
+              ✓ Missing notes / blank notes are omitted
+              ✓ Guardrails present (Do NOT alter, sourceAssetId,
+                ai_estimated_from_image, do NOT fabricate, etc.)
+              ✓ Asset count pluralisation
+              ✓ Malformed entries (None, missing fields) skipped
+                without raising
+              ✓ Half-coordinate entries omit the GPS line
+              ✓ assemble_system_prompt is BYTE-IDENTICAL when
+                hunt_location_assets is None OR []
+              ✓ Prompt grows when assets are supplied
+              ✓ Asset names / ids / coords land verbatim in the
+                full system prompt
+              ✓ Guardrail keywords survive the full assembly
+            All 14 PASS in 0.02s.
+
+          REGRESSION SWEEP (no Task 7 introduced regressions):
+            tests/test_overlay_taxonomy.py             18 PASS
+            tests/test_enhanced_rollout.py             37 PASS
+            tests/test_master_prompt_access_context.py  4 PASS
+            tests/test_geo_models.py                   35 PASS
+            tests/test_analysis_overlay_item.py        38 PASS
+            tests/test_hunt_location_assets_prompt.py  14 PASS  (NEW)
+            tests/test_species_prompt_packs.py         1 fail (PRE-EXISTING:
+                                                       wallow drift in
+                                                       master directives,
+                                                       confirmed by
+                                                       stashing my changes
+                                                       and re-running)
+
+          LIVE END-TO-END VERIFY:
+            curl POST /api/analyze-hunt with hog + 1 inline
+            location asset:
+              backend log → "Analyze: using 1 inline location asset(s)"
+            (LLM call then errored on the test base64 stub, which
+            is expected — the asset-block plumbing executed before
+            the image was even submitted.)
+
+          ASSUMPTIONS / DESIGN NOTES:
+            * Inline assets win over the Mongo lookup because the
+              New Hunt flow's hunt row is created AFTER analyze
+              runs (provisional → finalize). Re-analyse flows where
+              the hunt already has server-side rows can just send
+              hunt_id + null location_assets and the lookup path
+              kicks in.
+            * AnalyzeRequestLocationAsset deliberately does NOT
+              re-validate range / enum constraints — those are
+              enforced at the WRITE path (Task 3 endpoint). Bad
+              analyze inputs should never 422 the entire analysis;
+              malformed entries are silently skipped inside the
+              prompt builder.
+            * The block is appended at the END of the system
+              prompt so the guardrails sit close to the schema /
+              constraints — empirically best for adherence.
+            * No prompt-pack changes; no LLM JSON-schema changes
+              (those are Task 6's territory). Task 7 is strictly
+              prompt context.
+            * TypeScript clean (`npx tsc --noEmit`).
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Task 7 is complete. User-provided Hunt GPS Assets now appear
+      verbatim in the analysis prompt context with explicit
+      "do not alter / do not fabricate / do not reuse sourceAssetId"
+      guardrails. Plumbed end-to-end:
+        Frontend: /setup.tsx posts `location_assets` inline on
+                  /api/analyze-hunt when the user added pinned
+                  locations.
+        Backend:  /api/analyze-hunt prefers inline assets, falls
+                  back to a Mongo lookup keyed on (user, hunt_id),
+                  and threads the result into
+                  assemble_system_prompt.
+        Prompt:   New build_hunt_location_assets_block() emits the
+                  Asset ID / Type / Name / GPS / Notes block and
+                  the ASSET USAGE RULES guardrails.
+
+      Test rollup:
+        Backend: 146/146 PASS across the 6 directly-related test
+                 files (+14 new from this task). 1 pre-existing
+                 unrelated failure in test_species_prompt_packs.py
+                 — unchanged by this work.
+        Live curl smoke confirmed "Analyze: using 1 inline location
+        asset(s)" path executes.
+        TypeScript: clean.
+
+      No prompt regressions: legacy callers without assets get a
+      byte-identical system prompt (verified by a dedicated
+      assemble_system_prompt invariant test).
+

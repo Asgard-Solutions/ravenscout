@@ -1339,10 +1339,39 @@ class HuntConditions(BaseModel):
     hunt_weapon: Optional[str] = None
     hunt_method: Optional[str] = None
 
+class AnalyzeRequestLocationAsset(BaseModel):
+    """Inline payload shape for a Hunt GPS Asset attached to an
+    /analyze-hunt request (Task 7).
+
+    Matches the canonical HuntLocationAsset wire shape from the model
+    in /app/backend/models/hunt_location_asset.py, but kept loose
+    here (no enum / range checks) because:
+      * The validators on HuntLocationAssetCreate already gate the
+        write path (POST /api/hunts/{id}/assets).
+      * Bad analyze inputs should NOT 422 the analysis itself —
+        we just skip a malformed entry inside the prompt builder.
+    """
+    asset_id: Optional[str] = None
+    type: Optional[str] = None
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    notes: Optional[str] = None
+
+
 class AnalyzeRequest(BaseModel):
     conditions: HuntConditions
     map_image_base64: str
     additional_images: Optional[List[str]] = None
+    # Task 7: when supplied, the analyze endpoint loads the hunt's
+    # user-provided GPS assets from Mongo and threads them into the
+    # prompt context. Optional + additive — legacy clients (no
+    # hunt_id) behave exactly as before.
+    hunt_id: Optional[str] = None
+    # Task 7: inline assets supplied directly by the New Hunt flow
+    # before the hunt has a server-side row. Takes precedence over
+    # the Mongo lookup when both are present.
+    location_assets: Optional[List[AnalyzeRequestLocationAsset]] = None
 
 class OverlayMarker(BaseModel):
     type: str
@@ -1393,7 +1422,7 @@ SPECIES_DATA = legacy_species_data()
 # ============================================================
 # AI ANALYSIS (unchanged)
 # ============================================================
-async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial") -> dict:
+async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str, additional_images: Optional[List[str]] = None, tier: str = "trial", hunt_location_assets: Optional[List[dict]] = None) -> dict:
     """Run GPT-5.2 Vision analysis on the hunt map.
 
     LLM selection:
@@ -1541,6 +1570,7 @@ async def analyze_map_with_ai(conditions: HuntConditions, map_image_base64: str,
         hunt_style=canonical_hunt_style,
         hunt_weapon=canonical_hunt_weapon,
         hunt_method=canonical_hunt_method,
+        hunt_location_assets=hunt_location_assets,
         **enhanced_kwargs,
     )
     user_prompt_text = assemble_user_prompt(
@@ -1762,11 +1792,52 @@ async def analyze_hunt(request: Request):
 
     try:
         logger.info(f"Analyzing hunt for {analyze_req.conditions.animal} (user: {user['user_id']}, tier: {tier_key}, images: 1+{len(analyze_req.additional_images or [])})")
+
+        # Task 7: gather user-provided GPS assets for the prompt.
+        # Priority order:
+        #   1. Inline `location_assets` on the request body (the New
+        #      Hunt flow stashes pendingAssets there before the hunt
+        #      has a server row). Used directly without persistence.
+        #   2. Mongo lookup keyed on (user_id, hunt_id) — covers
+        #      re-analyse flows where the hunt already exists.
+        # Best-effort throughout: a Mongo blip MUST NOT block the
+        # analyze flow.
+        loaded_assets: List[dict] = []
+        if analyze_req.location_assets:
+            for entry in analyze_req.location_assets:
+                d = entry.model_dump(exclude_none=False)
+                # The prompt builder expects `asset_id` to be a stable
+                # string — synthesise one if the inline entry doesn't
+                # carry it (frontend uses localId pa_*).
+                if not d.get("asset_id"):
+                    d["asset_id"] = "pending"
+                loaded_assets.append(d)
+            logger.info(
+                f"Analyze: using {len(loaded_assets)} inline location asset(s)"
+            )
+        elif analyze_req.hunt_id:
+            try:
+                cursor = db.hunt_location_assets.find(
+                    {"user_id": user["user_id"], "hunt_id": analyze_req.hunt_id},
+                    {"_id": 0},
+                ).sort("created_at", 1)
+                loaded_assets = [doc async for doc in cursor]
+                logger.info(
+                    f"Loaded {len(loaded_assets)} hunt location asset(s) for "
+                    f"hunt={analyze_req.hunt_id}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"hunt asset load failed for hunt={analyze_req.hunt_id}: {exc}"
+                )
+                loaded_assets = []
+
         raw_result = await analyze_map_with_ai(
             analyze_req.conditions,
             analyze_req.map_image_base64,
             additional_images=analyze_req.additional_images if tier_key == "pro" else None,
             tier=tier_key,
+            hunt_location_assets=loaded_assets if loaded_assets else None,
         )
 
         # Increment usage — drains monthly subscription credits FIRST,

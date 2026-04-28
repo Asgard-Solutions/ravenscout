@@ -588,6 +588,22 @@ export default function SetupScreen() {
           additional_images: isPaidTier && user?.tier === 'pro'
             ? mapImages.filter((_, i) => i !== primaryMapIndex)
             : undefined,
+          // Task 7: pass any user-provided GPS assets the hunter
+          // pinned in the New Hunt flow so the LLM can reference
+          // them as anchor points. The hunt itself doesn't have a
+          // server row yet at this point — assets are sent inline
+          // and persisted post-finalize via /api/hunts/{id}/assets
+          // (Task 4 drain).
+          location_assets: pendingAssets.length > 0
+            ? pendingAssets.map((a) => ({
+                asset_id: a.localId,
+                type: a.type,
+                name: a.name,
+                latitude: a.latitude,
+                longitude: a.longitude,
+                notes: a.notes ?? null,
+              }))
+            : undefined,
         }),
       });
 
