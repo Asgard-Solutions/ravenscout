@@ -401,6 +401,92 @@ export default function ResultsScreen() {
     setMarkerForm({ mode: 'edit', item });
   }, []);
 
+  // Task 10 follow-up — drag-to-reposition. Receives the new
+  // rendered (px) anchor; recomputes original-image x/y + lat/lng
+  // (when geo-capable) via the same buildMarkerPlacement helper
+  // used for tap-to-add, then PUTs the update. Optimistically
+  // updates local state for snappy UI. On failure, reverts.
+  const handleRepositionItem = useCallback(
+    async (item: AnalysisOverlayItem, rendX: number, rendY: number) => {
+      if (!huntIdForMarkers) return;
+      const ow = analysisBasis?.naturalWidth || 0;
+      const oh = analysisBasis?.naturalHeight || 0;
+      const placement = buildMarkerPlacement({
+        renderedX: rendX,
+        renderedY: rendY,
+        renderedWidth: renderedW,
+        renderedHeight: MAP_HEIGHT,
+        originalWidth: ow,
+        originalHeight: oh,
+        geo: savedMapImage
+          ? {
+              bounds:
+                typeof savedMapImage.northLat === 'number' &&
+                typeof savedMapImage.southLat === 'number' &&
+                typeof savedMapImage.westLng === 'number' &&
+                typeof savedMapImage.eastLng === 'number'
+                  ? {
+                      northLat: savedMapImage.northLat,
+                      southLat: savedMapImage.southLat,
+                      westLng: savedMapImage.westLng,
+                      eastLng: savedMapImage.eastLng,
+                    }
+                  : null,
+              supportsGeoPlacement: savedMapImage.supportsGeoPlacement,
+            }
+          : null,
+      });
+      if (!placement.ok) {
+        Alert.alert('Cannot reposition marker', `(${placement.reason})`);
+        return;
+      }
+      const before = item;
+      // Optimistic update.
+      setSavedOverlayItems(prev =>
+        prev.map(it =>
+          it.id === item.id
+            ? {
+                ...it,
+                x: placement.data.x,
+                y: placement.data.y,
+                latitude: placement.data.latitude,
+                longitude: placement.data.longitude,
+                // When the user drags a user_provided marker away
+                // from its asset GPS, downgrade to the appropriate
+                // derived/pixel-only source — never leave a stale
+                // user_provided tag on a now-different position.
+                coordinateSource:
+                  it.coordinateSource === 'user_provided'
+                    ? placement.data.coordinateSource
+                    : (it.coordinateSource as any),
+              }
+            : it,
+        ),
+      );
+      const r = await updateOverlayItem(huntIdForMarkers, item.id, {
+        x: placement.data.x,
+        y: placement.data.y,
+        latitude: placement.data.latitude ?? null,
+        longitude: placement.data.longitude ?? null,
+        coordinateSource:
+          item.coordinateSource === 'user_provided'
+            ? placement.data.coordinateSource
+            : (item.coordinateSource as any),
+      });
+      if (!r.ok) {
+        // Revert the optimistic write.
+        setSavedOverlayItems(prev =>
+          prev.map(it => (it.id === item.id ? before : it)),
+        );
+        Alert.alert(
+          'Could not reposition marker',
+          (r as any).error || r.reason,
+        );
+      }
+    },
+    [huntIdForMarkers, analysisBasis, savedMapImage, renderedW],
+  );
+
   const handleDeleteItem = useCallback(
     async (item: AnalysisOverlayItem) => {
       if (!huntIdForMarkers) return;
@@ -1275,6 +1361,7 @@ export default function ResultsScreen() {
               onTapPlaceMarker={handleTapPlaceMarker}
               onEditItem={handleEditItem}
               onDeleteItem={handleDeleteItem}
+              onRepositionItem={handleRepositionItem}
               testID="saved-overlay-image-panel"
             />
           </View>

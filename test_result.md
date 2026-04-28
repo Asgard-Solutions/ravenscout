@@ -7393,3 +7393,82 @@ agent_communication:
         but no persisted rows. Reloads do not double-persist
         (server-side idempotency on analysis_id + frontend
         ref-based dedupe).
+
+  - task: "Drag-to-reposition saved markers (Task 10 follow-up)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/SavedAnalysisOverlayImage.tsx, /app/frontend/app/results.tsx, /app/frontend/src/utils/__tests__/markerReposition.test.ts"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Long-press → drag → release flow on saved markers.
+
+            COMPONENT (SavedAnalysisOverlayImage.tsx):
+              * New `onRepositionItem` prop. When supplied, every
+                marker becomes a draggable Animated.View governed
+                by a PanResponder.
+              * Long-press (220ms) arms drag; before that, a tap
+                still opens the detail panel. A drag of >4px after
+                the arm-window kicks off the actual move.
+              * The marker visually follows the finger via an
+                Animated.ValueXY translate; the drag is clamped to
+                the image rect (no markers off-image).
+              * On release the parent's onRepositionItem is called
+                with the new rendered (px) anchor.
+
+            HANDLER (results.tsx → handleRepositionItem):
+              * Reuses buildMarkerPlacement to convert the rendered
+                anchor → original-image x/y + lat/lng.
+              * Optimistic local state update for snappy UX.
+              * PUT /overlay-items/:id, revert on failure.
+              * COORDINATE-SOURCE POLICY: when a marker tagged
+                `user_provided` is dragged, the new row is written
+                with the appropriate derived source
+                ('derived_from_saved_map_bounds' for geo-capable,
+                'pixel_only' otherwise). Other source types keep
+                their tag — only x/y/lat/lng update. This prevents
+                a stale 'user_provided' label on a position that
+                no longer matches the asset's stored GPS.
+              * Pixel-only image: NEVER fabricates GPS, even if
+                the marker started as user_provided with
+                lat/lng populated.
+
+            UNIT TESTS (yarn test:unit):
+              /app/frontend/src/utils/__tests__/markerReposition.test.ts
+              6/6 PASS:
+                ✓ user_provided + geo image → derived_from_saved_map_bounds, GPS recomputed
+                ✓ user_provided + pixel-only → pixel_only, GPS = null
+                ✓ ai_estimated stays ai_estimated (do not downgrade)
+                ✓ derived_from_saved_map_bounds stays itself
+                ✓ out-of-bounds drag rejected (tap_out_of_bounds)
+                ✓ pixel-only never persists fake GPS even when
+                  starting from user_provided
+
+            FULL FRONTEND SUITE: 228/230 PASS (the 2 pre-existing
+            huntStyles failures only). +6 net tests vs prior
+            baseline. TypeScript clean.
+
+            BACKEND: No backend changes — uses the existing
+            PUT /api/hunts/:id/overlay-items/:item_id endpoint.
+
+            UX TRADE-OFFS:
+              * No drag-handle UI — long-press is the gesture.
+                Documented via the existing add-marker hint flow;
+                a dedicated tooltip can be added later if users
+                request it.
+              * Drag works in both add-mode and view-mode (no
+                mode switch required).
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Drag-to-reposition is wired and tested. Long-press a
+        marker on the SAVED MARKERS panel, drag it, release —
+        the position is recomputed and persisted. user_provided
+        markers correctly downgrade their coordinate_source so
+        repositioning does not leave a stale "from asset GPS"
+        tag on a now-different location.

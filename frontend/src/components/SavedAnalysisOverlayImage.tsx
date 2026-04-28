@@ -29,7 +29,7 @@
 // Task 9 is strictly: load saved x/y, scale, draw, show details.
 // =====================================================================
 
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -39,6 +39,8 @@ import {
   Modal,
   ScrollView,
   Pressable,
+  PanResponder,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -105,6 +107,19 @@ export interface SavedAnalysisOverlayImageProps {
    * Task 10 — show a "Delete" button on the detail panel.
    */
   onDeleteItem?: (item: AnalysisOverlayItem) => void;
+  /**
+   * Task 10 follow-up — when supplied, markers become draggable.
+   * The callback receives the item AND the new tap position in
+   * RENDERED pixel space (relative to the image rect). The parent
+   * is responsible for converting back to original-image x/y +
+   * deriving lat/lng (via buildMarkerPlacement) and PUT-ing the
+   * update.
+   */
+  onRepositionItem?: (
+    item: AnalysisOverlayItem,
+    renderedX: number,
+    renderedY: number,
+  ) => void;
 }
 
 // --- Helpers ------------------------------------------------------------
@@ -123,6 +138,164 @@ function formatConfidence(c: number | null | undefined): string {
 
 // --- Component ----------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// Draggable marker sub-component.
+//
+// When `onReposition` is supplied, the marker becomes a long-press
+// drag target. A short tap still fires `onPress` (so the detail panel
+// continues to work). The marker visually follows the finger via an
+// Animated.ValueXY translate; on release we hand the final rendered-
+// pixel coordinates to the parent which is responsible for converting
+// to original-image x/y + persisting via PUT.
+// ---------------------------------------------------------------------
+
+const LONG_PRESS_MS = 220;
+const DRAG_THRESHOLD_PX = 4;
+
+const DraggableSavedMarker: React.FC<{
+  item: AnalysisOverlayItem;
+  anchor: { renderedX: number; renderedY: number };
+  markerSize: number;
+  onPress: () => void;
+  onReposition?: (renderedX: number, renderedY: number) => void;
+  renderedWidth: number;
+  renderedHeight: number;
+}> = ({ item, anchor, markerSize, onPress, onReposition, renderedWidth, renderedHeight }) => {
+  const info = getOverlayItemTypeInfo(item.type);
+  const half = markerSize / 2;
+
+  const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const dragOffset = useRef({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragArmed = useRef(false);
+  // Force re-render of the lock badge during drag.
+  const [draggingState, setDraggingState] = useState(false);
+
+  // When the parent re-anchors the marker (after PUT success), reset
+  // the translate so the new `anchor.renderedX/Y` fully owns the
+  // position.
+  React.useEffect(() => {
+    translate.setValue({ x: 0, y: 0 });
+    dragOffset.current = { x: 0, y: 0 };
+  }, [anchor.renderedX, anchor.renderedY, translate]);
+
+  const cancelLongPressTimer = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !!onReposition,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_e, g) => {
+        if (!onReposition) return false;
+        return (
+          dragArmed.current &&
+          (Math.abs(g.dx) > DRAG_THRESHOLD_PX || Math.abs(g.dy) > DRAG_THRESHOLD_PX)
+        );
+      },
+      onPanResponderGrant: () => {
+        if (!onReposition) return;
+        // Arm drag only after a long-press so a tap stays a tap.
+        cancelLongPressTimer();
+        longPressTimer.current = setTimeout(() => {
+          dragArmed.current = true;
+          setDraggingState(true);
+          isDragging.current = false;
+        }, LONG_PRESS_MS);
+      },
+      onPanResponderMove: (_e, g) => {
+        if (!dragArmed.current) {
+          // If the user moves before long-press fires, cancel arm
+          // (treat as accidental scroll attempt).
+          if (Math.abs(g.dx) > DRAG_THRESHOLD_PX || Math.abs(g.dy) > DRAG_THRESHOLD_PX) {
+            cancelLongPressTimer();
+          }
+          return;
+        }
+        isDragging.current = true;
+        // Clamp the marker's center to stay inside the image rect.
+        const targetX = Math.max(
+          -anchor.renderedX,
+          Math.min(renderedWidth - anchor.renderedX, g.dx),
+        );
+        const targetY = Math.max(
+          -anchor.renderedY,
+          Math.min(renderedHeight - anchor.renderedY, g.dy),
+        );
+        translate.setValue({ x: targetX, y: targetY });
+        dragOffset.current = { x: targetX, y: targetY };
+      },
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: () => {
+        cancelLongPressTimer();
+        if (!dragArmed.current) {
+          // Treated as a tap.
+          onPress();
+          return;
+        }
+        dragArmed.current = false;
+        setDraggingState(false);
+        if (!isDragging.current || !onReposition) {
+          // long-press without movement → just open detail
+          onPress();
+          return;
+        }
+        isDragging.current = false;
+        const { x: dx, y: dy } = dragOffset.current;
+        const finalX = anchor.renderedX + dx;
+        const finalY = anchor.renderedY + dy;
+        // Hand off — parent will compute new x/y/lat/lng + PUT.
+        onReposition(finalX, finalY);
+      },
+      onPanResponderTerminate: () => {
+        cancelLongPressTimer();
+        dragArmed.current = false;
+        setDraggingState(false);
+        Animated.spring(translate, {
+          toValue: { x: 0, y: 0 },
+          useNativeDriver: false,
+        }).start();
+      },
+    }),
+  ).current;
+
+  return (
+    <Animated.View
+      {...panResponder.panHandlers}
+      accessibilityRole="button"
+      accessibilityLabel={`${info.label}: ${item.label}`}
+      testID={`saved-overlay-marker-${item.id}`}
+      style={[
+        styles.marker,
+        {
+          left: anchor.renderedX - half,
+          top: anchor.renderedY - half,
+          width: markerSize,
+          height: markerSize,
+          backgroundColor: info.color,
+          borderRadius: half,
+          transform: translate.getTranslateTransform(),
+          opacity: draggingState ? 0.85 : 1,
+          borderWidth: draggingState ? 3 : 2,
+        },
+      ]}
+    >
+      <Ionicons
+        name={info.icon as any}
+        size={Math.round(markerSize * 0.55)}
+        color="#FFFFFF"
+      />
+    </Animated.View>
+  );
+};
+
+// ---------------------------------------------------------------------
+
 export const SavedAnalysisOverlayImage: React.FC<
   SavedAnalysisOverlayImageProps
 > = ({
@@ -140,6 +313,7 @@ export const SavedAnalysisOverlayImage: React.FC<
   onTapPlaceMarker,
   onEditItem,
   onDeleteItem,
+  onRepositionItem,
 }) => {
   const [selectedItem, setSelectedItem] = useState<AnalysisOverlayItem | null>(
     null,
@@ -269,37 +443,22 @@ export const SavedAnalysisOverlayImage: React.FC<
         pointerEvents="box-none"
         style={[styles.overlayLayer, containerStyle]}
       >
-        {renderableMarkers.map(({ item, anchor }) => {
-          const info = getOverlayItemTypeInfo(item.type);
-          const half = markerSize / 2;
-          return (
-            <TouchableOpacity
-              key={item.id}
-              accessibilityRole="button"
-              accessibilityLabel={`${info.label}: ${item.label}`}
-              testID={`saved-overlay-marker-${item.id}`}
-              activeOpacity={0.85}
-              onPress={() => handleMarkerPress(item)}
-              style={[
-                styles.marker,
-                {
-                  left: anchor.renderedX - half,
-                  top: anchor.renderedY - half,
-                  width: markerSize,
-                  height: markerSize,
-                  backgroundColor: info.color,
-                  borderRadius: half,
-                },
-              ]}
-            >
-              <Ionicons
-                name={info.icon as any}
-                size={Math.round(markerSize * 0.55)}
-                color="#FFFFFF"
-              />
-            </TouchableOpacity>
-          );
-        })}
+        {renderableMarkers.map(({ item, anchor }) => (
+          <DraggableSavedMarker
+            key={item.id}
+            item={item}
+            anchor={anchor}
+            markerSize={markerSize}
+            onPress={() => handleMarkerPress(item)}
+            onReposition={
+              onRepositionItem
+                ? (rx, ry) => onRepositionItem(item, rx, ry)
+                : undefined
+            }
+            renderedWidth={renderedWidth}
+            renderedHeight={renderedHeight}
+          />
+        ))}
       </View>
 
       {/* Detail panel — bottom-sheet-style modal so the user keeps
