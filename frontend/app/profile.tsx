@@ -195,8 +195,31 @@ export default function ProfileScreen() {
 
   const toggleBio = async (next: boolean) => {
     if (next && sessionToken) {
-      const ok = await enableBiometric(sessionToken);
-      if (!ok) { Alert.alert('Could not enable', 'Biometric enrollment was cancelled or failed.'); return; }
+      const res = await enableBiometric(sessionToken);
+      if (!res.ok) {
+        // Show a clear, action-oriented message per failure mode so
+        // users understand why the toggle didn't stick.
+        if (res.reason === 'cancelled') {
+          // Silent — they tapped Cancel on the prompt themselves.
+          return;
+        }
+        if (res.reason === 'unavailable') {
+          Alert.alert(
+            'Biometrics not available',
+            'Set up Face ID, Touch ID or a fingerprint in your device Settings, then try again.',
+          );
+          return;
+        }
+        if (res.reason === 'auth_failed') {
+          Alert.alert(
+            'Could not verify',
+            'Your fingerprint or face was not recognised. Please try again.',
+          );
+          return;
+        }
+        Alert.alert('Could not enable', 'Biometric setup failed. Please try again.');
+        return;
+      }
       setBioOn(true);
     } else {
       await disableBiometric();

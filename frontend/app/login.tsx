@@ -53,8 +53,17 @@ export default function LoginScreen() {
           {
             text: 'Enable',
             onPress: async () => {
-              const ok = await enableBiometric(token!);
-              if (!ok) Alert.alert('Could not enable', 'You can try again later from your profile.');
+              const res = await enableBiometric(token!);
+              if (!res.ok && res.reason !== 'cancelled') {
+                Alert.alert(
+                  'Could not enable',
+                  res.reason === 'unavailable'
+                    ? 'No fingerprint or Face ID is set up on this device. Add one in your device Settings, then try again from your Profile.'
+                    : res.reason === 'auth_failed'
+                      ? 'Your fingerprint or face was not recognised. You can try again later from your Profile.'
+                      : 'Biometric setup failed. You can try again later from your Profile.',
+                );
+              }
             },
           },
         ],
