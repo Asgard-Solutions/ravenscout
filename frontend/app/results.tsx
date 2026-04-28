@@ -259,6 +259,69 @@ export default function ResultsScreen() {
           if ((result as any).ok && (result as any).outcome?.warningMessage) {
             setPersistWarning(prev => prev || (result as any).outcome.warningMessage);
           }
+
+          // Drain any pending GPS assets the user added in the New
+          // Hunt flow (Task 4). They were stashed in AsyncStorage by
+          // /setup.tsx because the assets need a server-side
+          // hunt_id to attach to, and that only exists after the
+          // upsert above. Idempotent: assets that successfully POST
+          // are removed from the stash; failures stay for retry on
+          // a later visit to /results.
+          if ((result as any).ok) {
+            try {
+              const { loadPendingAssets, removePendingAssets } =
+                await import('../src/media/pendingHuntAssets');
+              const { bulkCreateHuntAssets } =
+                await import('../src/api/huntAssetsApi');
+              const pending = await loadPendingAssets(huntId);
+              if (pending.length > 0) {
+                const outcomes = await bulkCreateHuntAssets(
+                  huntId,
+                  pending.map((a) => ({
+                    type: a.type,
+                    name: a.name,
+                    latitude: a.latitude,
+                    longitude: a.longitude,
+                    notes: a.notes ?? null,
+                  })),
+                );
+                const committedLocalIds = outcomes
+                  .filter((o) => o.ok)
+                  .map((o) => pending[o.index].localId);
+                const failed = outcomes.filter((o) => !o.ok);
+                if (committedLocalIds.length > 0) {
+                  await removePendingAssets(huntId, committedLocalIds);
+                }
+                logClientEvent({
+                  event: 'hunt_assets_drained',
+                  data: {
+                    hunt_id: huntId,
+                    requested: pending.length,
+                    committed: committedLocalIds.length,
+                    failed: failed.length,
+                    failure_reasons: failed.map((o) => o.reason).slice(0, 5),
+                  },
+                });
+                if (failed.length > 0) {
+                  setPersistWarning(
+                    (prev) =>
+                      prev ||
+                      `${failed.length} hunt location${
+                        failed.length === 1 ? '' : 's'
+                      } couldn’t be saved. They’ll retry next time you open this hunt.`,
+                  );
+                }
+              }
+            } catch (drainErr: any) {
+              logClientEvent({
+                event: 'hunt_assets_drain_threw',
+                data: {
+                  hunt_id: huntId,
+                  error: drainErr?.message || String(drainErr),
+                },
+              });
+            }
+          }
         } catch (err: any) {
           logClientEvent({
             event: 'finalize_provisional_ui_threw',

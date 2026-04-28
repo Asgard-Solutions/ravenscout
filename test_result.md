@@ -5807,3 +5807,182 @@ agent_communication:
       against the live backend; no regressions in the existing
       pytest suites. No frontend / UI work was done.
 
+
+
+# ====================================================================
+# New Hunt UI: optional "Known Hunt Locations" GPS assets (Task 4)
+# ====================================================================
+
+frontend:
+  - task: "New Hunt flow — optional Known Hunt Locations section"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/api/huntAssetsApi.ts, /app/frontend/src/media/pendingHuntAssets.ts, /app/frontend/src/lib/huntAssetValidation.ts, /app/frontend/src/components/HuntLocationsSection.tsx, /app/frontend/src/components/__tests__/HuntLocationsSection.test.ts, /app/frontend/app/setup.tsx, /app/frontend/app/results.tsx, /app/frontend/package.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added the optional GPS-asset capture flow in the New Hunt
+          wizard (Task 4). Strictly UI + persistence wiring — no AI
+          prompt changes, no overlay rendering changes, no advanced
+          map calibration.
+
+          NEW FILES:
+
+          1. /app/frontend/src/lib/huntAssetValidation.ts
+             Pure-function validateAssetForm() that mirrors the
+             backend Pydantic rules exactly:
+              • type ∈ HUNT_LOCATION_ASSET_TYPES
+              • name required, trimmed non-blank, ≤ 120 chars
+              • latitude  required, finite, ∈ [-90, 90]
+              • longitude required, finite, ∈ [-180, 180]
+              • notes optional
+             Lives outside the React component so unit tests can
+             import it without dragging in React Native.
+
+          2. /app/frontend/src/api/huntAssetsApi.ts
+             Typed client for /api/hunts/{id}/assets:
+              • createHuntAsset / listHuntAssets / updateHuntAsset /
+                deleteHuntAsset
+              • bulkCreateHuntAssets() — sequential POSTs with
+                per-payload outcome (idx, ok, server-assigned
+                asset_id, reason). Used by the post-finalize drain
+                in /results.tsx.
+             All calls are non-throwing — return {ok:false, reason}
+             on auth/network/HTTP errors and log a clientLog event.
+
+          3. /app/frontend/src/media/pendingHuntAssets.ts
+             AsyncStorage stash keyed by huntId. Lets /setup.tsx
+             collect assets BEFORE the parent hunt has a server
+             row, and lets /results.tsx drain them after the hunt
+             upsert succeeds. Helpers:
+              • makePendingAsset() — mints a stable client-side
+                `localId` ("pa_<ts>_<rand>") for idempotency
+              • savePendingAssets / loadPendingAssets /
+                removePendingAssets (subset) / clearPendingAssets
+              • loadPendingAssets() defensively filters out any
+                malformed entries so a bad write never crashes
+                the drain.
+
+          4. /app/frontend/src/components/HuntLocationsSection.tsx
+             Self-contained, fully-controlled section:
+              • Empty state with hint that the section is optional
+              • Compact card list (icon + name + lat/lng + notes)
+              • Modal-based add/edit form with type chip picker,
+                name input, lat/lng inputs (numeric keyboard),
+                notes (multiline), per-field error messages
+              • Add / Edit / Delete actions
+              • Re-exports validateAssetForm so existing imports
+                continue to work
+             Visual style matches the existing "Hunt Style" /
+             species chips so it slots into the Conditions step
+             without looking grafted-on. Uses existing COLORS
+             tokens; no new theme work.
+
+          5. /app/frontend/src/components/__tests__/HuntLocationsSection.test.ts
+             19 unit tests via the existing node:test + tsx runner:
+              • validateAssetForm: valid payload → no errors;
+                missing/blank/over-length name; missing/non-numeric/
+                out-of-range lat & lng; invalid type; notes are
+                optional; exact-bound coordinates valid (90/-90,
+                180/-180, 0).
+              • makePendingAsset mints unique localIds.
+              • savePendingAssets/loadPendingAssets round-trip;
+                empty list clears stash; removePendingAssets drops
+                only requested ids; clearPendingAssets wipes;
+                loadPendingAssets filters malformed entries;
+                returns [] when key absent.
+             All 19 PASS.
+
+          MODIFIED FILES:
+
+          6. /app/frontend/app/setup.tsx
+              • Imports HuntLocationsSection + savePendingAssets
+              • New state: pendingAssets: PendingHuntAsset[]
+              • Renders <HuntLocationsSection> at the bottom of the
+                Conditions step (step 2). Wizard remains 4 steps —
+                we did NOT add a 5th step, keeping the existing
+                tests / scroll behaviour intact.
+              • Review step now shows a "Locations" row when assets
+                are present (with the names if ≤ 3, else just the
+                count).
+              • Right before navigating to /results, the assets are
+                saved to AsyncStorage keyed by enrichedResult.id.
+                Best-effort — failures here don't block analyze.
+
+          7. /app/frontend/app/results.tsx
+              • After finalizeProvisionalHunt resolves with ok:true,
+                a drain step dynamically imports
+                pendingHuntAssets + huntAssetsApi (kept lazy to keep
+                the cold-start bundle lean) and bulk-creates each
+                pending asset against the now-existing hunt row.
+              • Idempotent: only the localIds that successfully
+                POSTed are removed from the stash. Failed ones stay
+                for retry on a future visit to /results.
+              • Logs `hunt_assets_drained` clientEvent with
+                requested / committed / failed counts + first 5
+                failure reasons.
+              • Surfaces a single user-friendly warning toast when
+                any asset failed to save, with retry hint.
+
+          8. /app/frontend/package.json
+              • Registered the new test file in the test:unit script.
+
+          ASSUMPTIONS / DESIGN DECISIONS:
+            • Assets are persisted to the backend AFTER the hunt is
+              upserted (hunt_id must exist for the asset endpoint
+              to accept the write). This is the cleanest path that
+              also handles the offline / slow-network case — the
+              stash sits in AsyncStorage and replays on the next
+              successful /results visit.
+            • The Conditions step was chosen as the host for the
+              section so we don't break the 4-step wizard or any
+              scroll/test assertions that depend on step count.
+            • Drop-pin and "use current device location" were
+              explicitly left out per the task brief (manual entry
+              is the only mandatory input path).
+            • TypeScript clean: `npx tsc --noEmit` is green.
+            • +19 new passing unit tests; 2 pre-existing failures
+              in src/__tests__/huntStyles.test.ts remain unchanged
+              (verified unrelated).
+
+          READY FOR TESTING:
+            Mobile UI behaviours to verify:
+              1. Conditions step shows the new "KNOWN HUNT
+                 LOCATIONS" section with empty-state copy.
+              2. Tap ADD opens the modal with the type chip grid;
+                 picking a type closes the picker; saving with no
+                 name / no lat / out-of-range lat shows inline
+                 errors and does NOT save.
+              3. Save with valid input adds a card to the list;
+                 tapping the pencil reopens it pre-filled; tapping
+                 the trash removes it.
+              4. Submitting the hunt with zero assets still works
+                 end-to-end (no regression).
+              5. Submitting with N assets → /results renders →
+                 backend /api/hunts/{id} returns location_assets
+                 with N entries (Task 3 hydration field).
+              6. If the analyze navigation succeeds but the asset
+                 POST fails (e.g. offline), the stash retains the
+                 assets and a retry on the next /results visit
+                 commits them.
+agent_communication:
+  - agent: "main"
+    message: |
+      Task 4 is implemented. New optional "Known Hunt Locations"
+      section in the Conditions step of the New Hunt wizard,
+      backed by a typed asset API client + AsyncStorage stash that
+      bridges the /setup → /results gap. Assets are POSTed via
+      /api/hunts/{id}/assets after the hunt upsert and confirmed
+      hydrated on hunt detail (Task 3). 19 new unit tests green;
+      TypeScript clean; existing tests unchanged.
+
+      Frontend testing is OPTIONAL and PENDING USER PERMISSION
+      per the testing protocol — UI changes are bounded to a
+      single section in setup.tsx and the post-finalize drain in
+      results.tsx, both behind feature flags (the section is empty
+      by default, the drain only fires when there's a stash).
+

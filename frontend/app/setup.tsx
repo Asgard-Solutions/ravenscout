@@ -37,6 +37,11 @@ import {
 } from '../src/constants/huntingRegions';
 import { saveHunt } from '../src/media/huntPersistence';
 import { seatProvisionalFromAnalyze } from '../src/media/provisionalHuntStore';
+import {
+  savePendingAssets,
+  type PendingHuntAsset,
+} from '../src/media/pendingHuntAssets';
+import HuntLocationsSection from '../src/components/HuntLocationsSection';
 import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
 import { grantExtraCreditsPurchase } from '../src/api/analyticsApi';
 import OutOfCreditsModal from '../src/components/OutOfCreditsModal';
@@ -188,6 +193,13 @@ export default function SetupScreen() {
     precipitation: 'manual',
     cloud_cover: 'manual',
   });
+
+  // Optional GPS assets the user adds before submitting analysis.
+  // Persisted briefly to AsyncStorage when the user taps ANALYZE so
+  // /results.tsx can drain them via the new
+  // /api/hunts/{id}/assets endpoint after the parent hunt is upserted
+  // to the cloud (the assets need a server-side hunt_id to attach to).
+  const [pendingAssets, setPendingAssets] = useState<PendingHuntAsset[]>([]);
 
   const canProceed = () => {
     switch (step) {
@@ -657,6 +669,20 @@ export default function SetupScreen() {
         // lazily from /results or deferred to a background step
         // once /results is confirmed visible.
         if (refreshUser) refreshUser();
+
+        // Stash any user-entered GPS assets so /results.tsx can
+        // POST them to /api/hunts/{id}/assets after the parent hunt
+        // is upserted. Best-effort — failures here don't block the
+        // analyze flow; the user can still re-add assets later from
+        // the hunt detail screen (future task).
+        if (pendingAssets.length > 0) {
+          try {
+            await savePendingAssets(enrichedResult.id, pendingAssets);
+          } catch {
+            // Storage failures are non-fatal here; UI will not
+            // surface this to the user.
+          }
+        }
         // REPLACE (not push) so /setup unmounts IMMEDIATELY and its
         // ~2MB base64 payload + bitmap allocations are released
         // BEFORE /results begins decoding its own primary image.
@@ -1460,6 +1486,15 @@ export default function SetupScreen() {
                   )}
                 </>
               )}
+
+              {/* Optional: known hunt locations (GPS assets). Stored
+                  to AsyncStorage at submit time and posted to
+                  /api/hunts/{id}/assets after the hunt is upserted
+                  (see /results.tsx drain hook). */}
+              <HuntLocationsSection
+                assets={pendingAssets}
+                onChange={setPendingAssets}
+              />
             </View>
           )}
 
@@ -1480,6 +1515,16 @@ export default function SetupScreen() {
                 {region ? <ReviewRow label="Region" value={region} /> : null}
                 {huntStyle ? <ReviewRow label="Hunt Style" value={getHuntStyleLabel(huntStyle) || huntStyle} /> : null}
                 <ReviewRow label="Maps" value={`${mapImages.length} uploaded`} />
+                {pendingAssets.length > 0 ? (
+                  <ReviewRow
+                    label="Locations"
+                    value={`${pendingAssets.length} marked${
+                      pendingAssets.length <= 3
+                        ? ` · ${pendingAssets.map(a => a.name).join(', ')}`
+                        : ''
+                    }`}
+                  />
+                ) : null}
                 {weatherData && <ReviewRow label="Weather" value={`${weatherData.condition} (Live)`} />}
               </View>
               <View style={styles.reviewMapsRow}>
