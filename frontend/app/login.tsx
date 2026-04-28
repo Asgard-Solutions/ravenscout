@@ -108,35 +108,39 @@ export default function LoginScreen() {
   const handleBiometric = async () => {
     const r = await authenticateWithBiometric('Unlock Raven Scout');
     if (!r.ok) {
+      // User dismissed the OS prompt themselves — stay quiet.
       if (r.reason === 'cancelled' || r.reason === 'user_cancel' || r.reason === 'UserCancel') return;
-      // Self-healing: if the token wasn't readable (legacy enrollment from
-      // the previous broken code path, or the device biometric set
-      // changed), auto-disable so the next enrollment uses the new path
-      // and fall through to password sign-in.
+      // No token in SecureStore (legacy enrollment from a previous
+      // broken code path, or the device biometric set changed and
+      // the keychain entry was invalidated). Self-heal by clearing
+      // the stale biometric state and asking the user to re-enable.
       if (r.reason === 'no_stored_token' || /key|invalid|biometric/i.test(r.reason || '')) {
         await disableBiometric();
         Alert.alert(
-          'Re-enable fingerprint',
-          'We need to re-register your fingerprint after the latest update. Please sign in with your password and enable Fingerprint Login again from the prompt or Profile.',
+          'Sign in to continue',
+          'Please sign in with your password to continue. You can enable biometric login again from the prompt or your Profile.',
         );
         return;
       }
       Alert.alert('Biometric failed', 'Sign in with your password instead.');
       return;
     }
-    // Token is already valid — install it into the AuthContext so the
-    // root layout sees the new session and routes us to the home screen.
-    // Just writing AsyncStorage is NOT enough: the AuthProvider's mount
-    // effect already ran, and `user`/`sessionToken` state stay null,
-    // so the redirect-on-user effect never fires.
+    // Stored token came back — hand it to the AuthContext so it can
+    // validate against /api/users/me and hydrate the in-memory state.
+    // Just writing AsyncStorage is NOT enough: the AuthProvider's
+    // mount effect already ran, and `user`/`sessionToken` state stay
+    // null, so the redirect-on-user effect never fires.
     const installed = await loginWithToken(r.sessionToken);
     if (!installed.ok) {
-      // Stored token was rejected by the server (revoked / expired).
-      // Disable biometric and force a fresh password sign-in.
+      // Server rejected the token. This used to happen on every
+      // sign-out because /auth/logout deleted the session row;
+      // logout() now keeps the session alive while biometrics are
+      // enabled, so this branch only fires for a genuinely expired
+      // session (TTL) or a server-side revocation.
       await disableBiometric();
       Alert.alert(
         'Session expired',
-        'Your saved session is no longer valid. Please sign in with your password and re-enable biometric login from the prompt or Profile.',
+        'Your saved session is no longer valid. Please sign in with your password and enable biometric login again.',
       );
       return;
     }
