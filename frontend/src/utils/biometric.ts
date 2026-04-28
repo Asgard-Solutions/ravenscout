@@ -67,28 +67,64 @@ export async function isBiometricEnabled(): Promise<boolean> {
   }
 }
 
-export async function enableBiometric(sessionToken: string): Promise<boolean> {
+export type EnableBiometricResult =
+  | { ok: true }
+  | { ok: false; reason: 'unavailable' | 'cancelled' | 'auth_failed' | 'storage_failed'; detail?: string };
+
+// Show a real biometric scan during enrollment so the user actively
+// confirms with their finger / face. Without this step the switch flips
+// silently, the user never feels like anything was "saved", and a
+// later unlock attempt feels like the feature is broken.
+export async function enableBiometric(sessionToken: string): Promise<EnableBiometricResult> {
+  // 1. Make sure the device actually has biometrics set up.
+  const info = await isBiometricAvailable();
+  if (!info.available) {
+    return { ok: false, reason: 'unavailable', detail: info.reason };
+  }
+
+  // 2. Force a real OS-native biometric prompt. Both platforms run
+  //    through the same path so the UX is identical: tap toggle ->
+  //    fingerprint / Face ID prompt -> success toast.
+  try {
+    const auth = await LocalAuthentication.authenticateAsync({
+      promptMessage: 'Confirm to enable biometric unlock',
+      // Don't fall back to the device PIN/passcode here — we only want
+      // to enable the feature if a real biometric is registered and
+      // works, otherwise users get stuck with PIN-only "biometric".
+      disableDeviceFallback: true,
+      cancelLabel: 'Cancel',
+    });
+    if (!auth.success) {
+      const err = (auth as any).error || 'cancelled';
+      const reason: 'cancelled' | 'auth_failed' =
+        err === 'user_cancel' || err === 'app_cancel' || err === 'system_cancel' || err === 'cancelled'
+          ? 'cancelled'
+          : 'auth_failed';
+      return { ok: false, reason, detail: err };
+    }
+  } catch (err: any) {
+    return { ok: false, reason: 'auth_failed', detail: err?.message || 'authenticate_threw' };
+  }
+
+  // 3. Persist the session token. On iOS we still pin the keychain
+  //    entry to the current biometric set so a device-level bypass
+  //    can't read it; on Android we keep the token in
+  //    EncryptedSharedPreferences and gate reads at unlock time via
+  //    a separate authenticateAsync call (the path that broke
+  //    silently when requireAuthentication was true on Android).
   try {
     if (Platform.OS === 'ios') {
-      // iOS Keychain with biometric ACL: the OS prompts for biometric
-      // automatically on read, so we get a clean single-prompt unlock.
       await SecureStore.setItemAsync(STORE_KEY, sessionToken, {
         requireAuthentication: true,
         authenticationPrompt: 'Confirm to enable biometric unlock',
       });
     } else {
-      // Android: store the token encrypted-at-rest in EncryptedSharedPreferences
-      // WITHOUT `requireAuthentication`. We gate access at unlock time via
-      // a separate `authenticateAsync` call (see authenticateWithBiometric).
-      // Storing with requireAuthentication on Android causes the read side
-      // to silently fail when called without the matching auth context,
-      // which is the bug that made fingerprint "do nothing".
       await SecureStore.setItemAsync(STORE_KEY, sessionToken);
     }
     await AsyncStorage.setItem(FLAG_KEY, '1');
-    return true;
-  } catch (err) {
-    return false;
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, reason: 'storage_failed', detail: err?.message || 'setItem_threw' };
   }
 }
 
