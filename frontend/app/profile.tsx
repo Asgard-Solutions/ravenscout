@@ -36,11 +36,13 @@ import { grantExtraCreditsPurchase } from '../src/api/analyticsApi';
 import OutOfCreditsModal from '../src/components/OutOfCreditsModal';
 import {
   isPurchasesAvailable,
-  purchaseProduct as rcPurchaseProduct,
+  purchasePackage as rcPurchasePackage,
+  getCreditPackPackages,
   restorePurchases as rcRestorePurchases,
   entitlementsPayload,
   tierFromCustomerInfo,
 } from '../src/lib/purchases';
+import { canonicalCreditPackId, type CreditPackPackageId } from '../src/constants/revenuecat';
 import { cleanupOrphanMedia } from '../src/api/mediaCleanupApi';
 
 // ---------------------------------------------------------------------
@@ -117,41 +119,70 @@ export default function ProfileScreen() {
 
   // Pack purchase handler. On native builds (Expo dev-client / EAS
   // preview / EAS production) this drives a real StoreKit / Play
-  // Billing purchase via RevenueCat and forwards the platform-issued
-  // transaction id to the backend as the idempotency key. On Expo
-  // Go / web (no native module) it falls back to a synthetic
-  // transaction id so the rest of the UX can still be exercised
-  // — the server enforces idempotency on (source='in_app', txn_id)
-  // either way so replays are safe.
+  // Billing purchase via the RevenueCat `credit_packs` offering and
+  // forwards the platform-issued transaction id to the backend as
+  // the idempotency key. On Expo Go / web (no native module) it
+  // falls back to a synthetic transaction id so the rest of the UX
+  // can still be exercised — the server enforces idempotency on
+  // (source='in_app', txn_id) either way so replays are safe.
+  //
+  // We always grant credits via the canonical pack id (`credits_5` /
+  // `credits_10` / `credits_15`). The backend resolves any platform
+  // alias (Google `analytics_pack_*`, iOS `credits_*`, legacy
+  // `ravenscout_extra_analytics_*`) to the same credit amount.
   const handlePackPurchase = useCallback(async (pack: { id: string; credits: number }) => {
-    // Native build → real RC purchase.
-    if (isPurchasesAvailable()) {
-      const result = await rcPurchaseProduct(pack.id);
+    // Resolve the inbound id (could be a legacy product id) to the
+    // canonical RC package id; fall back to the inbound id if it's
+    // already canonical-looking.
+    const canonicalId =
+      (canonicalCreditPackId(pack.id) as CreditPackPackageId | null) ||
+      (pack.id as CreditPackPackageId);
 
-      if (result.status === 'cancelled') {
-        return 'cancelled' as const;
-      }
-      if (result.status === 'error') {
-        // Surface to the modal so the caller can render an inline error.
-        throw new Error(result.message || 'Purchase failed');
-      }
-      if (result.status === 'success' && result.transactionId) {
-        try {
-          await grantExtraCreditsPurchase(pack.id, result.transactionId);
-          await refreshUsage();
-          return 'success' as const;
-        } catch (e: any) {
-          throw new Error(e?.message || 'Could not credit purchase');
+    // Native build → real RC purchase via offering+package.
+    if (isPurchasesAvailable()) {
+      const pkgs = await getCreditPackPackages();
+      if (!pkgs.ok) {
+        if (pkgs.reason === 'unavailable' || pkgs.reason === 'not_configured') {
+          // SDK not actually ready — fall through to preview path.
+        } else {
+          throw new Error(
+            pkgs.reason === 'offering_missing'
+              ? 'Credit packs are not configured in the store yet.'
+              : 'Could not load credit packs from the store.',
+          );
         }
+      } else {
+        const pkg = pkgs.value[canonicalId];
+        if (!pkg) {
+          throw new Error(`Pack "${canonicalId}" is unavailable on this device.`);
+        }
+        const result = await rcPurchasePackage(pkg);
+        if (result.status === 'cancelled') return 'cancelled' as const;
+        if (result.status === 'error') {
+          throw new Error(result.message || 'Purchase failed');
+        }
+        if (result.status === 'success' && result.transactionId) {
+          try {
+            await grantExtraCreditsPurchase(canonicalId, result.transactionId);
+            await refreshUsage();
+            return 'success' as const;
+          } catch (e: any) {
+            // Purchase went through but credit grant failed. Surface a
+            // concrete error so the modal can prompt for retry — the
+            // backend grant is idempotent on (source, txn_id) so a
+            // retry with the same transactionId is safe.
+            throw new Error(e?.message || 'Purchase succeeded but credit grant failed. Please try again.');
+          }
+        }
+        // status === 'unavailable' falls through to preview path.
       }
-      // status === 'unavailable' falls through to preview path.
     }
 
     // Preview path (Expo Go / web): synthesise a deterministic-enough
     // transaction id. Server still de-duplicates on it.
     const txnId = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     try {
-      await grantExtraCreditsPurchase(pack.id, txnId);
+      await grantExtraCreditsPurchase(canonicalId, txnId);
       await refreshUsage();
       return 'success' as const;
     } catch {

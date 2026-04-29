@@ -51,6 +51,12 @@ import HuntLocationsSection from '../src/components/HuntLocationsSection';
 import { useAnalyticsUsage } from '../src/hooks/useAnalyticsUsage';
 import { grantExtraCreditsPurchase } from '../src/api/analyticsApi';
 import OutOfCreditsModal from '../src/components/OutOfCreditsModal';
+import {
+  isPurchasesAvailable,
+  purchasePackage as rcPurchasePackage,
+  getCreditPackPackages,
+} from '../src/lib/purchases';
+import { canonicalCreditPackId } from '../src/constants/revenuecat';
 
 const { width } = Dimensions.get('window');
 const STEPS = ['Species', 'Maps', 'Conditions', 'Review'];
@@ -128,14 +134,40 @@ export default function SetupScreen() {
   const { usage: analyticsUsage, refresh: refreshAnalyticsUsage } = useAnalyticsUsage(false);
   const [creditsModalOpen, setCreditsModalOpen] = useState(false);
 
-  // MOCKED pack purchase (RevenueCat is still mocked per the project
-  // backlog). When real RC is wired, swap the synthetic transaction
-  // id for `Purchases.purchaseProduct(packId).transactionIdentifier`.
-  // Server-side idempotency contract is unchanged.
+  // Pack purchase from the analyze flow's "out of credits" modal.
+  // Drives a real RevenueCat purchase via the `credit_packs` offering
+  // when the SDK is available; falls back to a synthetic transaction
+  // id in Expo Go / web previews. The grant call always uses the
+  // canonical pack id so the backend's alias resolver is happy.
   const handleAnalyzePackPurchase = useCallback(async (pack: { id: string; credits: number }) => {
+    const canonicalId =
+      (canonicalCreditPackId(pack.id) as string | null) || pack.id;
+
+    if (isPurchasesAvailable()) {
+      const pkgs = await getCreditPackPackages();
+      if (pkgs.ok) {
+        const pkg = (pkgs.value as Record<string, any>)[canonicalId];
+        if (pkg) {
+          const result = await rcPurchasePackage(pkg);
+          if (result.status === 'cancelled') return 'cancelled' as const;
+          if (result.status === 'success' && result.transactionId) {
+            try {
+              await grantExtraCreditsPurchase(canonicalId, result.transactionId);
+              await refreshAnalyticsUsage();
+              return 'success' as const;
+            } catch {
+              return 'cancelled' as const;
+            }
+          }
+          // 'error' / 'unavailable' fall through to preview path so
+          // the user still has a way out in dev builds.
+        }
+      }
+    }
+
     const txnId = `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     try {
-      await grantExtraCreditsPurchase(pack.id, txnId);
+      await grantExtraCreditsPurchase(canonicalId, txnId);
       await refreshAnalyticsUsage();
       return 'success' as const;
     } catch {

@@ -82,7 +82,18 @@ TIERS = {
     },
 }
 
+# RevenueCat product/entitlement mapping.
+#
+# `REVENUECAT_ENTITLEMENT_MAP` keys are matched against either:
+#   - the active entitlement id (preferred — `core` / `pro` directly), or
+#   - any substring of the productIdentifier on an active entitlement
+#     (legacy fallback — handles `core_monthly_v2`,
+#     `raven_scout_plans:pro-annual-base`, etc.).
+# Order doesn't matter: the sync code always picks the highest tier
+# (Pro > Core) when multiple entitlements are active.
 REVENUECAT_ENTITLEMENT_MAP = {
+    "core": "core",
+    "pro": "pro",
     "core_monthly": "core",
     "core_annual": "core",
     "pro_monthly": "pro",
@@ -92,16 +103,53 @@ REVENUECAT_ENTITLEMENT_MAP = {
 # ============================================================
 # EXTRA HUNT-ANALYTICS PACKS (one-time, non-expiring)
 # ============================================================
-# Mapping: store product_id -> # of extra analytics credits granted.
+# Mapping: canonical pack id -> # of extra analytics credits granted.
 # These packs are a top-off / convenience purchase ONLY — they do
 # not replace subscription limits. Monthly subscription credits are
 # always consumed first; extra credits drain after the monthly
-# allowance runs out.
+# allowance runs out. Once granted, extras NEVER expire.
+#
+# Canonical ids match the RevenueCat `credit_packs` offering package
+# identifiers (which also happen to be the iOS App Store product ids).
+# Legacy / Android-specific product ids are mapped onto these via
+# `_PACK_ID_ALIASES` below so the grant endpoint can accept any of:
+#   - credits_5 / credits_10 / credits_15            (canonical / iOS)
+#   - analytics_pack_5 / analytics_pack_10 / analytics_pack_15  (Play)
+#   - ravenscout_extra_analytics_5/10/15             (legacy v1.0 builds)
 EXTRA_CREDIT_PACKS = {
-    "ravenscout_extra_analytics_5":  {"credits": 5,  "price_usd": 5.99,  "label": "5 Extra Hunt Analytics"},
-    "ravenscout_extra_analytics_10": {"credits": 10, "price_usd": 10.99, "label": "10 Extra Hunt Analytics"},
-    "ravenscout_extra_analytics_15": {"credits": 15, "price_usd": 14.99, "label": "15 Extra Hunt Analytics"},
+    "credits_5":  {"credits": 5,  "price_usd": 5.99,  "label": "5 Hunt Analytics Credits"},
+    "credits_10": {"credits": 10, "price_usd": 10.99, "label": "10 Hunt Analytics Credits"},
+    "credits_15": {"credits": 15, "price_usd": 14.99, "label": "15 Hunt Analytics Credits"},
 }
+
+# Cross-platform product-id aliases. ANY id in this dict resolves to
+# the canonical key in `EXTRA_CREDIT_PACKS`. Keep in sync with
+# `/app/frontend/src/constants/revenuecat.ts -> CREDIT_PACK_ALIASES`.
+_PACK_ID_ALIASES = {
+    # Canonical (also iOS product ids).
+    "credits_5":  "credits_5",
+    "credits_10": "credits_10",
+    "credits_15": "credits_15",
+    # Google Play consumable product ids.
+    "analytics_pack_5":  "credits_5",
+    "analytics_pack_10": "credits_10",
+    "analytics_pack_15": "credits_15",
+    # Legacy v1.0 product ids — keep accepting them so any in-flight
+    # restores from older builds still credit the user correctly.
+    "ravenscout_extra_analytics_5":  "credits_5",
+    "ravenscout_extra_analytics_10": "credits_10",
+    "ravenscout_extra_analytics_15": "credits_15",
+}
+
+
+def resolve_pack_id(any_id: str) -> Optional[str]:
+    """Resolve any platform pack id to its canonical key in
+    EXTRA_CREDIT_PACKS, or None if it isn't a known pack.
+    Trims whitespace and is case-sensitive — the store ids are not
+    case-insensitive on either platform."""
+    if not isinstance(any_id, str):
+        return None
+    return _PACK_ID_ALIASES.get(any_id.strip())
 
 
 # ============================================================
@@ -339,7 +387,16 @@ async def grant_extra_credits(
     """
     pack = EXTRA_CREDIT_PACKS.get(pack_id)
     if not pack:
-        raise HTTPException(status_code=400, detail=f"Unknown pack id: {pack_id}")
+        # Try alias resolution before giving up — the client may have
+        # passed a Google Play product id (`analytics_pack_5`) or a
+        # legacy v1.0 id (`ravenscout_extra_analytics_5`) that maps
+        # cleanly onto a canonical pack.
+        canonical = resolve_pack_id(pack_id)
+        if canonical and canonical in EXTRA_CREDIT_PACKS:
+            pack_id = canonical
+            pack = EXTRA_CREDIT_PACKS[canonical]
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown pack id: {pack_id}")
 
     credits = int(pack["credits"])
     now = datetime.now(timezone.utc)
@@ -819,9 +876,15 @@ async def revenuecat_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Missing required event fields")
 
     if product_id not in EXTRA_CREDIT_PACKS:
-        # Unknown pack — log and 200 so RC doesn't keep retrying.
-        logger.info("revenuecat_webhook: ignoring unknown product_id=%s", product_id)
-        return {"ok": True, "ignored": "unknown_product"}
+        # Allow Google Play / legacy product ids via the alias resolver
+        # before giving up.
+        canonical = resolve_pack_id(product_id)
+        if canonical and canonical in EXTRA_CREDIT_PACKS:
+            product_id = canonical
+        else:
+            # Unknown pack — log and 200 so RC doesn't keep retrying.
+            logger.info("revenuecat_webhook: ignoring unknown product_id=%s", product_id)
+            return {"ok": True, "ignored": "unknown_product"}
 
     return await grant_extra_credits(
         user_id=user_id,
@@ -851,21 +914,60 @@ async def get_subscription_status(request: Request):
 
 @api_router.post("/subscription/sync-revenuecat")
 async def sync_revenuecat(request: Request):
-    """Sync subscription status from RevenueCat (called from mobile after purchase)."""
+    """Sync subscription status from RevenueCat (called from mobile after purchase).
+
+    Reads `customerInfo.entitlements.active` and resolves the highest
+    active tier. Recognises:
+      1. Canonical entitlement keys (`pro` / `core`) — preferred.
+      2. Legacy `*_entitlement` keys — kept for older builds.
+      3. productIdentifier substrings via REVENUECAT_ENTITLEMENT_MAP —
+         ultimate fallback for non-standard configs.
+    Pro always outranks Core.
+    """
     user = await get_current_user(request)
     body = await request.json()
     rc_user_id = body.get("revenuecat_user_id")
-    entitlements = body.get("entitlements", {})
+    entitlements = body.get("entitlements", {}) or {}
 
-    # Determine tier from active entitlements
-    new_tier = "trial"
-    for entitlement_id, ent_data in entitlements.items():
-        if ent_data.get("isActive"):
-            product = ent_data.get("productIdentifier", "")
-            for product_prefix, tier in REVENUECAT_ENTITLEMENT_MAP.items():
-                if product_prefix in product:
-                    new_tier = tier
-                    break
+    found_pro = False
+    found_core = False
+    for ent_key, ent_data in entitlements.items():
+        if not isinstance(ent_data, dict):
+            continue
+        if ent_data.get("isActive") is False:
+            continue
+        # Active by default if isActive is omitted (legacy clients).
+        is_active = ent_data.get("isActive", True)
+        if not is_active:
+            continue
+
+        key_lower = (ent_key or "").lower()
+        product = (ent_data.get("productIdentifier") or "").lower()
+
+        # 1. Direct canonical entitlement keys.
+        if key_lower == "pro":
+            found_pro = True
+            continue
+        if key_lower == "core":
+            found_core = True
+            continue
+        # 2. Legacy `*_entitlement` keys.
+        if key_lower == "pro_entitlement":
+            found_pro = True
+            continue
+        if key_lower == "core_entitlement":
+            found_core = True
+            continue
+        # 3. productIdentifier prefix lookup.
+        for product_prefix, tier in REVENUECAT_ENTITLEMENT_MAP.items():
+            if product_prefix in product:
+                if tier == "pro":
+                    found_pro = True
+                elif tier == "core":
+                    found_core = True
+                break
+
+    new_tier = "pro" if found_pro else ("core" if found_core else "trial")
 
     old_tier = user.get("tier", "trial")
     update_data = {"revenuecat_id": rc_user_id, "tier": new_tier}
@@ -884,8 +986,16 @@ async def sync_revenuecat(request: Request):
 
 
 @api_router.post("/subscription/webhook")
-async def revenuecat_webhook(request: Request):
-    """RevenueCat server-to-server webhook for subscription events."""
+async def revenuecat_subscription_webhook(request: Request):
+    """RevenueCat server-to-server webhook for subscription events.
+
+    Recognises Apple v2 (`core_monthly_v2`/`core_annual_v2`/
+    `pro_monthly_v2`/`pro_annual_v2`) and Google Play
+    (`raven_scout_plans:core/pro-monthly/annual-base`) subscription
+    products. Maps them to the canonical `core` / `pro` tiers via
+    `REVENUECAT_ENTITLEMENT_MAP`. Pro outranks Core if both are
+    somehow active simultaneously.
+    """
     body = await request.json()
     event = body.get("event", {})
     event_type = event.get("type", "")
@@ -905,12 +1015,17 @@ async def revenuecat_webhook(request: Request):
 
     # Handle subscription events
     if event_type in ["INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE"]:
-        product_id = event.get("product_id", "")
+        product_id = (event.get("product_id") or "").lower()
+        # Pro takes precedence so users on a mid-upgrade grace period
+        # don't get demoted by an out-of-order Core renewal event.
         new_tier = "trial"
         for prefix, tier in REVENUECAT_ENTITLEMENT_MAP.items():
             if prefix in product_id:
-                new_tier = tier
-                break
+                if tier == "pro":
+                    new_tier = "pro"
+                    break
+                if tier == "core" and new_tier != "pro":
+                    new_tier = "core"
 
         update = {"tier": new_tier}
         if event_type == "INITIAL_PURCHASE":
