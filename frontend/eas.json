@@ -12,6 +12,7 @@
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://ravenscout-production-3b9a.up.railway.app",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS": "606163577844-vosq1u1j95k9oe38pj2ofd61232i8nlj.apps.googleusercontent.com",
         "EXPO_PUBLIC_MAPTILER_KEY": "NMVrJx7BZ7tb2WOy32d8",
         "EXPO_PUBLIC_REVENUECAT_KEY_IOS": "appl_bXyHMHwpTCfrepHXaKZWmlcndoJ",
         "EXPO_PUBLIC_REVENUECAT_KEY_ANDROID": "goog_VxqIrFwpthPJjgfDmXFivfwPhtg"
@@ -26,6 +27,7 @@
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://geo-overlay-hunt.preview.emergentagent.com",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS": "606163577844-vosq1u1j95k9oe38pj2ofd61232i8nlj.apps.googleusercontent.com",
         "EXPO_PUBLIC_MAPTILER_KEY": "NMVrJx7BZ7tb2WOy32d8",
         "EXPO_PUBLIC_REVENUECAT_KEY_IOS": "appl_bXyHMHwpTCfrepHXaKZWmlcndoJ",
         "EXPO_PUBLIC_REVENUECAT_KEY_ANDROID": "goog_VxqIrFwpthPJjgfDmXFivfwPhtg"
@@ -40,6 +42,7 @@
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://ravenscout-production-3b9a.up.railway.app",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS": "606163577844-vosq1u1j95k9oe38pj2ofd61232i8nlj.apps.googleusercontent.com",
         "EXPO_PUBLIC_MAPTILER_KEY": "NMVrJx7BZ7tb2WOy32d8",
         "EXPO_PUBLIC_REVENUECAT_KEY_IOS": "appl_bXyHMHwpTCfrepHXaKZWmlcndoJ",
         "EXPO_PUBLIC_REVENUECAT_KEY_ANDROID": "goog_VxqIrFwpthPJjgfDmXFivfwPhtg"
@@ -55,6 +58,7 @@
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://ravenscout-production-3b9a.up.railway.app",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "606163577844-8l9k4u38rlle46g4sbqnsaf0u08uluua.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS": "606163577844-vosq1u1j95k9oe38pj2ofd61232i8nlj.apps.googleusercontent.com",
         "EXPO_PUBLIC_MAPTILER_KEY": "NMVrJx7BZ7tb2WOy32d8",
         "EXPO_PUBLIC_REVENUECAT_KEY_IOS": "appl_bXyHMHwpTCfrepHXaKZWmlcndoJ",
         "EXPO_PUBLIC_REVENUECAT_KEY_ANDROID": "goog_VxqIrFwpthPJjgfDmXFivfwPhtg"
