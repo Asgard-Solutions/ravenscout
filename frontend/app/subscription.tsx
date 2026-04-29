@@ -8,9 +8,11 @@ import { COLORS } from '../src/constants/theme';
 import { useAuth } from '../src/hooks/useAuth';
 import {
   isPurchasesAvailable,
-  purchaseProduct,
+  purchasePackage,
+  getDefaultPackages,
   entitlementsPayload,
 } from '../src/lib/purchases';
+import { packageIdFor, type Tier, type BillingCycle } from '../src/constants/revenuecat';
 
 const TIER_DATA = [
   {
@@ -45,20 +47,42 @@ export default function SubscriptionScreen() {
     if (tierId === 'trial') return;
     if (tierId === currentTier) return;
 
-    const productId = `${tierId}_${billingCycle}`; // e.g. pro_annual
+    const tier = tierId as Tier;
+    const cycle = billingCycle as BillingCycle;
+    const packageId = packageIdFor(tier, cycle);
     const tierLabel = tierId.charAt(0).toUpperCase() + tierId.slice(1);
 
     // Branch A: native build with the RevenueCat SDK loaded — drive a
-    // real StoreKit / Play Billing purchase. The wrapper resolves to
-    // status === 'cancelled' on user cancel so we silently dismiss.
+    // real StoreKit / Play Billing purchase via offerings + packages.
+    // We never reference raw Google Play / Apple product ids here so a
+    // dashboard catalog change can ship without an app update.
     if (isPurchasesAvailable()) {
       setPurchasing(true);
       try {
-        const result = await purchaseProduct(productId);
-
-        if (result.status === 'cancelled') {
+        // 1. Pull the `default` offering and find the right package.
+        const pkgs = await getDefaultPackages();
+        if (!pkgs.ok) {
+          Alert.alert(
+            'Plans unavailable',
+            pkgs.reason === 'offering_missing'
+              ? 'Subscription plans are not configured yet. Please try again later.'
+              : 'Could not load plans from the store. Please check your connection and try again.',
+          );
           return;
         }
+        const pkg = pkgs.value[packageId];
+        if (!pkg) {
+          Alert.alert(
+            'Plan unavailable',
+            `The ${tierLabel} ${cycle} plan is not available on this device right now.`,
+          );
+          return;
+        }
+
+        // 2. Drive the platform purchase by RevenueCat package.
+        const result = await purchasePackage(pkg);
+
+        if (result.status === 'cancelled') return;
         if (result.status === 'error') {
           Alert.alert('Purchase failed', result.message || 'Please try again.');
           return;
@@ -105,12 +129,14 @@ export default function SubscriptionScreen() {
 
     // Branch B: preview mode (Expo Go / web) — confirm + simulate the
     // tier upgrade via the same backend sync endpoint so the rest of
-    // the UX can still be exercised without StoreKit.
+    // the UX can still be exercised without StoreKit. We send a
+    // synthetic entitlement keyed by the canonical entitlement id so
+    // the backend takes the same code path as a real purchase.
     setPurchasing(true);
     try {
       Alert.alert(
         'Subscription',
-        `This will initiate a ${billingCycle} subscription for the ${tierLabel} plan via App Store / Google Play.\n\nIn preview mode (Expo Go), purchases are simulated. Real purchases require a production / preview build with the RevenueCat SDK.`,
+        `This will initiate a ${cycle} subscription for the ${tierLabel} plan via App Store / Google Play.\n\nIn preview mode (Expo Go), purchases are simulated. Real purchases require a production / preview build with the RevenueCat SDK.`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -126,9 +152,9 @@ export default function SubscriptionScreen() {
                   body: JSON.stringify({
                     revenuecat_user_id: user?.user_id,
                     entitlements: {
-                      [`${tierId}_entitlement`]: {
+                      [tier]: {
                         isActive: true,
-                        productIdentifier: productId,
+                        productIdentifier: packageId,
                       },
                     },
                   }),

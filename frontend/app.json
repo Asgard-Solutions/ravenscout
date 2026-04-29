@@ -13,7 +13,8 @@
       "buildNumber": "1",
       "supportsTablet": true,
       "config": {
-      "usesNonExemptEncryption": false,
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload map images for hunt analysis",
         "NSLocationWhenInUseUsageDescription": "Get weather data for your hunt location",
@@ -36,9 +37,7 @@
         "ACCESS_COARSE_LOCATION",
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
-        "com.android.vending.BILLING",
-        "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "com.android.vending.BILLING"
       ]
     },
     "web": {

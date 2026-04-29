@@ -25,6 +25,16 @@
  */
 
 import { Platform } from 'react-native';
+import {
+  CORE_ENTITLEMENT_ID,
+  PRO_ENTITLEMENT_ID,
+  DEFAULT_OFFERING_ID,
+  CREDIT_PACKS_OFFERING_ID,
+  SUBSCRIPTION_PACKAGE_IDS,
+  CREDIT_PACK_PACKAGE_IDS,
+  type SubscriptionPackageId,
+  type CreditPackPackageId,
+} from '../constants/revenuecat';
 
 // Lazy imports — keep RC out of the JS bundle path until we’re sure
 // we’re running on a native build that ships the module.
@@ -175,6 +185,93 @@ export async function getCustomerInfo(): Promise<any | null> {
 }
 
 // ---------------------------------------------------------------------
+// Offerings (preferred purchase path — buy by package, never by raw
+// store product id, so a single dashboard change can swap the
+// underlying products without an app update).
+// ---------------------------------------------------------------------
+
+/** Result shape for the offering helpers. */
+export type OfferingResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: 'unavailable' | 'not_configured' | 'no_offerings' | 'offering_missing' | 'error'; message?: string };
+
+/** Fetch all offerings from RevenueCat. */
+export async function getOfferings(): Promise<OfferingResult<any>> {
+  const Purchases = loadSdk();
+  if (!Purchases) return { ok: false, reason: 'unavailable' };
+  if (!configured) {
+    const ok = await initPurchases();
+    if (!ok) return { ok: false, reason: 'not_configured' };
+  }
+  try {
+    const offerings = await Purchases.getOfferings();
+    if (!offerings) return { ok: false, reason: 'no_offerings' };
+    return { ok: true, value: offerings };
+  } catch (e: any) {
+    return { ok: false, reason: 'error', message: e?.message || 'getOfferings_threw' };
+  }
+}
+
+/** Look up a specific offering by id (defaults to current/default). */
+export async function getOffering(offeringId: string): Promise<OfferingResult<any>> {
+  const r = await getOfferings();
+  if (!r.ok) return r;
+  const offerings = r.value;
+  const offering =
+    offerings?.all?.[offeringId] ||
+    (offeringId === DEFAULT_OFFERING_ID ? offerings?.current : null);
+  if (!offering) {
+    return { ok: false, reason: 'offering_missing', message: `Offering "${offeringId}" not configured in RevenueCat.` };
+  }
+  return { ok: true, value: offering };
+}
+
+/** Index a RevenueCat offering's packages by their `identifier`. */
+function indexPackages(offering: any): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const pkg of offering?.availablePackages || []) {
+    if (pkg?.identifier) out[pkg.identifier] = pkg;
+  }
+  return out;
+}
+
+/**
+ * Fetch the `default` offering and return its 4 subscription packages
+ * (Core/Pro × Monthly/Annual) keyed by canonical package id. Missing
+ * packages map to `undefined` — callers should render a friendly
+ * "plan unavailable" placeholder rather than crashing.
+ */
+export async function getDefaultPackages(): Promise<
+  OfferingResult<Partial<Record<SubscriptionPackageId, any>>>
+> {
+  const r = await getOffering(DEFAULT_OFFERING_ID);
+  if (!r.ok) return r;
+  const idx = indexPackages(r.value);
+  const out: Partial<Record<SubscriptionPackageId, any>> = {};
+  for (const id of SUBSCRIPTION_PACKAGE_IDS) {
+    if (idx[id]) out[id] = idx[id];
+  }
+  return { ok: true, value: out };
+}
+
+/**
+ * Fetch the `credit_packs` offering and return its 3 consumable
+ * packages keyed by canonical package id.
+ */
+export async function getCreditPackPackages(): Promise<
+  OfferingResult<Partial<Record<CreditPackPackageId, any>>>
+> {
+  const r = await getOffering(CREDIT_PACKS_OFFERING_ID);
+  if (!r.ok) return r;
+  const idx = indexPackages(r.value);
+  const out: Partial<Record<CreditPackPackageId, any>> = {};
+  for (const id of CREDIT_PACK_PACKAGE_IDS) {
+    if (idx[id]) out[id] = idx[id];
+  }
+  return { ok: true, value: out };
+}
+
+// ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
 function isCancelError(err: any): boolean {
@@ -317,19 +414,27 @@ export async function restorePurchases(): Promise<{
 /**
  * Convenience helper used by the subscription paywall: returns the
  * highest-tier active subscription (`pro` > `core` > `null`) from a
- * `customerInfo` payload.
+ * `customerInfo` payload. Pro always outranks Core when both are
+ * somehow active simultaneously (e.g. mid-upgrade grace period).
  */
 export function tierFromCustomerInfo(customerInfo: any): 'pro' | 'core' | null {
   if (!customerInfo?.entitlements?.active) return null;
   const active = customerInfo.entitlements.active;
-  if (active.pro || active.pro_entitlement) return 'pro';
-  if (active.core || active.core_entitlement) return 'core';
-  // Some configs use the raw product id as the entitlement id.
+  // Canonical entitlement ids first.
+  if (active[PRO_ENTITLEMENT_ID]?.isActive ?? active[PRO_ENTITLEMENT_ID]) return 'pro';
+  if (active[CORE_ENTITLEMENT_ID]?.isActive ?? active[CORE_ENTITLEMENT_ID]) return 'core';
+  // Backwards-compat: older builds used `*_entitlement` ids.
+  if (active.pro_entitlement) return 'pro';
+  if (active.core_entitlement) return 'core';
+  // Last-resort fallback for legacy configs that used product ids
+  // as entitlement keys. Pro outranks Core when both somehow match.
+  let foundCore = false;
   for (const key of Object.keys(active)) {
-    if (key.startsWith('pro')) return 'pro';
-    if (key.startsWith('core')) return 'core';
+    const lower = key.toLowerCase();
+    if (lower.startsWith('pro')) return 'pro';
+    if (lower.startsWith('core')) foundCore = true;
   }
-  return null;
+  return foundCore ? 'core' : null;
 }
 
 /**
