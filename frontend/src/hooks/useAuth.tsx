@@ -233,19 +233,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // ------------------------------------------------------------------
   // Email + password auth (for users without / not wanting Google).
   // Each fn is non-throwing: returns {ok:true} on success, or
-  // {ok:false, reason} where reason is the backend's `detail` string.
+  // {ok:false, reason} where reason is a human-friendly message
+  // suitable to show directly in an Alert.
   // ------------------------------------------------------------------
   const authJsonFetch = async (path: string, body: any): Promise<{ ok: true; data: any } | { ok: false; reason: string }> => {
+    const url = `${BACKEND_URL}${path}`;
+    // Catch the most common deployment foot-gun: an EAS build with a
+    // stale `EXPO_PUBLIC_BACKEND_URL` baked in. Without this guard we
+    // would issue a request against `undefined/api/auth/...` and the
+    // user would just see "network_error", with no clue why. Empty
+    // string is also treated as missing.
+    if (!BACKEND_URL || typeof BACKEND_URL !== 'string' || BACKEND_URL.trim() === '') {
+      return {
+        ok: false,
+        reason:
+          "This build can't reach the Raven Scout server (backend URL missing). " +
+          'Please install the latest build from TestFlight / Play Internal Testing.',
+      };
+    }
     try {
-      const resp = await fetch(`${BACKEND_URL}${path}`, {
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const detail = typeof data?.detail === 'string' ? data.detail : JSON.stringify(data?.detail || data);
-        return { ok: false, reason: detail || `http_${resp.status}` };
+        // Heuristic: our FastAPI backend always returns errors as
+        //   `{ "detail": "..." }`  (string) or
+        //   `{ "detail": [...pydantic errors...] }` (array).
+        // ANY other shape (`{ status, code, message, request_id }`,
+        // `"Deployment not found"`, an HTML error page, ...) means
+        // the request reached a different server entirely — almost
+        // always a stale build pointing at a rotated preview URL.
+        // Surface a clear "build out of date" message instead of
+        // dumping the raw JSON body.
+        const looksLikeOurBackend =
+          (typeof data?.detail === 'string' && data.detail.length > 0) ||
+          Array.isArray(data?.detail);
+        if (!looksLikeOurBackend) {
+          // Log the actual response body + URL so it shows up in
+          // device logs / `clientLog` for triage.
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[auth] Unexpected non-backend response',
+            { url, status: resp.status, body: data },
+          );
+          return {
+            ok: false,
+            reason:
+              'This app build is out of date and can no longer reach the Raven Scout server. ' +
+              'Please install the latest build from TestFlight or Google Play.',
+          };
+        }
+        const detail =
+          typeof data.detail === 'string'
+            ? data.detail
+            : Array.isArray(data.detail)
+              ? data.detail.map((d: any) => d?.msg).filter(Boolean).join('; ') || `http_${resp.status}`
+              : `http_${resp.status}`;
+        return { ok: false, reason: detail };
       }
       return { ok: true, data };
     } catch (err: any) {
