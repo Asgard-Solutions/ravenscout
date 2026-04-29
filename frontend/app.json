@@ -9,16 +9,21 @@
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "bundleIdentifier": "com.asgardsolution.ravenscout",
+      "bundleIdentifier": "io.asgardsolution.ravenscout",
+      "buildNumber": "1",
       "supportsTablet": true,
+      "config": {
+      "usesNonExemptEncryption": false,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload map images for hunt analysis",
         "NSLocationWhenInUseUsageDescription": "Get weather data for your hunt location",
-        "NSFaceIDUsageDescription": "Unlock Raven Scout with Face ID"
+        "NSFaceIDUsageDescription": "Unlock Raven Scout with Face ID",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.asgardsolution.ravenscout",
+      "package": "io.asgardsolution.ravenscout",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#0B1F2A"
@@ -31,7 +36,9 @@
         "ACCESS_COARSE_LOCATION",
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
-        "com.android.vending.BILLING"
+        "com.android.vending.BILLING",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ]
     },
     "web": {

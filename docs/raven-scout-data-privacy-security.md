@@ -2,13 +2,13 @@
 
 ## What We Collect
 - **Account**: email, optional display name, password hash (bcrypt) or Google OAuth subject id.
-- **Hunt data**: species, weapon, method, date, time window, wind, GPS coordinates, uploaded map imagery, your overlay edits, and the AI analysis output.
-- **Device telemetry**: platform (iOS / Android), OS version, app version, anonymous device id used for RevenueCat entitlements. We also log non-fatal client events (storage failures, upload retries) tied to your `user_id` for diagnostics.
+- **Hunt data**: species, weapon, method, date, time window, wind, GPS coordinates when you choose to provide them, uploaded map imagery, your overlay edits, and the AI analysis output.
+- **Device and diagnostic data**: platform (iOS / Android), OS version, app version, and anonymous device id used for RevenueCat entitlements. Some diagnostic events may be associated with your account to support troubleshooting.
 - **Billing**: Apple / Google handle the payment instrument. We receive a subscription entitlement record from RevenueCat (tier + renewal date) — never a card number.
 
 ## What We Don't Collect
 - Contacts, SMS, call logs, calendar.
-- Background location — GPS is only read when you're actively creating a hunt.
+- Background location — precise location is only collected when you actively create or edit a hunt and choose to provide it.
 - Advertising identifiers — there are no ads in Raven Scout.
 - Your photo library beyond the specific images you pick for a hunt.
 
@@ -43,7 +43,7 @@ Request via **Profile → Account → Delete account**. Deletion removes:
 Active App Store / Play Store subscriptions must be cancelled separately in your store account.
 
 ## Third-Party Sub-Processors
-- **OpenAI** — receives the compressed map imagery + your selections so it can produce the analysis output. See OpenAI's privacy policy.
+- **OpenAI** — receives compressed map imagery and your selections only when you explicitly initiate an analysis, so it can produce the analysis output. See OpenAI's privacy policy.
 - **RevenueCat** — subscription state.
 - **MapTiler** — base map tiles (anonymous tile requests).
 - **WeatherAPI.com** — weather / wind auto-fill (Core / Pro).
