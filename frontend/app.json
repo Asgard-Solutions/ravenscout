@@ -13,8 +13,7 @@
       "buildNumber": "1",
       "supportsTablet": true,
       "config": {
-        "usesNonExemptEncryption": false
-      },
+      "usesNonExemptEncryption": false,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Upload map images for hunt analysis",
         "NSLocationWhenInUseUsageDescription": "Get weather data for your hunt location",
@@ -66,7 +65,7 @@
       [
         "@react-native-google-signin/google-signin",
         {
-          "iosUrlScheme": "com.googleusercontent.apps.606163577844-vosq1u1j95k9oe38pj2ofd61232i8nlj"
+          "iosUrlScheme": "com.googleusercontent.apps.placeholder-not-used-on-android"
         }
       ],
       "expo-secure-store"
