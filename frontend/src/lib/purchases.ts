@@ -129,7 +129,17 @@ export async function initPurchases(opts?: { appUserId?: string }): Promise<bool
   }
   try {
     if (configured) return true;
-    if (PURCHASE_LOG_LEVEL && __DEV__) {
+    // RC's "ConfigurationError: None of the products registered in the
+    // RevenueCat dashboard could be fetched from the [Play|App] Store"
+    // is logged at ERROR level by the native SDK and ends up as a red
+    // LogBox in dev — even though our wrappers handle it gracefully
+    // and downstream UI shows a soft "Plans unavailable" message. The
+    // root cause is always a store-side / build-track issue (sideloaded
+    // APK, no sandbox tester, license-tester not added, etc.) and not
+    // anything we can fix from JS. Lower the SDK log level to WARN so
+    // it stops yelling at us in dev. We still surface real purchase
+    // errors via the wrapper return values.
+    if (PURCHASE_LOG_LEVEL) {
       try { Purchases.setLogLevel(PURCHASE_LOG_LEVEL.WARN); } catch { /* noop */ }
     }
     Purchases.configure({
