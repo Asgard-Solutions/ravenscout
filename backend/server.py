@@ -568,26 +568,38 @@ class GoogleAuthBody(BaseModel):
 
 @api_router.post("/auth/google")
 async def auth_google(body: GoogleAuthBody):
-    google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    if not google_client_id:
+    # Accept a comma-separated list of acceptable audiences so both
+    # the Web and iOS OAuth client ids are valid. Google Sign-In on
+    # iOS with a `webClientId` configured typically returns an ID
+    # token with aud=<web client>, but certain SDK versions / cached
+    # sessions can emit aud=<iOS client> instead — accepting both
+    # avoids a class of "Invalid Google credential" false negatives.
+    raw = (os.environ.get("GOOGLE_CLIENT_ID") or "").strip()
+    also = (os.environ.get("GOOGLE_CLIENT_ID_IOS") or "").strip()
+    ids = [i.strip() for i in (raw + "," + also).split(",") if i.strip()]
+    if not ids:
         raise HTTPException(
             status_code=500,
             detail="GOOGLE_CLIENT_ID not configured on server",
         )
 
     # Verify the ID token against Google's JWKS. This checks
-    # signature, issuer (accounts.google.com), audience (our
-    # GOOGLE_CLIENT_ID), and expiry. Raises ValueError on ANY
-    # tampering or mismatch.
+    # signature, issuer (accounts.google.com), expiry, and — when
+    # passed — the audience. We verify signature once (audience=None)
+    # and then enforce aud membership manually so we can accept a
+    # list. Raises ValueError on ANY tampering / signature mismatch.
     try:
         from google.oauth2 import id_token as google_id_token
         from google.auth.transport import requests as google_requests
         claims = google_id_token.verify_oauth2_token(
             body.id_token,
             google_requests.Request(),
-            google_client_id,
+            audience=None,           # audience checked below
             clock_skew_in_seconds=10,
         )
+        aud = claims.get("aud")
+        if aud not in ids:
+            raise ValueError(f"audience {aud!r} not in accepted list")
     except ValueError as e:
         logger.warning(f"Google ID token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid Google credential")

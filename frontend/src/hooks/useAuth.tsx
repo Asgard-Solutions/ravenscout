@@ -9,12 +9,24 @@ import { isBiometricEnabled } from '../utils/biometric';
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT
 // URLS, THIS BREAKS THE AUTH.
 //
-// The Google Web Client ID comes from EXPO_PUBLIC_GOOGLE_CLIENT_ID.
-// Read once here so the rest of the hook can call configure()
-// lazily the first time loginWithGoogle() is invoked.
+// Google OAuth client ids.
+//   - GOOGLE_WEB_CLIENT_ID  is the Web OAuth client. It is what the
+//     Google Sign-In SDK requests ID tokens for, and it is what the
+//     backend verifies the `aud` claim against.
+//   - GOOGLE_IOS_CLIENT_ID  is the iOS OAuth client. The native SDK
+//     uses its reversed URL scheme (registered via app.json
+//     `iosUrlScheme`) to receive the OAuth redirect back into the
+//     app. Passing it to configure() explicitly is a belt-and-braces
+//     step that saves us when the SDK's auto-detection misses.
+// Both are safe to ship in the bundle — Google OAuth clients have
+// platform-scoped redirect URIs, they are not secret.
 const GOOGLE_WEB_CLIENT_ID =
   (Constants.expoConfig?.extra as any)?.googleWebClientId ||
   (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID as string | undefined) ||
+  '';
+const GOOGLE_IOS_CLIENT_ID =
+  (Constants.expoConfig?.extra as any)?.googleIosClientId ||
+  (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS as string | undefined) ||
   '';
 
 interface User {
@@ -186,6 +198,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       GoogleSignin.configure({
         webClientId: GOOGLE_WEB_CLIENT_ID,
+        // On iOS we explicitly pass the iOS OAuth client so the SDK
+        // doesn't have to infer it from the URL scheme. The URL
+        // scheme itself still has to be registered (via app.json
+        // `iosUrlScheme`) or Google's Safari redirect can't get back
+        // into the app. Passing this here is a safe no-op on Android.
+        ...(Platform.OS === 'ios' && GOOGLE_IOS_CLIENT_ID
+          ? { iosClientId: GOOGLE_IOS_CLIENT_ID }
+          : {}),
         // We only need an ID token (no access token, no offline).
         offlineAccess: false,
       });
