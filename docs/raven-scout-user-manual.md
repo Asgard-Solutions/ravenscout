@@ -33,7 +33,8 @@ A complete walkthrough of the app, screen by screen. Everything in this manual m
 
 ## 1. Account: Sign Up, Sign In, Sign Out
 
-The first screen offers two paths:
+The first screen offers three paths:
+- **Sign in with Apple** *(iOS only)* — one tap; uses your Apple ID. Supports Apple's **Hide My Email** relay, so your real email never leaves Apple. On iPad and iPhone the Apple button appears above the Google button on the login screen.
 - **Continue with Google** — one tap; uses your Google account email. No password needed.
 - **Email + password** — pick **Create Account** to register, or **Sign in** if you already have one.
 
@@ -62,7 +63,7 @@ From the Sign-in screen tap **Forgot password?**, or from inside the app tap **P
 - Five wrong code entries on a single code burn that code — request a fresh one and start over.
 - Password-reset emails to unknown addresses silently no-op (no bounce).
 
-If you originally signed up with **Google**, you don't have a password by default. Add one under **Profile → Set Password** so both methods work.
+If you originally signed up with **Google** or **Sign in with Apple**, you don't have a password by default. Add one under **Profile → Set Password** so both methods work.
 
 ---
 
@@ -274,7 +275,7 @@ Pricing on the cards is the live price from the platform (it can vary by region)
 - Core: $7.99 / month or $79.99 / year
 - Pro: $14.99 / month or $149.99 / year
 
-All purchases route through Apple App Store or Google Play. Cancellation must be done in your store account; access continues through the paid-through date.
+All purchases route through Apple App Store or Google Play. The paywall shows the **billed amount** (e.g. "$79.99 /year") as the most prominent pricing element, with the per-month equivalent shown as small secondary text. The paywall also includes functional links to the **Terms of Use (EULA)** and **Privacy Policy** — tap either to open them in your browser. Cancellation must be done in your store account; access continues through the paid-through date.
 
 ---
 

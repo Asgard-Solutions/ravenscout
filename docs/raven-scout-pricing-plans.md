@@ -40,8 +40,14 @@ When your monthly analyses run out you can buy a top-off pack instead of upgradi
 
 ## Payment
 - Subscriptions and packs are processed by **Apple App Store** (iOS) or **Google Play** (Android) via RevenueCat. Raven Scout does not bill your card directly.
-- Subscriptions auto-renew until cancelled. Cancellation must be done in your store account; access continues through the paid-through date.
+- Subscriptions auto-renew at the end of each billing period until cancelled at least 24 hours before the period ends. Cancellation must be done in your store account; access continues through the paid-through date.
+- The paywall inside the app shows the total billed amount (e.g. "$79.99 /year") as the primary price, with the per-month equivalent displayed as secondary text. Annual and monthly options are both offered.
 - Taxes are applied by the platform where applicable.
+
+## Legal
+Functional links to the **Terms of Use (EULA)** and **Privacy Policy** are shown in the subscription flow inside the app:
+- **Terms of Use (EULA)** — Apple's standard EULA: https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
+- **Privacy Policy** — https://asgardsolution.io/raven-scout/privacy
 
 ## Changing Plans
 Upgrade, downgrade, or cancel under **Profile → Subscription**. Changes flow through the store: upgrades take effect immediately, downgrades take effect at the next renewal.
