@@ -7,7 +7,7 @@ All Raven Scout purchases (Core, Pro, Extra Analytics packs) are billed by the p
 The first charge hits the day you subscribe; subsequent renewals are on the same calendar day every month or year. The Trial tier is free — no charge unless and until you subscribe.
 
 ### Where can I see my next renewal date?
-Open **Profile → Subscription** in the app, or **Manage Subscriptions** in your App Store / Google Play account.
+Open **Profile → Subscription** in the app, or **Manage Subscriptions** in your App Store / Google Play account. The in-app paywall also shows the billed amount (e.g. "$79.99 /year") as the primary price, the auto-renewal terms, and links to the **Terms of Use (EULA)** and **Privacy Policy**.
 
 ### How do I cancel?
 - **iOS**: Settings → [your name] → Subscriptions → Raven Scout → Cancel.

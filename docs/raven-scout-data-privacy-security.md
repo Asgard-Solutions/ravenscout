@@ -1,7 +1,7 @@
 # Raven Scout — Data Privacy & Security
 
 ## What We Collect
-- **Account**: email, optional display name, password hash (bcrypt) or Google OAuth subject id.
+- **Account**: email, optional display name, password hash (bcrypt), Google OAuth subject id, and/or Apple Sign-In user identifier (`apple_sub`).
 - **Hunt data**: species, weapon, method, date, time window, wind, GPS coordinates when you choose to provide them, uploaded map imagery, your overlay edits, and the AI analysis output.
 - **Device and diagnostic data**: platform (iOS / Android), OS version, app version, and anonymous device id used for RevenueCat entitlements. Some diagnostic events may be associated with your account to support troubleshooting.
 - **Billing**: Apple / Google handle the payment instrument. We receive a subscription entitlement record from RevenueCat (tier + renewal date) — never a card number.

@@ -89,3 +89,10 @@ Raven Scout is a mobile hunting planning application that uses GPT-5.2 Vision AI
 - [x] Usage bar on home screen showing remaining analyses
 - [x] Subscription/paywall screen with tier cards, billing toggle (monthly/annual), savings display
 - [x] Logout, session management, auto-redirect to login when unauthenticated
+
+## Phase 6: App Store Compliance (v1.0.1)
+- [x] **Sign in with Apple** (iOS) — App Store Guideline 4.8 equivalent-login requirement. `expo-apple-authentication` on the client, `/api/auth/apple` on the backend, with JWT verification against Apple's JWKS (issuer, audience, signature, exp). Upserts by `apple_sub` with email-based fallback linking for existing Google / password accounts. Supports Hide-My-Email relay addresses.
+- [x] **iPad Google crash fix** — corrected the reversed iOS client-ID URL scheme in `app.json` so OAuth redirects successfully return to the app on iPad iOS 26+.
+- [x] **Subscription paywall pricing hierarchy** — redesigned so the total billed amount (e.g. `$79.99 /year`) is the most prominent element, with the per-month equivalent demoted to subordinate subtext (Guideline 3.1.2(c)).
+- [x] **EULA + Privacy Policy links** in the subscription flow — Apple's standard EULA + Raven Scout Privacy Policy, rendered as tappable links inside a "Subscription Terms" card that also spells out auto-renewal behaviour (Guideline 3.1.2(c)).
+- [x] **Google Play references removed from iOS binary** — centralized `STORE_NAME` constant and platform-gated every user-facing "Google Play" string across `/subscription`, `/profile`, useAuth error messages, and the web-blocker (Guideline 2.3.10).

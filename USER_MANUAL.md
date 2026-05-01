@@ -51,18 +51,20 @@ Raven Scout is a field-first **hunting companion app** for iOS and Android. It u
 ### Requirements
 - iOS 15+ or Android 11+
 - Mobile data or Wi-Fi (offline analysis not currently supported)
-- A Google account for sign-in
+- One of: an Apple ID (iOS), a Google account, or an email address + password
 
 ### First launch
 1. **Download Raven Scout** from the App Store or Google Play
 2. Open the app — you'll land on the sign-in screen
-3. Tap **"Sign in with Google"**
-4. Pick the Google account you want to use — a one-tap native system dialog appears
-5. Accept the requested permissions (email + profile — we never read your email content)
-6. You're in — the home screen (NEW HUNT) opens automatically
+3. Pick a sign-in option:
+   - **Sign in with Apple** *(iOS only)* — one-tap with your Apple ID. Supports Apple's **Hide My Email** relay so your real inbox stays private.
+   - **Continue with Google** — one-tap with a Google account.
+   - **Email + password** — tap **Create Account** and verify via a 6-digit code emailed to your inbox.
+4. For Apple / Google sign-in: pick the account you want to use in the native system dialog and accept the minimal requested permissions (email + profile — we never read your email content).
+5. You're in — the home screen (NEW HUNT) opens automatically.
 
 ### What sign-in creates
-- A Raven Scout account linked to your Google email
+- A Raven Scout account linked to your chosen identity (Apple ID, Google email, or registered email)
 - A **Trial tier** (3 free hunt analyses) for brand-new accounts
 - All your hunts persist to our server so you can switch devices without losing history
 
@@ -84,10 +86,12 @@ Raven Scout is a field-first **hunting companion app** for iOS and Android. It u
 
 ### How to upgrade
 1. From the home screen, tap the tier badge in the top-right (e.g. "TRIAL 2/3")
-2. The **Subscription** screen opens — compare tiers
+2. The **Subscription** screen opens — compare tiers. The billed amount (e.g. "$79.99 /year") is the most prominent price; the per-month equivalent is shown as smaller subtext beneath.
 3. Tap your chosen tier → app's native payment sheet (Apple Pay / Google Pay) appears
 4. Confirm the purchase → your tier updates within ~5 seconds
 5. Your next hunt immediately uses the new tier's features
+
+The paywall also shows the subscription length (12 months / 1 month), auto-renewal disclosure, and tappable links to the **Terms of Use (EULA)** and **Privacy Policy**.
 
 ### How to cancel
 - **iOS**: Settings → Apple ID → Subscriptions → Raven Scout → Cancel

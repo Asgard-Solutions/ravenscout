@@ -86,7 +86,7 @@ Auto-fetches forecast data (wind direction, temperature, precipitation, cloud co
 
 ### 9. Profile + Account
 - **Edit display name** inline.
-- **Change Password** for email accounts; **Set Password** for Google-only accounts so both methods work.
+- **Change Password** for email accounts; **Set Password** for Google-only or Apple-only accounts so all sign-in methods work.
 - **Forgot / Reset Password** via email OTP (15-minute codes, sent from `support@asgardsolution.io` via Microsoft Graph).
 - **Biometric app lock** — Face ID / Touch ID / Fingerprint, prompted on cold launch.
 - **Local Storage** card — image count, total bytes, oldest item, configurable cleanup interval, **Run Cleanup Now**, and a destructive **Clear All Local Images**.
@@ -135,7 +135,7 @@ Subscription credits drain first; pack credits drain afterward.
 - **Subscriptions**: RevenueCat on iOS + Android.
 - **Maps**: MapLibre + MapTiler tiles.
 - **Weather**: WeatherAPI.com.
-- **Auth**: Google OAuth (one-tap) and email + password with OTP password reset (Microsoft Graph for transactional email).
+- **Auth**: **Sign in with Apple** (iOS, verified server-side against Apple's JWKS — supports Hide My Email), **Google OAuth** (one-tap), and **email + password** with OTP password reset (Microsoft Graph for transactional email).
 - **Push notifications**: not in v1.0.0.
 
 ---

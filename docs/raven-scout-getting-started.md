@@ -9,7 +9,8 @@ Both builds are identical in features — your hunts sync to your account either
 
 ## 2. Create an Account
 On the welcome screen tap **Create Account** and pick one:
-- **Google** — one tap, uses your Google profile email.
+- **Sign in with Apple** *(iOS only)* — one tap; uses your Apple ID. Supports Apple's **Hide My Email** relay so your real email never leaves your Apple account.
+- **Continue with Google** — one tap, uses your Google profile email.
 - **Email + password** — a 6-digit code is emailed to verify.
 
 New accounts start on the **Trial** tier with 3 free AI hunt analyses (lifetime total — no time limit, no card required).
@@ -42,7 +43,7 @@ After ~15–45 seconds you'll land on the results screen:
 - Offline: saved hunts render with no signal — cellular dead zones are fine.
 
 ## 7. Upgrade When Ready
-Manage your tier under **Profile → Subscription**. Purchases go through the App Store / Play Store via RevenueCat. Cancel any time in your store account.
+Manage your tier under **Profile → Subscription**. Purchases go through the App Store (iOS) or Google Play (Android) via RevenueCat. The paywall clearly shows the billed amount (e.g. "$79.99 /year"), auto-renewal terms, and functional links to the **Terms of Use (EULA)** and **Privacy Policy** — tap either to open them in your browser. Cancel any time in your store account.
 
 ## Troubleshooting Tips
 - **Stuck on analyzing** — bad signal. Analysis needs a round-trip to our AI backend; try Wi-Fi.
