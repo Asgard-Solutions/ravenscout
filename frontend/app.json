@@ -12,6 +12,7 @@
       "bundleIdentifier": "io.asgardsolution.ravenscout",
       "buildNumber": "1",
       "supportsTablet": true,
+      "usesAppleSignIn": true,
       "config": {
         "usesNonExemptEncryption": false,
         "infoPlist": {
@@ -63,10 +64,11 @@
           "faceIDPermission": "Unlock Raven Scout with Face ID"
         }
       ],
+      "expo-apple-authentication",
       [
         "@react-native-google-signin/google-signin",
         {
-          "iosUrlScheme": "com.googleusercontent.apps.placeholder-not-used-on-android"
+          "iosUrlScheme": "com.googleusercontent.apps.606163577844-vosq1u1j95k9oe38pj2ofd61232i8nlj"
         }
       ],
       "expo-secure-store"

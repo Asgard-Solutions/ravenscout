@@ -88,24 +88,33 @@ export function WebBlockerScreen() {
         </Text>
 
         <View style={styles.storeRow}>
-          <TouchableOpacity
-            testID="open-ios"
-            style={styles.storeBtn}
-            onPress={() => Linking.openURL('https://apps.apple.com/').catch(() => {})}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="logo-apple" size={22} color="#0B1F2A" />
-            <Text style={styles.storeText}>APP STORE</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID="open-android"
-            style={styles.storeBtn}
-            onPress={() => Linking.openURL('https://play.google.com/').catch(() => {})}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="logo-google-playstore" size={22} color="#0B1F2A" />
-            <Text style={styles.storeText}>GOOGLE PLAY</Text>
-          </TouchableOpacity>
+          {/* Apple Guideline 2.3.10: do NOT show "Google Play" inside
+              the iOS binary. The web build is mobile-agnostic, but
+              if it ever ships as part of the iOS binary, only the
+              App Store CTA should render. We platform-gate here so
+              both builds remain compliant. */}
+          {Platform.OS !== 'android' && (
+            <TouchableOpacity
+              testID="open-ios"
+              style={styles.storeBtn}
+              onPress={() => Linking.openURL('https://apps.apple.com/').catch(() => {})}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="logo-apple" size={22} color="#0B1F2A" />
+              <Text style={styles.storeText}>APP STORE</Text>
+            </TouchableOpacity>
+          )}
+          {Platform.OS !== 'ios' && (
+            <TouchableOpacity
+              testID="open-android"
+              style={styles.storeBtn}
+              onPress={() => Linking.openURL('https://play.google.com/').catch(() => {})}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="logo-google-playstore" size={22} color="#0B1F2A" />
+              <Text style={styles.storeText}>GOOGLE PLAY</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={styles.tipCard}>

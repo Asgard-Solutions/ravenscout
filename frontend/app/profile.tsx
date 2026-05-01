@@ -435,7 +435,9 @@ export default function ProfileScreen() {
           } else {
             Alert.alert(
               'No active subscriptions',
-              'We didn’t find any active Raven Scout subscriptions linked to this Apple ID / Google account.',
+              Platform.OS === 'ios'
+                ? 'We didn’t find any active Raven Scout subscriptions linked to this Apple ID.'
+                : 'We didn’t find any active Raven Scout subscriptions linked to this Google account.',
             );
           }
           return;

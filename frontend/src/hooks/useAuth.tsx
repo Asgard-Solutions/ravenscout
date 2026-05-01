@@ -52,6 +52,7 @@ interface AuthContextType {
   sessionToken: string | null;
   login: (sessionId: string) => Promise<boolean>;
   loginWithGoogle: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+  loginWithApple: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   loginWithPassword: (email: string, password: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   loginWithToken: (sessionToken: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   registerWithPassword: (email: string, password: string, name: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -70,6 +71,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null, loading: true, sessionToken: null,
   login: async () => false,
   loginWithGoogle: async () => ({ ok: false, reason: 'not_ready' }),
+  loginWithApple: async () => ({ ok: false, reason: 'not_ready' }),
   loginWithPassword: async () => ({ ok: false, reason: 'not_ready' }),
   loginWithToken: async () => ({ ok: false, reason: 'not_ready' }),
   registerWithPassword: async () => ({ ok: false, reason: 'not_ready' }),
@@ -251,6 +253,103 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   // ------------------------------------------------------------------
+  // Sign in with Apple (App Store Guideline 4.8 compliance)
+  // ------------------------------------------------------------------
+  // Uses expo-apple-authentication. iOS-only — Apple does not provide
+  // SIWA for Android (the AOSP path requires a separate web flow we
+  // do not need today). On Android this returns
+  // `unavailable_on_platform` and the UI hides the button.
+  //
+  // Flow:
+  //   1. AppleAuthentication.signInAsync({ requestedScopes }) — opens
+  //      the native Apple sheet; returns
+  //      { identityToken, user, email?, fullName? }.
+  //      Note: email + fullName are returned ONLY on the very first
+  //      sign-in for this app/user pair; subsequent attempts return
+  //      empty values, which is by design.
+  //   2. POST identityToken (+ email/fullName when present) →
+  //      /api/auth/apple → backend verifies the JWT against Apple's
+  //      JWKS, upserts user by `apple_sub`, mints our session token.
+  //   3. Store session token, hydrate user, done.
+  const loginWithApple = async (): Promise<
+    { ok: true } | { ok: false; reason: string }
+  > => {
+    if (Platform.OS !== 'ios') {
+      return { ok: false, reason: 'unavailable_on_platform' };
+    }
+    try {
+      // Dynamic import — keeps the web/Android bundles tiny.
+      const AppleAuth = await import('expo-apple-authentication');
+
+      const isAvailable = await AppleAuth.isAvailableAsync();
+      if (!isAvailable) {
+        return { ok: false, reason: 'unavailable' };
+      }
+
+      const credential = await AppleAuth.signInAsync({
+        requestedScopes: [
+          AppleAuth.AppleAuthenticationScope.FULL_NAME,
+          AppleAuth.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      const identityToken = credential.identityToken;
+      if (!identityToken) {
+        return { ok: false, reason: 'no_identity_token' };
+      }
+
+      // Apple only returns the user's name on the very first sign-in.
+      // Concatenate parts conservatively — null-safe, trimmed, single
+      // space separator. The backend stores whatever we send; on
+      // subsequent sign-ins the body fields will be empty and the
+      // backend will keep the previously-stored values.
+      const fullName =
+        credential.fullName
+          ? [credential.fullName.givenName, credential.fullName.familyName]
+              .filter((s): s is string => !!s && !!s.trim())
+              .join(' ')
+              .trim() || undefined
+          : undefined;
+
+      const resp = await fetch(`${BACKEND_URL}/api/auth/apple`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identity_token: identityToken,
+          user: credential.user,
+          email: credential.email || undefined,
+          full_name: fullName,
+        }),
+      });
+      if (!resp.ok) {
+        return { ok: false, reason: `backend_${resp.status}` };
+      }
+      const data = await resp.json();
+      const token = data.session_token;
+      if (!token) return { ok: false, reason: 'no_session_token' };
+      await AsyncStorage.setItem('session_token', token);
+      setSessionToken(token);
+      const u = await fetchUser(token);
+      if (u) setUser(u);
+      return { ok: true };
+    } catch (err: any) {
+      const code = err?.code || err?.message || String(err);
+      // expo-apple-authentication error codes:
+      //   ERR_CANCELED  → user dismissed the Apple sheet
+      //   ERR_REQUEST_CANCELED → same on older SDKs
+      if (
+        code === 'ERR_REQUEST_CANCELED' ||
+        code === 'ERR_CANCELED' ||
+        code === '1001' ||
+        /cancel/i.test(code)
+      ) {
+        return { ok: false, reason: 'cancelled' };
+      }
+      return { ok: false, reason: code || 'unknown' };
+    }
+  };
+
+  // ------------------------------------------------------------------
   // Email + password auth (for users without / not wanting Google).
   // Each fn is non-throwing: returns {ok:true} on success, or
   // {ok:false, reason} where reason is a human-friendly message
@@ -268,7 +367,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ok: false,
         reason:
           "This build can't reach the Raven Scout server (backend URL missing). " +
-          'Please install the latest build from TestFlight / Play Internal Testing.',
+          `Please install the latest build from ${Platform.OS === 'ios' ? 'TestFlight or the App Store' : 'Google Play Internal Testing or the Play Store'}.`,
       };
     }
     try {
@@ -303,7 +402,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             ok: false,
             reason:
               'This app build is out of date and can no longer reach the Raven Scout server. ' +
-              'Please install the latest build from TestFlight or Google Play.',
+              `Please install the latest build from ${Platform.OS === 'ios' ? 'TestFlight or the App Store' : 'Google Play'}.`,
           };
         }
         const detail =
@@ -493,7 +592,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, loading, sessionToken,
-      login, loginWithGoogle, loginWithPassword, loginWithToken, registerWithPassword,
+      login, loginWithGoogle, loginWithApple, loginWithPassword, loginWithToken, registerWithPassword,
       requestPasswordReset, verifyOtp, resetPassword,
       updateProfile, changePassword, setPassword, deleteAccount,
       logout, refreshUser,
