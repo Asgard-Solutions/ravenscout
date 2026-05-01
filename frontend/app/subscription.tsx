@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Linking, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useScrollToTopOnFocus } from '../src/hooks/useScrollToTopOnFocus';
@@ -13,6 +13,18 @@ import {
   entitlementsPayload,
 } from '../src/lib/purchases';
 import { packageIdFor, type Tier, type BillingCycle } from '../src/constants/revenuecat';
+
+// Apple's standard EULA — used because we don't ship a custom one.
+// Apple App Store reviewer can verify this link from inside the app
+// (Guideline 3.1.2(c) — required for auto-renewable subscriptions).
+const TERMS_OF_USE_URL = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/';
+const PRIVACY_POLICY_URL = 'https://asgardsolution.io/raven-scout/privacy';
+
+// Marketplace label — App Store on iOS, Google Play on Android.
+// Apple Guideline 2.3.10 forbids referencing "Google Play" inside the
+// iOS binary, so we platform-gate this string everywhere it appears
+// in user-facing UI.
+const STORE_NAME = Platform.OS === 'ios' ? 'App Store' : 'Google Play';
 
 const TIER_DATA = [
   {
@@ -136,7 +148,7 @@ export default function SubscriptionScreen() {
     try {
       Alert.alert(
         'Subscription',
-        `This will initiate a ${cycle} subscription for the ${tierLabel} plan via App Store / Google Play.\n\nIn preview mode (Expo Go), purchases are simulated. Real purchases require a production / preview build with the RevenueCat SDK.`,
+        `This will initiate a ${cycle} subscription for the ${tierLabel} plan via ${STORE_NAME}.\n\nIn preview mode (Expo Go), purchases are simulated. Real purchases require a production / preview build with the RevenueCat SDK.`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -244,12 +256,30 @@ export default function SubscriptionScreen() {
               </View>
 
               {price > 0 ? (
-                <View style={styles.priceRow}>
-                  <Text style={styles.priceAmount}>${billingCycle === 'annual' ? perMonth : price.toFixed(2)}</Text>
-                  <Text style={styles.pricePeriod}>/month</Text>
-                  {billingCycle === 'annual' && (
-                    <Text style={styles.priceBilled}>(billed ${tier.annual}/yr)</Text>
+                <View style={styles.priceBlock}>
+                  {/* PRIMARY price = the actual amount Apple/Google
+                      will charge the user. This MUST be the most
+                      visually prominent element (Guideline 3.1.2(c)):
+                        - Annual:  "$79.99 / year"
+                        - Monthly: "$7.99 / month"
+                      The per-month-equivalent for annual plans is
+                      shown as small subordinate text BELOW. */}
+                  <View style={styles.priceRow}>
+                    <Text style={styles.priceAmount}>
+                      ${(billingCycle === 'annual' ? tier.annual : tier.monthly).toFixed(2)}
+                    </Text>
+                    <Text style={styles.pricePeriod}>
+                      {billingCycle === 'annual' ? '/year' : '/month'}
+                    </Text>
+                  </View>
+                  {billingCycle === 'annual' && perMonth && (
+                    <Text style={styles.priceEquivalent}>
+                      ≈ ${perMonth} / month equivalent
+                    </Text>
                   )}
+                  <Text style={styles.priceTermLine}>
+                    Auto-renewing subscription • {billingCycle === 'annual' ? '12 months' : '1 month'}
+                  </Text>
                 </View>
               ) : (
                 <Text style={styles.priceFree}>FREE</Text>
@@ -293,10 +323,37 @@ export default function SubscriptionScreen() {
           );
         })}
 
-        <Text style={styles.footerNote}>
-          Subscriptions are managed through App Store / Google Play.{'\n'}
-          Cancel anytime. Unused analyses carry over per your plan.
-        </Text>
+        {/* Subscription terms — required by App Store Guideline 3.1.2(c).
+            Includes title, length, price, auto-renewal disclosure, and
+            functional links to Privacy Policy + Terms of Use (EULA). */}
+        <View style={styles.legalCard}>
+          <Text style={styles.legalHeading}>Subscription Terms</Text>
+          <Text style={styles.legalBody}>
+            Subscriptions auto-renew at the end of each billing period unless cancelled at least 24 hours before
+            the period ends. Payment is charged to your {STORE_NAME} account on confirmation. Manage or cancel
+            anytime in your {STORE_NAME} account settings — cancelling stops the next renewal but does not refund
+            the current period. Unused analyses carry over per your plan.
+          </Text>
+          <View style={styles.legalLinksRow}>
+            <TouchableOpacity
+              testID="open-terms"
+              onPress={() => Linking.openURL(TERMS_OF_USE_URL).catch(() => {})}
+              accessibilityRole="link"
+              accessibilityLabel="Terms of Use"
+            >
+              <Text style={styles.legalLink}>Terms of Use (EULA)</Text>
+            </TouchableOpacity>
+            <Text style={styles.legalSeparator}>•</Text>
+            <TouchableOpacity
+              testID="open-privacy"
+              onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})}
+              accessibilityRole="link"
+              accessibilityLabel="Privacy Policy"
+            >
+              <Text style={styles.legalLink}>Privacy Policy</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -348,10 +405,15 @@ const styles = StyleSheet.create({
   tierHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   tierName: { color: COLORS.textPrimary, fontSize: 20, fontWeight: '900', letterSpacing: 1 },
   tierAnalyses: { color: COLORS.accent, fontSize: 13, fontWeight: '700' },
-  priceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, marginBottom: 16 },
-  priceAmount: { color: COLORS.textPrimary, fontSize: 32, fontWeight: '900' },
-  pricePeriod: { color: COLORS.fogGray, fontSize: 14 },
-  priceBilled: { color: COLORS.fogGray, fontSize: 11, marginLeft: 8 },
+  // Pricing — Apple Guideline 3.1.2(c): the BILLED amount must be the
+  // most prominent pricing element. priceAmount is large/bold;
+  // priceEquivalent (per-month math for annuals) is small/subordinate.
+  priceBlock: { marginBottom: 16 },
+  priceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  priceAmount: { color: COLORS.textPrimary, fontSize: 36, fontWeight: '900' },
+  pricePeriod: { color: COLORS.textPrimary, fontSize: 18, fontWeight: '700' },
+  priceEquivalent: { color: COLORS.fogGray, fontSize: 12, marginTop: 4, fontStyle: 'italic' },
+  priceTermLine: { color: COLORS.fogGray, fontSize: 11, marginTop: 6, letterSpacing: 0.3 },
   priceFree: { color: COLORS.stands, fontSize: 28, fontWeight: '900', marginBottom: 16 },
   featuresList: { gap: 8, marginBottom: 16 },
   featureItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -367,5 +429,44 @@ const styles = StyleSheet.create({
   },
   subscribeButtonPopular: { backgroundColor: COLORS.accent, borderColor: 'transparent' },
   subscribeButtonText: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '800', letterSpacing: 1.5 },
-  footerNote: { color: COLORS.fogGray, fontSize: 11, textAlign: 'center', lineHeight: 18, marginTop: 8, opacity: 0.7 },
+  // Legal block (subscription terms + EULA + Privacy links)
+  legalCard: {
+    marginTop: 14,
+    padding: 16,
+    backgroundColor: 'rgba(58, 74, 82, 0.25)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(154, 164, 169, 0.18)',
+  },
+  legalHeading: {
+    color: COLORS.textPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    marginBottom: 8,
+  },
+  legalBody: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  legalLinksRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  legalLink: {
+    color: COLORS.accent,
+    fontSize: 13,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+    paddingVertical: 4,
+  },
+  legalSeparator: {
+    color: COLORS.fogGray,
+    paddingHorizontal: 8,
+    fontSize: 13,
+  },
 });

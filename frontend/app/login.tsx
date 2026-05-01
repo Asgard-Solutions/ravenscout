@@ -9,12 +9,13 @@ import { useAuth } from '../src/hooks/useAuth';
 import { RavenSpinner } from '../src/components/RavenSpinner';
 import { isBiometricAvailable, isBiometricEnabled, enableBiometric, authenticateWithBiometric, disableBiometric } from '../src/utils/biometric';
 
-// Sign-in screen: email+password, Google OAuth, and biometric unlock.
+// Sign-in screen: email+password, Google OAuth, Sign in with Apple
+// (iOS only — App Store Guideline 4.8 compliance), and biometric unlock.
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT
 // URLS, THIS BREAKS THE AUTH.
 export default function LoginScreen() {
   const router = useRouter();
-  const { user, loading, loginWithGoogle, loginWithPassword, loginWithToken, sessionToken } = useAuth();
+  const { user, loading, loginWithGoogle, loginWithApple, loginWithPassword, loginWithToken, sessionToken } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -103,6 +104,27 @@ export default function LoginScreen() {
     }
     if (r.reason === 'cancelled') return;
     Alert.alert('Sign-in failed', `Could not sign in (${r.reason}). Please try again.`);
+  };
+
+  const handleApple = async () => {
+    setBusy(true);
+    const r = await loginWithApple();
+    setBusy(false);
+    if (r.ok) {
+      const token = await AsyncStorage.getItem('session_token');
+      await offerBiometricEnrollment(token);
+      router.replace('/');
+      return;
+    }
+    if (r.reason === 'cancelled') return;
+    if (r.reason === 'unavailable_on_platform' || r.reason === 'unavailable') {
+      Alert.alert(
+        'Sign in with Apple unavailable',
+        'Please use a different sign-in option.',
+      );
+      return;
+    }
+    Alert.alert('Sign-in failed', 'Could not sign in with Apple. Please try again.');
   };
 
   const handleBiometric = async () => {
@@ -201,6 +223,21 @@ export default function LoginScreen() {
 
           <View style={styles.dividerRow}><View style={styles.dividerLine} /><Text style={styles.dividerText}>or</Text><View style={styles.dividerLine} /></View>
 
+          {Platform.OS === 'ios' && (
+            <TouchableOpacity
+              testID="apple-signin-btn"
+              style={styles.appleBtn}
+              onPress={handleApple}
+              disabled={busy}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Sign in with Apple"
+            >
+              <Ionicons name="logo-apple" size={20} color="#FFFFFF" />
+              <Text style={styles.appleBtnText}>Sign in with Apple</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity style={styles.secondaryBtn} onPress={handleGoogle} disabled={busy} activeOpacity={0.85}>
             <Ionicons name="logo-google" size={18} color={COLORS.textPrimary} />
             <Text style={styles.secondaryBtnText}>Continue with Google</Text>
@@ -235,4 +272,23 @@ const styles = StyleSheet.create({
   dividerText: { color: COLORS.textSecondary, marginHorizontal: 12, fontSize: 12 },
   secondaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderWidth: 1, borderColor: 'rgba(200,155,60,0.3)', paddingVertical: 14, borderRadius: 10, marginBottom: 10 },
   secondaryBtnText: { color: COLORS.textPrimary, fontSize: 14, fontWeight: '700' },
+  // Apple Sign-In button — strict HIG: black background (or white/outline),
+  // white Apple logo, white "Sign in with Apple" text, equivalent
+  // visual weight to the Google button so neither dominates.
+  appleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#000000',
+    paddingVertical: 14,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  appleBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
 });

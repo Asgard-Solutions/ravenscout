@@ -671,6 +671,193 @@ async def auth_google(body: GoogleAuthBody):
     })
 
 
+# ------------------------------------------------------------------
+# /api/auth/apple  — Sign in with Apple (App Store Guideline 4.8)
+# ------------------------------------------------------------------
+# The iOS client obtains an Apple identity token via
+# `expo-apple-authentication`. We verify the JWT against Apple's
+# public JWKS (https://appleid.apple.com/auth/keys), check that:
+#   - issuer is `https://appleid.apple.com`
+#   - audience matches our iOS bundle id (APPLE_AUDIENCE_IDS env)
+#   - token is not expired
+# Then we upsert the user by Apple's stable `sub` (user identifier).
+#
+# Apple sends the user's full_name and email ONLY on the first
+# successful sign-in attempt for that user/app pair. The client
+# forwards them in the request body so we can store them. On every
+# subsequent sign-in the body fields will be empty — we keep the
+# previously-stored values.
+#
+# Apple's "Hide my email" feature returns a relay address like
+# `xxxxxx@privaterelay.appleid.com`. Treat it like any other email
+# for account linking; it routes to the user's real inbox.
+
+APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+_APPLE_JWKS_CACHE: dict = {"keys": None, "fetched_at": None}
+
+
+async def _fetch_apple_jwks() -> list:
+    """Fetch and cache Apple's JWKS. 24h TTL is plenty — Apple
+    rotates infrequently and `kid` mismatch will trigger a refetch."""
+    now = datetime.now(timezone.utc)
+    cached = _APPLE_JWKS_CACHE.get("keys")
+    fetched_at = _APPLE_JWKS_CACHE.get("fetched_at")
+    if cached and fetched_at and (now - fetched_at) < timedelta(hours=24):
+        return cached
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        r = await http.get(APPLE_JWKS_URL)
+        r.raise_for_status()
+        keys = r.json().get("keys", [])
+    _APPLE_JWKS_CACHE["keys"] = keys
+    _APPLE_JWKS_CACHE["fetched_at"] = now
+    return keys
+
+
+class AppleAuthBody(BaseModel):
+    identity_token: str
+    # Apple-issued user identifier (matches `sub` in the JWT). We use
+    # the JWT `sub` as the source of truth, but the client sends this
+    # too for redundancy / debugging.
+    user: Optional[str] = None
+    # Email + name only present on the very first sign-in.
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+
+
+@api_router.post("/auth/apple")
+async def auth_apple(body: AppleAuthBody):
+    # Audience must be our iOS bundle id. Accept a comma-separated
+    # list so multiple bundles (e.g. dev / staging / prod) can share
+    # the backend if needed.
+    raw = (
+        os.environ.get("APPLE_AUDIENCE_IDS")
+        or os.environ.get("APPLE_BUNDLE_ID")
+        or "io.asgardsolution.ravenscout"
+    ).strip()
+    audiences = [a.strip() for a in raw.split(",") if a.strip()]
+
+    try:
+        from jose import jwt as jose_jwt
+        from jose import jwk as jose_jwk
+    except ImportError:
+        logger.error("python-jose missing — required for Apple auth verification")
+        raise HTTPException(status_code=500, detail="Apple auth not configured on server")
+
+    try:
+        # Pull the unverified header to find the right key by `kid`.
+        unverified_header = jose_jwt.get_unverified_header(body.identity_token)
+        kid = unverified_header.get("kid")
+        alg = unverified_header.get("alg", "RS256")
+        if not kid:
+            raise ValueError("Apple identity token missing 'kid' header")
+
+        keys = await _fetch_apple_jwks()
+        matching = next((k for k in keys if k.get("kid") == kid), None)
+        if not matching:
+            # Refetch once in case Apple rotated.
+            _APPLE_JWKS_CACHE["fetched_at"] = None
+            keys = await _fetch_apple_jwks()
+            matching = next((k for k in keys if k.get("kid") == kid), None)
+        if not matching:
+            raise ValueError(f"No Apple JWKS key matches kid={kid!r}")
+
+        public_key = jose_jwk.construct(matching, algorithm=alg)
+        # python-jose's jwt.decode handles signature, exp, iss, aud.
+        claims = jose_jwt.decode(
+            body.identity_token,
+            public_key.to_pem().decode("utf-8") if hasattr(public_key, "to_pem") else matching,
+            algorithms=[alg],
+            audience=audiences,
+            issuer="https://appleid.apple.com",
+            options={"verify_at_hash": False},
+        )
+    except Exception as e:
+        logger.warning(f"Apple identity token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid Apple credential")
+
+    apple_sub = claims.get("sub")
+    if not apple_sub:
+        raise HTTPException(status_code=401, detail="Apple credential missing 'sub'")
+
+    # Email may come from the JWT (verified) on first sign-in, OR from
+    # the body (also first sign-in). On subsequent sign-ins neither
+    # is present — we look up the user by apple_sub.
+    email_from_token = (claims.get("email") or "").strip().lower()
+    email_from_body = (body.email or "").strip().lower()
+    incoming_email = email_from_token or email_from_body
+
+    # Name only comes via the body — Apple does not put it in the JWT.
+    incoming_name = (body.full_name or "").strip()
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # 1. Look up by Apple sub first (canonical for SIWA accounts).
+    existing_user = await db.users.find_one({"apple_sub": apple_sub}, {"_id": 0})
+
+    # 2. If not found and we have an email, fall back to email-based
+    #    lookup so an existing Google / password account can be
+    #    linked to Apple Sign-In on first SIWA login.
+    if not existing_user and incoming_email:
+        existing_user = await db.users.find_one({"email": incoming_email}, {"_id": 0})
+
+    if existing_user:
+        user_id = existing_user["user_id"]
+        update_set = {
+            "apple_sub": apple_sub,
+            "last_login": now_iso,
+        }
+        # Only fill in email / name if we don't already have them.
+        if incoming_email and not existing_user.get("email"):
+            update_set["email"] = incoming_email
+        if incoming_name and not (existing_user.get("name") or "").strip():
+            update_set["name"] = incoming_name
+        await db.users.update_one({"user_id": user_id}, {"$set": update_set})
+    else:
+        # Net-new account. Apple's Hide-My-Email gives us a relay
+        # address; use the JWT email if present, otherwise build a
+        # synthetic placeholder so the unique-index on email keeps
+        # holding (rare path — Apple almost always returns an email
+        # on first sign-in).
+        email_for_record = (
+            incoming_email
+            or f"apple_{apple_sub.replace('.', '_')}@privaterelay.local"
+        )
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": email_for_record,
+            "name": incoming_name,
+            "picture": "",
+            "apple_sub": apple_sub,
+            "tier": "trial",
+            "analysis_count": 0,
+            "billing_cycle_start": now_iso,
+            "rollover_count": 0,
+            "revenuecat_id": None,
+            "created_at": now_iso,
+            "last_login": now_iso,
+        })
+
+    # Mint our session token.
+    session_token = f"rs_{uuid.uuid4().hex}"
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at.isoformat(),
+        "created_at": now_iso,
+        "provider": "apple_oauth",
+    })
+
+    # Reload the user to send the canonical, post-update view back.
+    final_user = await db.users.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    return JSONResponse({
+        "user_id": user_id,
+        "email": final_user.get("email", ""),
+        "name": final_user.get("name", ""),
+        "picture": final_user.get("picture", ""),
+        "session_token": session_token,
+    })
 
 
 @api_router.get("/auth/me")
