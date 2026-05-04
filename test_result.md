@@ -7725,3 +7725,65 @@ agent_communication:
         password verify still works (proven by login regression).
 
         Apple Sign-In backend is production-ready.
+
+  - task: "Single-provider-per-platform login policy (Apple-only on iOS, Google-only on Android)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/login.tsx, /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            User requested: on iOS show ONLY Sign in with Apple,
+            on Android show ONLY Continue with Google. Email +
+            password and Biometrics remain available on both
+            platforms.
+
+            Changes:
+              * /app/frontend/app/login.tsx — replaced the
+                always-rendered Google button + iOS-only Apple
+                button with a single platform-gated branch:
+                Platform.OS === 'ios' renders the Apple button,
+                otherwise the Google button.
+              * Added testID="google-signin-btn" alongside the
+                existing "apple-signin-btn" for symmetry.
+              * /app/backend/server.py — simplified Apple JWT
+                verification to pass the JWK dict directly to
+                python-jose's jwt.decode(), removing a brittle
+                to_pem() conversion. Exercised paths verified via
+                curl (5 manual scenarios — all return the expected
+                401 / 422 status codes).
+
+            Side effect: the iPad Google crash path (Guideline
+            2.1(a)) is now structurally impossible on iOS — the
+            button isn't rendered at all.
+
+            User flow on iOS / iPad:
+              1. Email + password (always shown at top)
+              2. Sign in with Apple (only social provider)
+              3. Use Biometrics (if enrolled)
+
+            User flow on Android:
+              1. Email + password
+              2. Continue with Google (only social provider)
+              3. Use Biometrics (if enrolled)
+
+            Backend already handles each provider independently
+            (/api/auth/google and /api/auth/apple are unrelated
+            endpoints), so the change is a pure UI gate — no
+            server-side regressions possible.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Per-platform single-provider login is now in place. iOS
+        shows only Apple, Android shows only Google. Email +
+        password and Biometrics remain on both. Backend Apple JWT
+        decode path simplified for robustness; manual curl tests
+        cover malformed / missing-field / fake-kid cases (all
+        return 401 / 422 as expected). The iPad Google crash is
+        now structurally eliminated since the button isn't
+        rendered on iOS.

@@ -56,10 +56,11 @@ Raven Scout is a field-first **hunting companion app** for iOS and Android. It u
 ### First launch
 1. **Download Raven Scout** from the App Store or Google Play
 2. Open the app — you'll land on the sign-in screen
-3. Pick a sign-in option:
-   - **Sign in with Apple** *(iOS only)* — one-tap with your Apple ID. Supports Apple's **Hide My Email** relay so your real inbox stays private.
-   - **Continue with Google** — one-tap with a Google account.
-   - **Email + password** — tap **Create Account** and verify via a 6-digit code emailed to your inbox.
+3. Pick a sign-in option (the available options depend on your platform):
+   - **Sign in with Apple** *(iOS / iPad only)* — one-tap with your Apple ID. Supports Apple's **Hide My Email** relay so your real inbox stays private. Apple is the only social-sign-in shown on iOS.
+   - **Continue with Google** *(Android only)* — one-tap with a Google account.
+   - **Email + password** — tap **Create Account** and verify via a 6-digit code emailed to your inbox. Available on both platforms.
+   - **Biometrics** — if you previously enabled Face ID / Touch ID / Fingerprint, the unlock button appears below the social sign-in option.
 4. For Apple / Google sign-in: pick the account you want to use in the native system dialog and accept the minimal requested permissions (email + profile — we never read your email content).
 5. You're in — the home screen (NEW HUNT) opens automatically.
 
