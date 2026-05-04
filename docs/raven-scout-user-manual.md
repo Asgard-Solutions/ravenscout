@@ -33,10 +33,12 @@ A complete walkthrough of the app, screen by screen. Everything in this manual m
 
 ## 1. Account: Sign Up, Sign In, Sign Out
 
-The first screen offers three paths:
-- **Sign in with Apple** *(iOS only)* — one tap; uses your Apple ID. Supports Apple's **Hide My Email** relay, so your real email never leaves Apple. On iPad and iPhone the Apple button appears above the Google button on the login screen.
-- **Continue with Google** — one tap; uses your Google account email. No password needed.
-- **Email + password** — pick **Create Account** to register, or **Sign in** if you already have one.
+The first screen offers three paths, with one social login per platform (whichever is native):
+
+- **Sign in with Apple** *(iOS / iPad only)* — one tap; uses your Apple ID. Supports Apple's **Hide My Email** relay, so your real email never leaves Apple. Apple is the only social-sign-in shown on iOS — it's the platform's native, privacy-respecting choice and replaces the Google option entirely on iOS to comply with Apple App Store Guideline 4.8.
+- **Continue with Google** *(Android only)* — one tap; uses your Google account email. No password needed.
+- **Email + password** — pick **Create Account** to register, or **Sign in** if you already have one. Available on every platform.
+- **Use Biometrics** — Face ID / Touch ID / Fingerprint unlock appears below the social option once you've enrolled it on a previous sign-in.
 
 When you create an account by email:
 - We send a 6-digit verification code to your inbox.

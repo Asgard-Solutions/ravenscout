@@ -9,9 +9,12 @@ Both builds are identical in features — your hunts sync to your account either
 
 ## 2. Create an Account
 On the welcome screen tap **Create Account** and pick one:
-- **Sign in with Apple** *(iOS only)* — one tap; uses your Apple ID. Supports Apple's **Hide My Email** relay so your real email never leaves your Apple account.
-- **Continue with Google** — one tap, uses your Google profile email.
-- **Email + password** — a 6-digit code is emailed to verify.
+- **Sign in with Apple** *(iOS / iPad only)* — one tap; uses your Apple ID. Supports Apple's **Hide My Email** relay so your real email never leaves your Apple account.
+- **Continue with Google** *(Android only)* — one tap, uses your Google profile email.
+- **Email + password** — available on both platforms; a 6-digit code is emailed to verify.
+- **Biometric unlock** *(Face ID / Touch ID / Fingerprint)* — appears below if you've enrolled it on a previous sign-in.
+
+Raven Scout shows the auth provider native to your platform (Apple on iOS, Google on Android) — there's never a mix-and-match login screen.
 
 New accounts start on the **Trial** tier with 3 free AI hunt analyses (lifetime total — no time limit, no card required).
 

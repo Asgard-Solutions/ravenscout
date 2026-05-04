@@ -223,7 +223,13 @@ export default function LoginScreen() {
 
           <View style={styles.dividerRow}><View style={styles.dividerLine} /><Text style={styles.dividerText}>or</Text><View style={styles.dividerLine} /></View>
 
-          {Platform.OS === 'ios' && (
+          {/* Per-platform single-provider rule:
+                iOS  → Sign in with Apple only (Apple HIG + Guideline 4.8)
+                Android → Continue with Google only
+              Email/password is always available above; biometrics
+              appears below when enrolled. This keeps the iPad
+              Google-button crash path entirely out of the iOS binary. */}
+          {Platform.OS === 'ios' ? (
             <TouchableOpacity
               testID="apple-signin-btn"
               style={styles.appleBtn}
@@ -236,12 +242,20 @@ export default function LoginScreen() {
               <Ionicons name="logo-apple" size={20} color="#FFFFFF" />
               <Text style={styles.appleBtnText}>Sign in with Apple</Text>
             </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              testID="google-signin-btn"
+              style={styles.secondaryBtn}
+              onPress={handleGoogle}
+              disabled={busy}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Continue with Google"
+            >
+              <Ionicons name="logo-google" size={18} color={COLORS.textPrimary} />
+              <Text style={styles.secondaryBtnText}>Continue with Google</Text>
+            </TouchableOpacity>
           )}
-
-          <TouchableOpacity style={styles.secondaryBtn} onPress={handleGoogle} disabled={busy} activeOpacity={0.85}>
-            <Ionicons name="logo-google" size={18} color={COLORS.textPrimary} />
-            <Text style={styles.secondaryBtnText}>Continue with Google</Text>
-          </TouchableOpacity>
 
           {bioEnabled && (
             <TouchableOpacity style={styles.secondaryBtn} onPress={handleBiometric} disabled={busy} activeOpacity={0.85}>

@@ -10,14 +10,14 @@ This is a compliance and reliability release focused on Apple App Store resubmis
 
 ## ✨ What's New
 
-### Sign in with Apple *(iOS)*
-Raven Scout now supports **Sign in with Apple** on every iPhone and iPad.
+### Sign in with Apple *(iOS / iPad)*
+Raven Scout now supports **Sign in with Apple** on every iPhone and iPad — and as part of this release, **Apple is now the only social sign-in option on iOS**. Google is shown only on Android. Email + password and Biometric unlock continue to work on both platforms.
 
-- A dedicated "Sign in with Apple" button appears above the Google button on the login screen (black button, white Apple logo — per Apple HIG).
+- The Apple button is the platform-native social sign-in (black button, white Apple logo — per Apple HIG).
 - Supports Apple's **Hide My Email** relay, so you can keep your real email address private.
 - Account linking: if you previously signed up with Google or email + password using the same Apple-associated email, the first Sign in with Apple attempt links the existing account instead of creating a duplicate.
 - Identity tokens are verified server-side against Apple's public JWKS; issuer + audience are checked against the `io.asgardsolution.ravenscout` bundle id.
-- Works alongside Google and email + password — you can still use any method you've used before.
+- Restoring an existing iOS account that was originally created with Google: sign in with Apple using the same email and your hunts + tier carry over automatically.
 
 ---
 

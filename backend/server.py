@@ -738,7 +738,6 @@ async def auth_apple(body: AppleAuthBody):
 
     try:
         from jose import jwt as jose_jwt
-        from jose import jwk as jose_jwk
     except ImportError:
         logger.error("python-jose missing — required for Apple auth verification")
         raise HTTPException(status_code=500, detail="Apple auth not configured on server")
@@ -761,11 +760,13 @@ async def auth_apple(body: AppleAuthBody):
         if not matching:
             raise ValueError(f"No Apple JWKS key matches kid={kid!r}")
 
-        public_key = jose_jwk.construct(matching, algorithm=alg)
+        public_key_jwk = matching  # python-jose accepts a JWK dict directly.
         # python-jose's jwt.decode handles signature, exp, iss, aud.
+        # Passing the JWK dict avoids any PEM-conversion edge cases
+        # and works cleanly across python-jose 3.x.
         claims = jose_jwt.decode(
             body.identity_token,
-            public_key.to_pem().decode("utf-8") if hasattr(public_key, "to_pem") else matching,
+            public_key_jwk,
             algorithms=[alg],
             audience=audiences,
             issuer="https://appleid.apple.com",
